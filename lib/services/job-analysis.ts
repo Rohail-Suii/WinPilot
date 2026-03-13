@@ -5,8 +5,10 @@
 
 import mongoose from "mongoose";
 import connectDB from "@/lib/db/connection";
-import { JobApplication, type ApplicationStatus } from "@/lib/db/models";
-import { ActivityLog, DailyUsage } from "@/lib/db/models";
+import JobApplication from "@/lib/db/models/job-application";
+import type { ApplicationStatus } from "@/lib/db/models/job-application";
+import ActivityLog from "@/lib/db/models/activity-log";
+import DailyUsage from "@/lib/db/models/daily-usage";
 import { getJobMatchScore, tailorResumeForJob } from "./resume-tailor";
 import { canPerformAction, incrementUsage } from "@/lib/anti-detection/rate-limiter";
 

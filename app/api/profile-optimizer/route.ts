@@ -2,14 +2,8 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { auth } from "@/auth";
 import connectDB from "@/lib/db/connection";
-import { ProfileAnalysis } from "@/lib/db/models";
+import ProfileAnalysis from "@/lib/db/models/profile-analysis";
 import { checkApiRateLimit } from "@/lib/utils/rate-limit";
-import { getUserAIProvider } from "@/lib/ai/key-manager";
-import {
-  buildProfileAnalysisPrompt,
-  buildHeadlineOptimizerPrompt,
-  buildSummaryOptimizerPrompt,
-} from "@/lib/ai/prompts";
 
 const profileDataSchema = z.object({
   headline: z.string().optional(),
@@ -91,6 +85,7 @@ export async function POST(req: Request) {
 
     await connectDB();
 
+    const { getUserAIProvider } = await import("@/lib/ai/key-manager");
     const aiProvider = await getUserAIProvider(session.user.id);
     if (!aiProvider) {
       return NextResponse.json(
@@ -105,6 +100,7 @@ export async function POST(req: Request) {
         return NextResponse.json({ error: parsed.error.issues[0].message }, { status: 400 });
       }
 
+      const { buildProfileAnalysisPrompt } = await import("@/lib/ai/prompts");
       const messages = buildProfileAnalysisPrompt(parsed.data);
       const result = await aiProvider.generateJSON<{
         overallScore: number;
@@ -129,7 +125,7 @@ export async function POST(req: Request) {
             analyzedAt: new Date(),
           },
         },
-        { upsert: true, new: true }
+        { upsert: true, returnDocument: "after" }
       );
 
       return NextResponse.json({ analysis });
@@ -141,6 +137,7 @@ export async function POST(req: Request) {
         return NextResponse.json({ error: parsed.error.issues[0].message }, { status: 400 });
       }
 
+      const { buildHeadlineOptimizerPrompt } = await import("@/lib/ai/prompts");
       const messages = buildHeadlineOptimizerPrompt(
         parsed.data.currentHeadline,
         parsed.data.industry,
@@ -159,6 +156,7 @@ export async function POST(req: Request) {
         return NextResponse.json({ error: parsed.error.issues[0].message }, { status: 400 });
       }
 
+      const { buildSummaryOptimizerPrompt } = await import("@/lib/ai/prompts");
       const messages = buildSummaryOptimizerPrompt(
         parsed.data.currentSummary,
         parsed.data.experience,

@@ -2,10 +2,10 @@ import { NextResponse } from "next/server";
 import mongoose from "mongoose";
 import { auth } from "@/auth";
 import connectDB from "@/lib/db/connection";
-import { HeroProfile, Post, ActivityLog } from "@/lib/db/models";
+import HeroProfile from "@/lib/db/models/hero-profile";
+import Post from "@/lib/db/models/post";
+import ActivityLog from "@/lib/db/models/activity-log";
 import { heroProfileSchema } from "@/lib/validators";
-import { getUserAIProvider } from "@/lib/ai/key-manager";
-import { buildLinkedInPostPrompt, buildLinkedInCommentPrompt } from "@/lib/ai/prompts";
 import { canPerformAction, incrementUsage } from "@/lib/anti-detection/rate-limiter";
 import { checkApiRateLimit } from "@/lib/utils/rate-limit";
 import { sanitizeForAI } from "@/lib/utils";
@@ -123,7 +123,7 @@ export async function POST(req: Request) {
       const profile = await HeroProfile.findOneAndUpdate(
         { userId: session.user.id },
         { ...parsed.data, userId: session.user.id },
-        { upsert: true, new: true }
+        { upsert: true, returnDocument: "after" }
       );
       return NextResponse.json({ profile });
     }
@@ -137,12 +137,14 @@ export async function POST(req: Request) {
         return NextResponse.json({ error: "Set up your hero profile first" }, { status: 400 });
       }
 
+      const { getUserAIProvider } = await import("@/lib/ai/key-manager");
       const ai = await getUserAIProvider(session.user.id);
       if (!ai) {
         return NextResponse.json({ error: "No AI API key configured" }, { status: 400 });
       }
 
       try {
+        const { buildLinkedInPostPrompt } = await import("@/lib/ai/prompts");
         const messages = buildLinkedInPostPrompt(
           sanitizedTopic,
           profile.niche,
@@ -176,12 +178,14 @@ export async function POST(req: Request) {
       const sanitizedContent = sanitizeForAI(postContent);
 
       const profile = await HeroProfile.findOne({ userId: session.user.id }).lean();
+      const { getUserAIProvider } = await import("@/lib/ai/key-manager");
       const ai = await getUserAIProvider(session.user.id);
       if (!ai) {
         return NextResponse.json({ error: "No AI API key configured" }, { status: 400 });
       }
 
       try {
+        const { buildLinkedInCommentPrompt } = await import("@/lib/ai/prompts");
         const messages = buildLinkedInCommentPrompt(
           sanitizedContent,
           profile?.niche || "general",
@@ -237,7 +241,7 @@ export async function POST(req: Request) {
       const post = await Post.findOneAndUpdate(
         { _id: postId, userId: session.user.id },
         { status: "posted", postedAt: new Date(), linkedinPostUrl },
-        { new: true }
+        { returnDocument: "after" }
       );
 
       if (post) {
@@ -265,7 +269,7 @@ export async function POST(req: Request) {
       const post = await Post.findOneAndUpdate(
         { _id: postId, userId: session.user.id },
         { $set: { engagement } },
-        { new: true }
+        { returnDocument: "after" }
       );
       return NextResponse.json({ post });
     }
@@ -280,7 +284,7 @@ export async function POST(req: Request) {
       const profile = await HeroProfile.findOneAndUpdate(
         { userId: session.user.id },
         { $set: { groups } },
-        { new: true }
+        { returnDocument: "after" }
       );
       return NextResponse.json({ profile });
     }
@@ -303,7 +307,7 @@ export async function POST(req: Request) {
             },
           },
         },
-        { new: true }
+        { returnDocument: "after" }
       );
       return NextResponse.json({ profile });
     }
@@ -347,7 +351,7 @@ export async function PATCH(req: Request) {
     const post = await Post.findOneAndUpdate(
       { _id: id, userId: session.user.id },
       { $set: updates },
-      { new: true }
+      { returnDocument: "after" }
     );
 
     if (!post) {

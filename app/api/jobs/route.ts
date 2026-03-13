@@ -2,19 +2,12 @@ import { NextResponse } from "next/server";
 import mongoose from "mongoose";
 import { auth } from "@/auth";
 import connectDB from "@/lib/db/connection";
-import { JobSearch, JobApplication } from "@/lib/db/models";
+import JobSearch from "@/lib/db/models/job-search";
+import JobApplication from "@/lib/db/models/job-application";
+import type { ApplicationStatus } from "@/lib/db/models/job-application";
 import { jobSearchSchema } from "@/lib/validators";
 import { checkApiRateLimit } from "@/lib/utils/rate-limit";
 import { sanitizeForAI } from "@/lib/utils";
-import {
-  processDiscoveredJobs,
-  prepareJobApplication,
-  completeApplication,
-  updateApplicationStatus,
-  getApplicationStats,
-} from "@/lib/services/job-analysis";
-import { answerFormQuestions } from "@/lib/services/form-answerer";
-import type { ApplicationStatus } from "@/lib/db/models";
 
 export async function GET(req: Request) {
   try {
@@ -65,6 +58,7 @@ export async function GET(req: Request) {
     }
 
     if (view === "stats") {
+      const { getApplicationStats } = await import("@/lib/services/job-analysis");
       const stats = await getApplicationStats(session.user.id);
       return NextResponse.json({ stats });
     }
@@ -115,6 +109,7 @@ export async function POST(req: Request) {
         return NextResponse.json({ error: "Jobs array and jobSearchId are required" }, { status: 400 });
       }
       try {
+        const { processDiscoveredJobs } = await import("@/lib/services/job-analysis");
         const result = await processDiscoveredJobs(
           session.user.id,
           jobs,
@@ -135,6 +130,7 @@ export async function POST(req: Request) {
       if (!applicationId) {
         return NextResponse.json({ error: "applicationId is required" }, { status: 400 });
       }
+      const { prepareJobApplication } = await import("@/lib/services/job-analysis");
       const result = await prepareJobApplication(session.user.id, applicationId);
       if (!result.success) {
         return NextResponse.json({ error: result.error }, { status: 400 });
@@ -148,6 +144,7 @@ export async function POST(req: Request) {
       if (!applicationId || typeof success !== "boolean") {
         return NextResponse.json({ error: "applicationId and success are required" }, { status: 400 });
       }
+      const { completeApplication } = await import("@/lib/services/job-analysis");
       await completeApplication(session.user.id, applicationId, success, notes);
       return NextResponse.json({ success: true });
     }
@@ -158,6 +155,7 @@ export async function POST(req: Request) {
       if (!applicationId || !status) {
         return NextResponse.json({ error: "applicationId and status are required" }, { status: 400 });
       }
+      const { updateApplicationStatus } = await import("@/lib/services/job-analysis");
       await updateApplicationStatus(
         session.user.id,
         applicationId,
@@ -179,6 +177,7 @@ export async function POST(req: Request) {
       }));
 
       try {
+        const { answerFormQuestions } = await import("@/lib/services/form-answerer");
         const answers = await answerFormQuestions(session.user.id, sanitizedQuestions, userPreferences);
         return NextResponse.json({ answers });
       } catch (error) {

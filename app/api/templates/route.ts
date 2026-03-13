@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { auth } from "@/auth";
 import connectDB from "@/lib/db/connection";
-import { OutreachTemplate } from "@/lib/db/models";
+import OutreachTemplate from "@/lib/db/models/outreach-template";
 import { checkApiRateLimit } from "@/lib/utils/rate-limit";
 import { z } from "zod";
 
@@ -83,7 +83,7 @@ export async function PATCH(req: Request) {
     const template = await OutreachTemplate.findOneAndUpdate(
       { _id: id, userId: session.user.id },
       { $set: parsed.data },
-      { new: true }
+      { returnDocument: "after" }
     ).lean();
 
     if (!template) {

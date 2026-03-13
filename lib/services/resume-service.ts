@@ -165,7 +165,7 @@ export async function updateResume(
   return Resume.findOneAndUpdate(
     { _id: resumeId, userId },
     { $set: updates },
-    { new: true }
+    { returnDocument: "after" }
   ).lean();
 }
 

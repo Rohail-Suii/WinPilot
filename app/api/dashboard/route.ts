@@ -1,7 +1,11 @@
 import { NextResponse } from "next/server";
 import { auth } from "@/auth";
 import connectDB from "@/lib/db/connection";
-import { JobApplication, Post, ScrapedData, ActivityLog, DailyUsage } from "@/lib/db/models";
+import JobApplication from "@/lib/db/models/job-application";
+import Post from "@/lib/db/models/post";
+import ScrapedData from "@/lib/db/models/scraped-data";
+import ActivityLog from "@/lib/db/models/activity-log";
+import DailyUsage from "@/lib/db/models/daily-usage";
 import { checkApiRateLimit } from "@/lib/utils/rate-limit";
 
 export async function GET() {

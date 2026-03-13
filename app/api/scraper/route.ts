@@ -1,7 +1,9 @@
 import { NextResponse } from "next/server";
 import { auth } from "@/auth";
 import connectDB from "@/lib/db/connection";
-import { ScraperConfig, ScrapedData, ActivityLog } from "@/lib/db/models";
+import ScraperConfig from "@/lib/db/models/scraper-config";
+import ScrapedData from "@/lib/db/models/scraped-data";
+import ActivityLog from "@/lib/db/models/activity-log";
 import { scraperConfigSchema } from "@/lib/validators";
 import { checkApiRateLimit } from "@/lib/utils/rate-limit";
 import { canPerformAction, incrementUsage } from "@/lib/anti-detection/rate-limiter";
@@ -176,7 +178,7 @@ export async function POST(req: Request) {
             },
           },
         },
-        { new: true }
+        { returnDocument: "after" }
       );
 
       if (!lead) {
@@ -205,7 +207,7 @@ export async function POST(req: Request) {
       const lead = await ScrapedData.findOneAndUpdate(
         { _id: parsed.data.leadId, userId: session.user.id },
         { $set: { tags: parsed.data.tags } },
-        { new: true }
+        { returnDocument: "after" }
       );
 
       if (!lead) {

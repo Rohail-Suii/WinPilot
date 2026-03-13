@@ -137,20 +137,30 @@ export function initSocketServer(httpServer: HTTPServer): SocketIOServer {
     cors: {
       origin: [
         process.env.NEXTAUTH_URL || "http://localhost:3000",
-        "chrome-extension://*",
+        /^chrome-extension:\/\/.+$/,
       ],
       methods: ["GET", "POST"],
       credentials: true,
     },
     transports: ["websocket", "polling"],
     pingInterval: 25_000,
-    pingTimeout: 20_000,
+    pingTimeout: 60_000,
+    connectTimeout: 45_000,
+  });
+
+  // ── Error handler ──
+  io.engine.on("connection_error", (err: { message: string }) => {
+    console.error("[WS] Socket.IO connection error:", err.message);
   });
 
   // ── Extension Namespace (/extension) ──
   extensionNs = io.of("/extension");
   extensionNs.on("connection", (socket: Socket) => {
     let userId: string | null = null;
+
+    socket.on("error", (err) => {
+      console.error("[WS] Extension socket error:", err);
+    });
 
     socket.on("AUTH", (data: { token: string }) => {
       if (!data.token) {
@@ -199,6 +209,10 @@ export function initSocketServer(httpServer: HTTPServer): SocketIOServer {
   dashboardNs.on("connection", (socket: Socket) => {
     console.log("[WS] Dashboard client connected:", socket.id);
     let userId: string | null = null;
+
+    socket.on("error", (err) => {
+      console.error("[WS] Dashboard socket error:", err);
+    });
 
     // Client sends "auth" (WS_EVENTS.AUTH from types.ts)
     socket.on("auth", (data: { token: string }) => {

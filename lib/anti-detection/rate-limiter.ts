@@ -4,7 +4,7 @@
  */
 
 import connectDB from "@/lib/db/connection";
-import { DailyUsage } from "@/lib/db/models";
+import DailyUsage from "@/lib/db/models/daily-usage";
 import { DAILY_LIMITS, SPEED_PRESETS, type SpeedPreset } from "./human-simulator";
 
 type ActionType = keyof typeof DAILY_LIMITS;

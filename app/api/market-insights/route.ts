@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { auth } from "@/auth";
 import connectDB from "@/lib/db/connection";
-import { MarketInsight } from "@/lib/db/models";
+import MarketInsight from "@/lib/db/models/market-insight";
 import { checkApiRateLimit } from "@/lib/utils/rate-limit";
 import { getUserAIProvider } from "@/lib/ai/key-manager";
 import { buildMarketAnalysisPrompt } from "@/lib/ai/prompts";

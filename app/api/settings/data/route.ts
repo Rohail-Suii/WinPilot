@@ -2,17 +2,15 @@ import { NextResponse } from "next/server";
 import { auth } from "@/auth";
 import connectDB from "@/lib/db/connection";
 import bcrypt from "bcryptjs";
-import {
-  User,
-  Resume,
-  JobApplication,
-  JobSearch,
-  HeroProfile,
-  Post,
-  ScrapedData,
-  ScraperConfig,
-  ActivityLog,
-} from "@/lib/db/models";
+import User from "@/lib/db/models/user";
+import Resume from "@/lib/db/models/resume";
+import JobApplication from "@/lib/db/models/job-application";
+import JobSearch from "@/lib/db/models/job-search";
+import HeroProfile from "@/lib/db/models/hero-profile";
+import Post from "@/lib/db/models/post";
+import ScrapedData from "@/lib/db/models/scraped-data";
+import ScraperConfig from "@/lib/db/models/scraper-config";
+import ActivityLog from "@/lib/db/models/activity-log";
 import { checkApiRateLimit } from "@/lib/utils/rate-limit";
 
 export async function GET() {

@@ -3,7 +3,7 @@ import mongoose from "mongoose";
 import { z } from "zod";
 import { auth } from "@/auth";
 import connectDB from "@/lib/db/connection";
-import { ConnectionRequest } from "@/lib/db/models";
+import ConnectionRequest from "@/lib/db/models/connection-request";
 import { checkApiRateLimit } from "@/lib/utils/rate-limit";
 
 const sendConnectionSchema = z.object({
@@ -165,7 +165,7 @@ export async function PATCH(req: Request) {
     const connection = await ConnectionRequest.findOneAndUpdate(
       { _id: parsed.data.id, userId: session.user.id },
       { $set: update },
-      { new: true }
+      { returnDocument: "after" }
     );
 
     if (!connection) {

@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import mongoose from "mongoose";
 import { auth } from "@/auth";
 import connectDB from "@/lib/db/connection";
-import { Notification } from "@/lib/db/models";
+import Notification from "@/lib/db/models/notification";
 import { checkApiRateLimit } from "@/lib/utils/rate-limit";
 
 export async function GET(req: Request) {

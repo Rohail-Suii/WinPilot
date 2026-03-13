@@ -15,8 +15,16 @@ const hostname = process.env.HOSTNAME || "localhost";
 const port = parseInt(process.env.PORT || "3000", 10);
 const wsPort = parseInt(process.env.WS_PORT || "3001", 10);
 
+// Prevent unhandled errors from crashing the process
+process.on("unhandledRejection", (reason) => {
+  console.error("Unhandled Rejection:", reason);
+});
+process.on("uncaughtException", (err) => {
+  console.error("Uncaught Exception:", err);
+});
+
 async function main() {
-  const app = next({ dev, hostname, port });
+  const app = next({ dev, hostname, port, turbopack: dev });
   const handle = app.getRequestHandler();
 
   await app.prepare();
@@ -31,7 +39,15 @@ async function main() {
 
   // Create the main Next.js HTTP server on port 3000
   const server = createServer(async (req, res) => {
-    await handle(req, res);
+    try {
+      await handle(req, res);
+    } catch (err) {
+      console.error("Request handler error:", err);
+      if (!res.headersSent) {
+        res.statusCode = 500;
+        res.end("Internal Server Error");
+      }
+    }
   });
 
   server.listen(port, () => {

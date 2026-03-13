@@ -2,13 +2,9 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { auth } from "@/auth";
 import connectDB from "@/lib/db/connection";
-import { InterviewPrep, JobApplication } from "@/lib/db/models";
+import InterviewPrep from "@/lib/db/models/interview-prep";
+import JobApplication from "@/lib/db/models/job-application";
 import { checkApiRateLimit } from "@/lib/utils/rate-limit";
-import { getUserAIProvider } from "@/lib/ai/key-manager";
-import {
-  buildInterviewQuestionsPrompt,
-  buildCompanyResearchPrompt,
-} from "@/lib/ai/prompts";
 
 const generatePrepSchema = z.object({
   jobApplicationId: z.string().min(1, "Job application ID is required"),
@@ -73,6 +69,7 @@ export async function POST(req: Request) {
 
     await connectDB();
 
+    const { getUserAIProvider } = await import("@/lib/ai/key-manager");
     const aiProvider = await getUserAIProvider(session.user.id);
     if (!aiProvider) {
       return NextResponse.json(
@@ -90,6 +87,8 @@ export async function POST(req: Request) {
     if (!application) {
       return NextResponse.json({ error: "Job application not found" }, { status: 404 });
     }
+
+    const { buildInterviewQuestionsPrompt, buildCompanyResearchPrompt } = await import("@/lib/ai/prompts");
 
     // Generate interview questions and company research in parallel
     const [questionsResult, companyResult] = await Promise.all([
@@ -139,7 +138,7 @@ export async function POST(req: Request) {
           salaryInsights: companyResult.salaryInsights,
         },
       },
-      { upsert: true, new: true }
+      { upsert: true, returnDocument: "after" }
     );
 
     return NextResponse.json({ prep }, { status: 201 });

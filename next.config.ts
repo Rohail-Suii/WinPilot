@@ -6,7 +6,7 @@ const withBundleAnalyzer = bundleAnalyzer({
 });
 
 const nextConfig: NextConfig = {
-  serverExternalPackages: ["mongoose", "bcryptjs"],
+  serverExternalPackages: ["mongoose", "bcryptjs", "pdfkit", "mongodb"],
   output: "standalone",
   poweredByHeader: false,
   async headers() {
@@ -44,6 +44,14 @@ const nextConfig: NextConfig = {
       "recharts",
       "date-fns",
       "framer-motion",
+      "react-markdown",
+      "@radix-ui/react-accordion",
+      "@radix-ui/react-avatar",
+      "@radix-ui/react-dialog",
+      "@radix-ui/react-dropdown-menu",
+      "@radix-ui/react-tabs",
+      "@radix-ui/react-tooltip",
+      "zod",
     ],
   },
 };
