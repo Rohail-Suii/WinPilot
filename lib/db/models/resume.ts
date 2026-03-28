@@ -5,6 +5,7 @@ export interface IResume extends Document {
   name: string;
   isDefault: boolean;
   contactInfo: {
+    name?: string;
     phone?: string;
     email?: string;
     location?: string;
@@ -54,6 +55,7 @@ const ResumeSchema = new Schema<IResume>(
     name: { type: String, required: true },
     isDefault: { type: Boolean, default: false },
     contactInfo: {
+      name: String,
       phone: String,
       email: String,
       location: String,

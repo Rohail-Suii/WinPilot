@@ -38,10 +38,13 @@ export async function generateTailoredResumePDF(
 
   // --- Header / Name ---
   const name =
+    resume.contactInfo?.name ||
     resume.contactInfo?.email?.split("@")[0] || "Applicant";
-  const displayName = name
-    .replace(/[._-]/g, " ")
-    .replace(/\b\w/g, (c) => c.toUpperCase());
+  const displayName = resume.contactInfo?.name
+    ? name // already properly formatted if from parsed name
+    : name
+      .replace(/[._-]/g, " ")
+      .replace(/\b\w/g, (c) => c.toUpperCase());
 
   doc
     .fontSize(22)

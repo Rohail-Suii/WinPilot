@@ -32,6 +32,26 @@ function getStoredToken() {
   });
 }
 
+function saveToken(token) {
+  return new Promise((resolve) => {
+    chrome.storage.local.set({ authToken: token }, () => {
+      chrome.runtime.sendMessage({ type: "SET_AUTH_TOKEN", token }, () => {
+        resolve(true);
+      });
+    });
+  });
+}
+
+function clearToken() {
+  return new Promise((resolve) => {
+    chrome.storage.local.remove("authToken", () => {
+      chrome.runtime.sendMessage({ type: "SET_AUTH_TOKEN", token: null }, () => {
+        resolve(true);
+      });
+    });
+  });
+}
+
 function renderLoginPrompt() {
   app.innerHTML = `
     <div class="login-prompt">

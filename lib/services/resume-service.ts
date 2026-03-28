@@ -10,6 +10,7 @@ import { buildResumeParsingPrompt } from "@/lib/ai/prompts";
 
 interface ParsedResume {
   contactInfo: {
+    name?: string | null;
     phone?: string | null;
     email?: string | null;
     location?: string | null;
@@ -85,6 +86,7 @@ export async function saveResume(
     name,
     isDefault,
     contactInfo: {
+      name: parsedData.contactInfo.name ?? undefined,
       phone: parsedData.contactInfo.phone ?? undefined,
       email: parsedData.contactInfo.email ?? undefined,
       location: parsedData.contactInfo.location ?? undefined,

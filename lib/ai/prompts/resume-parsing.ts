@@ -9,6 +9,7 @@ export function buildResumeParsingPrompt(rawText: string): AIMessage[] {
 Respond with valid JSON only. Schema:
 {
   "contactInfo": {
+    "name": "string | null (the person's full name)",
     "phone": "string | null",
     "email": "string | null",
     "location": "string | null",

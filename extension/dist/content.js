@@ -178,7 +178,22 @@
 
         // --- Phase 2: Job Scraping ---
         case "SCRAPE_JOB_LISTINGS": {
+          // Wait for job listings to load
+          console.log("[LinkedBoost CS] SCRAPE_JOB_LISTINGS: Waiting for listing elements...");
+          try {
+            await waitForElement(
+              ".jobs-search-results__list-item, .job-card-container, .scaffold-layout__list-item, " +
+              "[data-occludable-job-id], .job-card-list",
+              12000
+            );
+            console.log("[LinkedBoost CS] SCRAPE_JOB_LISTINGS: Found listing container");
+          } catch (e) {
+            console.warn("[LinkedBoost CS] SCRAPE_JOB_LISTINGS: No listing elements found within timeout");
+          }
+          await new Promise((r) => setTimeout(r, 500));
           const jobs = scrapeJobListings();
+          console.log(`[LinkedBoost CS] SCRAPE_JOB_LISTINGS: Scraped ${jobs.length} jobs`);
+          if (jobs.length > 0) console.log("[LinkedBoost CS] First job:", JSON.stringify(jobs[0]));
           return {
             status: "success",
             actionId: action.actionId,
@@ -187,7 +202,52 @@
         }
 
         case "SCRAPE_JOB_DETAIL": {
+          // Wait for the job description container to load
+          console.log("[LinkedBoost CS] SCRAPE_JOB_DETAIL: Waiting for description element...");
+          try {
+            await waitForElement(
+              "#job-details, .jobs-description__content, .jobs-box__html-content, " +
+              ".jobs-description-content, [class*='jobs-description'], .show-more-less-html__markup, " +
+              "[data-testid='expandable-text-box'], [componentkey^='JobDetails_AboutTheJob'], " +
+              "[data-sdui-component*='aboutTheJob']",
+              15000
+            );
+            console.log("[LinkedBoost CS] SCRAPE_JOB_DETAIL: Found description container");
+          } catch (e) {
+            console.warn("[LinkedBoost CS] SCRAPE_JOB_DETAIL: No description element found within timeout");
+            console.warn("[LinkedBoost CS] Page URL:", window.location.href);
+            console.warn("[LinkedBoost CS] Page title:", document.title);
+            // Debug: log what elements ARE on the page
+            const debugSelectors = [
+              "#job-details", "[class*='jobs-description']", ".show-more-less-html__markup",
+              "[data-testid='expandable-text-box']", "[componentkey^='JobDetails']",
+              "[data-sdui-component]", "article", "section", "h2",
+            ];
+            for (const sel of debugSelectors) {
+              const found = document.querySelectorAll(sel);
+              if (found.length > 0) {
+                console.log(`[LinkedBoost CS] DEBUG: Found ${found.length} element(s) matching "${sel}"`);
+              }
+            }
+          }
+          // Scroll the about-the-job section into view to trigger lazy SDUI rendering
+          const aboutJobEl = document.querySelector("[componentkey^='JobDetails_AboutTheJob']");
+          if (aboutJobEl) {
+            aboutJobEl.scrollIntoView({ behavior: 'instant', block: 'center' });
+            // Poll for content to appear (LinkedIn lazy-loads SDUI sections)
+            for (let i = 0; i < 20; i++) {
+              await new Promise((r) => setTimeout(r, 500));
+              if ((aboutJobEl.textContent?.trim() || "").length > 50) {
+                console.log(`[LinkedBoost CS] SCRAPE_JOB_DETAIL: Content loaded after ${(i + 1) * 500}ms`);
+                break;
+              }
+            }
+          } else {
+            // Legacy layout — wait for content to settle
+            await new Promise((r) => setTimeout(r, 2000));
+          }
           const detail = scrapeJobDetail();
+          console.log(`[LinkedBoost CS] SCRAPE_JOB_DETAIL: title="${detail.title}", company="${detail.company}", description=${detail.description ? `${detail.description.length} chars` : 'EMPTY'}`);
           return {
             status: "success",
             actionId: action.actionId,
@@ -287,22 +347,29 @@
 
   function scrapeJobListings() {
     const jobCards = document.querySelectorAll(
-      ".jobs-search-results__list-item, .job-card-container, .scaffold-layout__list-item"
+      ".jobs-search-results__list-item, .job-card-container, .scaffold-layout__list-item, " +
+      ".jobs-search-results-list__list-item, [data-occludable-job-id], " +
+      "li.jobs-search-results__list-item, .job-card-list"
     );
     const jobs = [];
 
     for (const card of jobCards) {
       const titleEl =
-        card.querySelector(".job-card-list__title, .job-card-container__link") ||
-        card.querySelector("a[data-control-name]");
+        card.querySelector(".job-card-list__title, .job-card-container__link, .job-card-list__title--link") ||
+        card.querySelector("a[data-control-name], a.job-card-container__link, a.job-card-list__title--link") ||
+        card.querySelector("a[href*='/jobs/view/']");
       const companyEl = card.querySelector(
-        ".job-card-container__primary-description, .artdeco-entity-lockup__subtitle"
+        ".job-card-container__primary-description, .artdeco-entity-lockup__subtitle, " +
+        ".job-card-container__company-name, .artdeco-entity-lockup__subtitle span"
       );
       const locationEl = card.querySelector(
-        ".job-card-container__metadata-item, .artdeco-entity-lockup__caption"
+        ".job-card-container__metadata-item, .artdeco-entity-lockup__caption, " +
+        ".job-card-container__metadata-wrapper span"
       );
       const easyApplyBadge = card.querySelector(
-        ".job-card-container__apply-method, [data-test-job-card-easy-apply]"
+        ".job-card-container__apply-method, [data-test-job-card-easy-apply], " +
+        ".job-card-container__footer-item--highlighted, " +
+        "li-icon[type='linkedin-bug']"
       );
 
       const title = titleEl?.textContent?.trim() || "";
@@ -325,37 +392,204 @@
   }
 
   function scrapeJobDetail() {
-    const titleEl = document.querySelector(
-      ".jobs-unified-top-card__job-title, .job-details-jobs-unified-top-card__job-title, h1.t-24"
-    );
-    const companyEl = document.querySelector(
-      ".jobs-unified-top-card__company-name, .job-details-jobs-unified-top-card__company-name"
-    );
-    const locationEl = document.querySelector(
-      ".jobs-unified-top-card__bullet, .job-details-jobs-unified-top-card__bullet"
-    );
-    const descriptionEl = document.querySelector(
-      ".jobs-description__content, .jobs-box__html-content, #job-details"
-    );
-    const salaryEl = document.querySelector(
-      ".jobs-unified-top-card__job-insight--highlight, .salary-main-rail__data-amount"
-    );
+    // Click "Show more" to expand truncated description
+    let showMoreBtn =
+      document.querySelector("button[aria-label*='show more']") ||
+      document.querySelector("button[aria-label*='Show more']") ||
+      document.querySelector(".jobs-description__footer-button") ||
+      document.querySelector(".show-more-less-html__button--more") ||
+      null;
+    // SDUI: look for a "...more" or "Show more" button inside the about-the-job section
+    if (!showMoreBtn) {
+      const aboutJob = document.querySelector("[componentkey^='JobDetails_AboutTheJob']");
+      if (aboutJob) {
+        for (const btn of aboutJob.querySelectorAll("button")) {
+          const text = (btn.textContent || "").trim().toLowerCase();
+          if (text.includes("more") || text.includes("show")) {
+            showMoreBtn = btn;
+            break;
+          }
+        }
+      }
+    }
+    if (showMoreBtn) {
+      showMoreBtn.click();
+    }
 
-    return {
-      title: titleEl?.textContent?.trim() || "",
-      company: companyEl?.textContent?.trim() || "",
-      location: locationEl?.textContent?.trim() || "",
-      description: descriptionEl?.textContent?.trim() || "",
-      salary: salaryEl?.textContent?.trim() || "",
-      url: window.location.href,
-    };
+    let title = "";
+    let company = "";
+    let location = "";
+    let description = "";
+    let salary = "";
+
+    // --- Description extraction ---
+
+    // Strategy 1: SDUI componentkey-based (new LinkedIn layout)
+    const aboutJobEl = document.querySelector("[componentkey^='JobDetails_AboutTheJob']");
+    if (aboutJobEl) {
+      const expandable = aboutJobEl.querySelector("[data-testid='expandable-text-box']");
+      if (expandable) {
+        // Clone to remove hidden "…more" button text before extracting
+        const clone = expandable.cloneNode(true);
+        for (const btn of clone.querySelectorAll("[data-testid='expandable-text-button'], button[aria-hidden='true']")) {
+          btn.remove();
+        }
+        description = clone.textContent?.trim() || clone.innerText?.trim() || "";
+      }
+      if (!description) {
+        let text = aboutJobEl.textContent?.trim() || aboutJobEl.innerText?.trim() || "";
+        if (text.startsWith("About the job")) {
+          text = text.substring("About the job".length).trim();
+        }
+        // Remove trailing "…more" / "… more" from button text
+        text = text.replace(/\u2026\s*more\s*$/i, "").trim();
+        if (text.length > 50) {
+          description = text;
+        }
+      }
+    }
+
+    // Strategy 2: data-testid expandable text box anywhere on page
+    if (!description) {
+      const expandable = document.querySelector("[data-testid='expandable-text-box']");
+      if (expandable) {
+        description = expandable.textContent?.trim() || expandable.innerText?.trim() || "";
+      }
+    }
+
+    // Strategy 3: Legacy selectors (pre-SDUI LinkedIn)
+    if (!description) {
+      const descriptionEl = document.querySelector(
+        "#job-details, .jobs-description__content, .jobs-box__html-content, " +
+        ".jobs-description-content, .show-more-less-html__markup, " +
+        "[class*='jobs-description']"
+      );
+      if (descriptionEl) {
+        description = descriptionEl.textContent?.trim() || descriptionEl.innerText?.trim() || "";
+      }
+    }
+
+    // Strategy 4: "About the job" heading ancestor
+    if (!description) {
+      const headings = document.querySelectorAll("h2, h3");
+      for (const heading of headings) {
+        if (heading.textContent?.trim() === "About the job") {
+          let container = heading.parentElement;
+          for (let depth = 0; depth < 6 && container; depth++) {
+            const text = container.textContent?.trim() || "";
+            if (text.length > 200) {
+              description = text;
+              if (description.startsWith("About the job")) {
+                description = description.substring("About the job".length).trim();
+              }
+              break;
+            }
+            container = container.parentElement;
+          }
+          break;
+        }
+      }
+    }
+
+    // Strategy 5: Largest text block heuristic
+    if (!description) {
+      let bestText = "";
+      const candidates = document.querySelectorAll("p, article, [role='article']");
+      for (const el of candidates) {
+        const text = el.textContent?.trim() || "";
+        if (text.length > bestText.length && text.length > 200) {
+          const nav = el.closest("nav, header, footer, [role='navigation'], [role='banner']");
+          if (!nav) bestText = text;
+        }
+      }
+      if (bestText) description = bestText;
+    }
+
+    // --- Title extraction ---
+
+    // Strategy 1: Legacy selectors
+    const titleEl = document.querySelector(
+      ".jobs-unified-top-card__job-title, .job-details-jobs-unified-top-card__job-title, " +
+      "h1[class*='job-title'], .jobs-unified-top-card h1, h1.t-24, " +
+      ".top-card-layout__title"
+    );
+    title = titleEl?.textContent?.trim() || "";
+
+    // Strategy 2: Find a prominent h1 in the job detail area
+    if (!title) {
+      for (const h1 of document.querySelectorAll("h1")) {
+        const text = h1.textContent?.trim() || "";
+        if (text.length > 3 && text.length < 200) {
+          title = text;
+          break;
+        }
+      }
+    }
+
+    // Strategy 3: Parse from page title
+    if (!title) {
+      const pageTitle = (document.title || "").replace(/^\(\d+\)\s*/, "");
+      const parts = pageTitle.split(/[|\u2013\u2014]/).map((p) => p.trim());
+      if (parts.length >= 2) title = parts[0];
+    }
+
+    // --- Company extraction ---
+
+    // Strategy 1: Legacy selectors
+    const companyEl = document.querySelector(
+      ".jobs-unified-top-card__company-name, .job-details-jobs-unified-top-card__company-name, " +
+      ".jobs-unified-top-card__subtitle-primary-grouping a"
+    );
+    company = companyEl?.textContent?.trim() || "";
+
+    // Strategy 2: SDUI — find a link to the company page
+    if (!company) {
+      for (const link of document.querySelectorAll('a[href*="/company/"]')) {
+        const text = link.textContent?.trim() || "";
+        if (text.length > 1 && text.length < 100) {
+          company = text;
+          break;
+        }
+      }
+    }
+
+    // Strategy 3: Parse from page title ("Title | Company | LinkedIn")
+    if (!company) {
+      const pageTitle = (document.title || "").replace(/^\(\d+\)\s*/, "");
+      const parts = pageTitle.split(/[|\u2013\u2014]/).map((p) => p.trim());
+      if (parts.length >= 3 && parts[parts.length - 1] === "LinkedIn") {
+        company = parts[1] || "";
+      }
+    }
+
+    // --- Location extraction ---
+    const locationEl = document.querySelector(
+      ".jobs-unified-top-card__bullet, .job-details-jobs-unified-top-card__bullet, " +
+      ".jobs-unified-top-card__workplace-type"
+    );
+    location = locationEl?.textContent?.trim() || "";
+
+    // --- Salary extraction ---
+    const salaryEl = document.querySelector(
+      ".jobs-unified-top-card__job-insight--highlight, .salary-main-rail__data-amount, " +
+      "[class*='salary'], [class*='compensation']"
+    );
+    salary = salaryEl?.textContent?.trim() || "";
+
+    return { title, company, location, description, salary, url: window.location.href };
   }
 
   // --- Phase 2: Easy Apply Helpers ---
 
   async function clickEasyApply() {
+    // SDUI layout uses <a> with aria-label, legacy uses <button>
     const btn =
+      document.querySelector("a[aria-label*='Easy Apply']") ||
+      document.querySelector("[aria-label='Easy Apply to this job']") ||
       document.querySelector(".jobs-apply-button") ||
+      document.querySelector("[data-control-name='jobdetails_topcard_inapply']") ||
+      document.querySelector("button.jobs-apply-button--top-card") ||
+      getElementByText("a", "Easy Apply") ||
       getElementByText("button", "Easy Apply") ||
       getElementByText("button", "Apply");
 
@@ -363,17 +597,37 @@
       return { clicked: false, error: "Easy Apply button not found" };
     }
 
+    // Check if SDUI Easy Apply link (navigates to apply page instead of modal)
+    const isLink = btn.tagName === "A" && btn.href && btn.href.includes("/apply/");
+
     dispatchNativeClick(btn);
-    // Wait for modal to appear
-    await new Promise((r) => setTimeout(r, 1500));
-    return { clicked: true };
+
+    if (isLink) {
+      // SDUI: clicking the link navigates to the apply page, wait for navigation
+      await new Promise((r) => setTimeout(r, 3000));
+      return { clicked: true, sdui: true };
+    }
+
+    // Legacy: wait for modal to appear
+    try {
+      await waitForElement(
+        ".jobs-easy-apply-modal, [data-test-modal], .artdeco-modal",
+        5000
+      );
+    } catch (e) {
+      // Modal might already be open or take longer
+    }
+    await new Promise((r) => setTimeout(r, 1000));
+    return { clicked: true, sdui: false };
   }
 
   function getFormFields() {
     const modal =
       document.querySelector(".jobs-easy-apply-modal") ||
       document.querySelector("[data-test-modal]") ||
-      document.querySelector(".artdeco-modal");
+      document.querySelector(".artdeco-modal") ||
+      document.querySelector("[class*='jobs-easy-apply']") ||
+      (window.location.href.includes("/apply/") ? document.body : null);
 
     if (!modal) return [];
 
@@ -494,7 +748,9 @@
     const modal =
       document.querySelector(".jobs-easy-apply-modal") ||
       document.querySelector("[data-test-modal]") ||
-      document.querySelector(".artdeco-modal");
+      document.querySelector(".artdeco-modal") ||
+      document.querySelector("[class*='jobs-easy-apply']") ||
+      (window.location.href.includes("/apply/") ? document.body : null);
     if (!modal) throw new Error("Application modal not found");
 
     if (fieldType === "select") {
@@ -525,7 +781,9 @@
     const modal =
       document.querySelector(".jobs-easy-apply-modal") ||
       document.querySelector("[data-test-modal]") ||
-      document.querySelector(".artdeco-modal");
+      document.querySelector(".artdeco-modal") ||
+      document.querySelector("[class*='jobs-easy-apply']") ||
+      (window.location.href.includes("/apply/") ? document.body : null);
     if (!modal) return { action: "none", error: "Modal not found" };
 
     // Look for Submit button first
@@ -563,7 +821,9 @@
     const modal =
       document.querySelector(".jobs-easy-apply-modal") ||
       document.querySelector("[data-test-modal]") ||
-      document.querySelector(".artdeco-modal");
+      document.querySelector(".artdeco-modal") ||
+      document.querySelector("[class*='jobs-easy-apply']") ||
+      (window.location.href.includes("/apply/") ? document.body : null);
     if (!modal) return { uploaded: false, error: "Modal not found" };
 
     const fileInput = modal.querySelector("input[type='file']");
