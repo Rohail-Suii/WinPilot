@@ -17,6 +17,71 @@ export interface TailoredResumeResult {
   keywordsUsed: string[];
 }
 
+function cleanResumeText(input: string): string {
+  return input
+    .replace(/^#{1,6}\s+/gm, "")
+    .replace(/\*\*([^*]+)\*\*/g, "$1")
+    .replace(/__([^_]+)__/g, "$1")
+    .replace(/\*([^*\n]+)\*/g, "$1")
+    .replace(/_([^_\n]+)_/g, "$1")
+    .replace(/^\s*[-*]\s+/gm, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function toStringArray(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    return value
+      .flatMap((item) => {
+        if (typeof item === "string") return [item];
+        if (item && typeof item === "object") {
+          const maybeHighlights = (item as { highlights?: unknown }).highlights;
+          if (Array.isArray(maybeHighlights)) {
+            return maybeHighlights.filter((h): h is string => typeof h === "string");
+          }
+        }
+        return [];
+      })
+      .map((s) => cleanResumeText(s))
+      .filter(Boolean);
+  }
+
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (!trimmed) return [];
+
+    try {
+      const parsed = JSON.parse(trimmed) as unknown;
+      return toStringArray(parsed);
+    } catch {
+      return [cleanResumeText(trimmed)].filter(Boolean);
+    }
+  }
+
+  return [];
+}
+
+function normalizeTailoredResumeResult(raw: unknown): TailoredResumeResult {
+  const source = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
+
+  const matchScoreRaw = source.matchScore;
+  const numericScore = typeof matchScoreRaw === "number" ? matchScoreRaw : Number(matchScoreRaw);
+  const normalizedScore = Number.isFinite(numericScore)
+    ? Math.max(0, Math.min(100, Math.round(numericScore)))
+    : 0;
+
+  return {
+    tailoredSummary:
+      typeof source.tailoredSummary === "string" ? cleanResumeText(source.tailoredSummary) : "",
+    tailoredSkills: toStringArray(source.tailoredSkills),
+    tailoredHighlights: toStringArray(source.tailoredHighlights),
+    matchScore: normalizedScore,
+    matchExplanation:
+      typeof source.matchExplanation === "string" ? cleanResumeText(source.matchExplanation) : "",
+    keywordsUsed: toStringArray(source.keywordsUsed),
+  };
+}
+
 /**
  * Tailor a resume for a specific job description
  */
@@ -54,9 +119,9 @@ export async function tailorResumeForJob(
   };
 
   const messages = buildResumeTailoringPrompt(resumeData, sanitizedDescription);
-  const result = await ai.generateJSON<TailoredResumeResult>(messages);
+  const result = await ai.generateJSON<unknown>(messages);
 
-  return result;
+  return normalizeTailoredResumeResult(result);
 }
 
 /**

@@ -23,6 +23,22 @@ interface DiscoveredJob {
   easyApply: boolean;
 }
 
+function normalizeStringArray(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    return value
+      .filter((item): item is string => typeof item === "string")
+      .map((item) => item.trim())
+      .filter(Boolean);
+  }
+
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    return trimmed ? [trimmed] : [];
+  }
+
+  return [];
+}
+
 /**
  * Process discovered jobs: score, filter, and store
  */
@@ -130,9 +146,9 @@ export async function prepareJobApplication(
     const tailored = await tailorResumeForJob(userId, application.jobDescription);
 
     application.tailoredResume = {
-      summary: tailored.tailoredSummary,
-      skills: tailored.tailoredSkills,
-      highlights: tailored.tailoredHighlights,
+      summary: typeof tailored.tailoredSummary === "string" ? tailored.tailoredSummary : "",
+      skills: normalizeStringArray(tailored.tailoredSkills),
+      highlights: normalizeStringArray(tailored.tailoredHighlights),
     };
     application.matchScore = tailored.matchScore;
     application.status = "applying";

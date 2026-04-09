@@ -25,6 +25,8 @@ import {
   Play,
   Square,
   Zap,
+  AlertTriangle,
+  Bot,
 } from "lucide-react";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -33,6 +35,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Select } from "@/components/ui/select";
+import { Switch } from "@/components/ui/switch";
 import {
   Dialog,
   DialogContent,
@@ -99,9 +102,30 @@ export function JobsClient() {
   const [statusFilter, setStatusFilter] = useState("");
   const [expandedApp, setExpandedApp] = useState<string | null>(null);
 
-  const { isConnected, currentTask } = useExtensionStore();
+  const { isConnected, currentTask, lastTaskError, aiQuotaStatus } = useExtensionStore();
   const { startAutomation, stopAutomation } = useWebSocket();
   const [automationRunning, setAutomationRunning] = useState(false);
+  const [useAI, setUseAI] = useState(true);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const saved = window.localStorage.getItem("jobs-automation-use-ai");
+    if (saved === "false") {
+      setUseAI(false);
+    }
+  }, []);
+
+  const handleAiModeToggle = (checked: boolean) => {
+    setUseAI(checked);
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem("jobs-automation-use-ai", String(checked));
+    }
+    toast.info(
+      checked
+        ? "AI Mode ON: matching + tailored resume generation enabled"
+        : "AI Mode OFF: apply using existing LinkedIn resume (no AI credits)",
+    );
+  };
 
   const fetchSearches = useCallback(async () => {
     const res = await fetch("/api/jobs");
@@ -146,9 +170,13 @@ export function JobsClient() {
       toast.error("Extension not connected. Open LinkedIn in Chrome with the extension enabled.");
       return;
     }
-    startAutomation(searchId);
+    startAutomation(searchId, { useAI });
     setAutomationRunning(true);
-    toast.success("Automation started! The extension will search and apply to jobs.");
+    toast.success(
+      useAI
+        ? "Automation started in AI Mode."
+        : "Automation started in non-AI mode.",
+    );
   };
 
   const handleStopAutomation = () => {
@@ -184,6 +212,12 @@ export function JobsClient() {
           <p className="text-white/50 mt-1">Configure searches and track applications</p>
         </div>
         <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2 rounded-lg border border-white/10 bg-white/[0.03] px-3 py-1.5">
+            <Bot className="h-3.5 w-3.5 text-white/50" />
+            <span className="text-xs text-white/70">AI Mode</span>
+            <Switch checked={useAI} onCheckedChange={handleAiModeToggle} />
+            <span className="text-xs text-white/40">{useAI ? "ON" : "OFF"}</span>
+          </div>
           <div className="flex items-center gap-2 text-sm">
             <span className={`h-2 w-2 rounded-full ${isConnected ? "bg-emerald-400" : "bg-red-400"}`} />
             <span className="text-white/40">{isConnected ? "Extension connected" : "Extension offline"}</span>
@@ -204,6 +238,25 @@ export function JobsClient() {
         <div className="rounded-xl bg-blue-500/10 border border-blue-500/20 px-5 py-3 flex items-center gap-3">
           <Loader2 className="h-4 w-4 text-blue-400 animate-spin shrink-0" />
           <p className="text-sm text-blue-300">{currentTask}</p>
+        </div>
+      )}
+
+      {lastTaskError && (
+        <div className="rounded-xl bg-amber-500/10 border border-amber-500/30 px-5 py-3 flex items-start gap-3">
+          <AlertTriangle className="h-4 w-4 text-amber-400 shrink-0 mt-0.5" />
+          <div className="space-y-1">
+            <p className="text-sm text-amber-200">{lastTaskError}</p>
+            {aiQuotaStatus?.provider === "gemini" && (
+              <p className="text-xs text-amber-300/90">
+                Gemini quota info: model {aiQuotaStatus.model || "gemini-2.5-flash"}, remaining {aiQuotaStatus.remaining ?? 0}
+                {typeof aiQuotaStatus.dailyLimit === "number" ? ` / ${aiQuotaStatus.dailyLimit}` : ""}
+                {typeof aiQuotaStatus.retryAfterSeconds === "number" && aiQuotaStatus.retryAfterSeconds > 0
+                  ? `, retry in ~${aiQuotaStatus.retryAfterSeconds}s.`
+                  : "."}
+                <span className="ml-1">You can switch AI Mode OFF to continue without AI resume tailoring.</span>
+              </p>
+            )}
+          </div>
         </div>
       )}
 

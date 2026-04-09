@@ -74,7 +74,11 @@ function connect() {
     });
 
     socket.on("EXECUTE_ACTION", (message) => {
-      handleServerMessage({ type: "EXECUTE_ACTION", ...message });
+      const normalizedMessage =
+        message && typeof message === "object"
+          ? { ...message, type: message.type || "EXECUTE_ACTION" }
+          : { type: "EXECUTE_ACTION" };
+      handleServerMessage(normalizedMessage);
     });
 
     socket.on("SYNC_CONFIG", (data) => {
@@ -143,7 +147,7 @@ function handleServerMessage(message) {
       forwardToContentScript(message);
       break;
     case "START_AUTOMATION":
-      startAutomation(message.searchId);
+      startAutomation(message.searchId, message.options || message.config || {});
       break;
     case "STOP_AUTOMATION":
       stopAutomation();
@@ -193,8 +197,46 @@ function sendToContentScript(tabId, message) {
     console.log(`[LinkedBoost] -> Content script (tab ${tabId}):`, message.command || message.type);
     chrome.tabs.sendMessage(tabId, message, (response) => {
       if (chrome.runtime.lastError) {
-        console.error(`[LinkedBoost] <- Content script error (tab ${tabId}):`, chrome.runtime.lastError.message);
-        reject(new Error(chrome.runtime.lastError.message));
+        const errMessage = chrome.runtime.lastError.message || "Unknown runtime error";
+        const isAsyncChannelClosed =
+          errMessage.includes("A listener indicated an asynchronous response") &&
+          errMessage.includes("before a response was received");
+        const isExpectedNavigationClose =
+          isAsyncChannelClosed &&
+          ["CLICK_EASY_APPLY", "NAVIGATE", "CLICK_NEXT_OR_SUBMIT"].includes(message.command);
+
+        if (isExpectedNavigationClose) {
+          console.warn(
+            `[LinkedBoost] <- Content script channel closed during ${message.command}; treating as navigation success`
+          );
+
+          if (message.command === "CLICK_NEXT_OR_SUBMIT") {
+            resolve({
+              status: "success",
+              actionId: message.actionId,
+              data: {
+                action: "next",
+                navigationInProgress: true,
+                inferred: true,
+              },
+            });
+            return;
+          }
+
+          resolve({
+            status: "success",
+            actionId: message.actionId,
+            data: {
+              clicked: true,
+              sdui: message.command === "CLICK_EASY_APPLY",
+              navigationInProgress: true,
+            },
+          });
+          return;
+        }
+
+        console.error(`[LinkedBoost] <- Content script error (tab ${tabId}):`, errMessage);
+        reject(new Error(errMessage));
       } else {
         console.log(`[LinkedBoost] <- Content script (tab ${tabId}): status=${response?.status}`);
         resolve(response);
@@ -268,6 +310,41 @@ async function apiCall(endpoint, body) {
   if (!res.ok) {
     const err = await res.json().catch(() => ({ error: res.statusText }));
     console.error(`[LinkedBoost API] Error response from ${url}:`, err);
+
+    if (err?.code === "GEMINI_QUOTA_EXCEEDED" || err?.ai?.provider === "gemini") {
+      const retrySeconds = Number(err?.ai?.retryAfterSeconds || 0);
+      const limit = Number(err?.ai?.dailyLimit || 0);
+      const model = err?.ai?.model || "gemini-2.5-flash";
+      const retryText = retrySeconds > 0 ? `Retry in ~${retrySeconds}s.` : "Retry later.";
+      const limitText = limit > 0 ? `Daily limit ${limit}.` : "Daily quota exhausted.";
+      const friendly = `Gemini credits exhausted (${model}). ${limitText} ${retryText} Use a new Gemini API key or disable AI tailoring.`;
+
+      chrome.storage.local.set({
+        lastAiQuotaStatus: {
+          provider: "gemini",
+          model,
+          remaining: 0,
+          dailyLimit: limit,
+          retryAfterSeconds: retrySeconds,
+          timestamp: Date.now(),
+          message: friendly,
+        },
+      });
+
+      reportProgress("task:error", {
+        message: friendly,
+        aiQuota: {
+          provider: "gemini",
+          model,
+          remaining: 0,
+          dailyLimit: limit,
+          retryAfterSeconds: retrySeconds,
+        },
+      });
+
+      throw new Error(friendly);
+    }
+
     throw new Error(err.error || `API error ${res.status}`);
   }
 
@@ -286,6 +363,277 @@ function randomDelay(min, max) {
   const z = Math.sqrt(-2 * Math.log(u1)) * Math.cos(2 * Math.PI * u2);
   const delay = Math.max(min, Math.min(max, Math.round(mean + z * stdDev)));
   return new Promise((resolve) => setTimeout(resolve, delay));
+}
+
+function normalizeAutomationOptions(options) {
+  const source = options && typeof options === "object" ? options : {};
+  return {
+    useAI: source.useAI !== false,
+  };
+}
+
+function isGeminiQuotaErrorMessage(message) {
+  const text = (message || "").toString().toLowerCase();
+  return (
+    text.includes("gemini") &&
+    (text.includes("quota") || text.includes("resource_exhausted") || text.includes("rate limit") || text.includes("credits exhausted"))
+  );
+}
+
+function isMissingFieldValue(field) {
+  if (field.type === "file") return false;
+
+  const value = typeof field.value === "string" ? field.value.trim() : "";
+  if (field.type === "checkbox") return value !== "true";
+  if (field.type === "radio") return !value;
+  if (field.type === "select") {
+    if (!value) return true;
+    const normalized = value.toLowerCase();
+    return normalized === "select" || normalized === "choose" || normalized === "none";
+  }
+
+  return !value;
+}
+
+function normalizeAnswerForField(field, rawAnswer) {
+  const label = (field?.label || "").toLowerCase();
+  const inputType = (field?.inputType || "").toLowerCase();
+  const selector = (field?.selector || "").toLowerCase();
+  const text = (rawAnswer || "").toString().trim();
+
+  if (field?.type === "checkbox") {
+    return text && text.toLowerCase() === "false" ? "false" : "true";
+  }
+
+  const numericLike =
+    inputType === "number" ||
+    inputType === "tel" ||
+    selector.includes("numeric") ||
+    label.includes("how many") ||
+    label.includes("how much") ||
+    label.includes("on a scale") ||
+    label.includes("approximately") ||
+    label.includes("capital") ||
+    label.includes("investor") ||
+    label.includes("network") ||
+    label.includes("year") ||
+    label.includes("salary") ||
+    label.includes("phone") ||
+    label.includes("notice") ||
+    label.includes("experience") ||
+    label.includes("gpa") ||
+    label.includes("zip") ||
+    label.includes("postal");
+
+  if (numericLike) {
+    const decimalLike =
+      label.includes("decimal") ||
+      label.includes("million") ||
+      label.includes("usd") ||
+      label.includes("capital");
+
+    if (decimalLike) {
+      const normalized = text.replace(/[^\d.]/g, "");
+      const parsed = Number(normalized);
+      if (Number.isFinite(parsed) && parsed > 0) {
+        return parsed.toString();
+      }
+      return "5.0";
+    }
+
+    const digitsOnly = text.replace(/\D+/g, "");
+    if (digitsOnly) return digitsOnly;
+    if (label.includes("phone")) return "0000000000";
+    if (label.includes("salary")) return "5000";
+    if (label.includes("year") || label.includes("experience")) return "3";
+    return "1";
+  }
+
+  return text;
+}
+
+function fallbackAnswerForField(field) {
+  const label = (field?.label || "").toLowerCase();
+  const selector = (field?.selector || "").toLowerCase();
+
+  const isNumericPrompt =
+    selector.includes("numeric") ||
+    label.includes("how many") ||
+    label.includes("how much") ||
+    label.includes("on a scale") ||
+    label.includes("approximately") ||
+    label.includes("capital") ||
+    label.includes("investor") ||
+    label.includes("network") ||
+    label.includes("decimal");
+
+  if (isNumericPrompt) {
+    if (label.includes("scale")) return "8";
+    if (label.includes("decimal") || label.includes("million") || label.includes("capital") || label.includes("usd")) {
+      return "5.0";
+    }
+    return "5";
+  }
+
+  const pickFirstValidSelect = (options = []) => {
+    const valid = options.find((o) => {
+      const value = (o?.value || "").toString().trim().toLowerCase();
+      const text = (o?.text || "").toString().trim().toLowerCase();
+      const joined = `${value} ${text}`;
+      return !!value && !/select|choose|please|option|pick one|--/.test(joined);
+    });
+    return valid?.value || options[0]?.value || "";
+  };
+
+  if (field.type === "checkbox") return "true";
+  if (field.type === "radio") {
+    return field.options?.[0]?.value || "Yes";
+  }
+  if (field.type === "select") {
+    return pickFirstValidSelect(field.options || []);
+  }
+  if (label.includes("linkedin")) return "https://www.linkedin.com/in/profile";
+  if (label.includes("website") || label.includes("portfolio")) return "https://example.com";
+  if (label.includes("city")) return "Dubai";
+  if (label.includes("country")) return "United Arab Emirates";
+  return normalizeAnswerForField(field, "Yes");
+}
+
+async function getStoredFormRules() {
+  return new Promise((resolve) => {
+    chrome.storage.local.get(["formFieldRules"], (result) => {
+      resolve(result.formFieldRules || {});
+    });
+  });
+}
+
+async function recordUnknownFieldSituation(field, jobTitle) {
+  const entry = {
+    label: field?.label || "",
+    type: field?.type || "",
+    inputType: field?.inputType || "",
+    required: !!field?.required,
+    selector: field?.selector || "",
+    jobTitle: jobTitle || "",
+    timestamp: Date.now(),
+  };
+
+  return new Promise((resolve) => {
+    chrome.storage.local.get(["formUnknownSituations"], (result) => {
+      const list = Array.isArray(result.formUnknownSituations) ? result.formUnknownSituations : [];
+      list.push(entry);
+      if (list.length > 200) list.shift();
+      chrome.storage.local.set({ formUnknownSituations: list }, () => resolve(true));
+    });
+  });
+}
+
+async function recordUnknownAutomationSituation(kind, details = {}, jobTitle = "") {
+  const entry = {
+    kind: kind || "unknown",
+    label: details?.label || kind || "",
+    type: "automation-situation",
+    inputType: details?.inputType || "",
+    required: false,
+    selector: details?.selector || "",
+    jobTitle: jobTitle || "",
+    context: details || {},
+    timestamp: Date.now(),
+  };
+
+  return new Promise((resolve) => {
+    chrome.storage.local.get(["formUnknownSituations"], (result) => {
+      const list = Array.isArray(result.formUnknownSituations) ? result.formUnknownSituations : [];
+      list.push(entry);
+      if (list.length > 200) list.shift();
+      chrome.storage.local.set({ formUnknownSituations: list }, () => resolve(true));
+    });
+  });
+}
+
+function getRuleBasedAnswer(field, storedRules) {
+  const label = (field?.label || "").toLowerCase();
+  const inputType = (field?.inputType || "").toLowerCase();
+  const selector = (field?.selector || "").toLowerCase();
+
+  if (storedRules && typeof storedRules === "object") {
+    for (const [pattern, rawValue] of Object.entries(storedRules)) {
+      if (label.includes(String(pattern).toLowerCase())) {
+        return String(rawValue);
+      }
+    }
+  }
+
+  if (field.type === "checkbox") {
+    if (
+      label.includes("consent") ||
+      label.includes("privacy") ||
+      label.includes("declare") ||
+      label.includes("terms") ||
+      label.includes("policy") ||
+      label.includes("authorize")
+    ) {
+      return "true";
+    }
+    return "true";
+  }
+
+  if (field.type === "radio") {
+    const options = field.options || [];
+    const optionByText = (txt) => options.find((o) => (o.label || "").toLowerCase().includes(txt));
+
+    if (label.includes("sponsorship") || label.includes("visa")) {
+      return optionByText("no")?.value || options[0]?.value || "Yes";
+    }
+    if (label.includes("authorized") || label.includes("work authorization")) {
+      return optionByText("yes")?.value || options[0]?.value || "Yes";
+    }
+    return options[0]?.value || "Yes";
+  }
+
+  if (field.type === "select") {
+    const options = field.options || [];
+    const valid = options.find((o) => {
+      const value = (o?.value || "").toString().trim().toLowerCase();
+      const text = (o?.text || "").toString().trim().toLowerCase();
+      const joined = `${value} ${text}`;
+      return !!value && !/select|choose|please|option|pick one|--/.test(joined);
+    });
+
+    if (label.includes("comfortable") || label.includes("success fee") || label.includes("without a fixed salary")) {
+      const yesOption = options.find((o) => (o?.value || "").toString().toLowerCase() === "yes" || (o?.text || "").toString().toLowerCase() === "yes");
+      return yesOption?.value || valid?.value || options[0]?.value || "";
+    }
+
+    return valid?.value || options[0]?.value || "";
+  }
+
+  if (
+    selector.includes("numeric") ||
+    label.includes("how many") ||
+    label.includes("how much") ||
+    label.includes("approximately") ||
+    label.includes("capital") ||
+    label.includes("investor") ||
+    label.includes("network") ||
+    label.includes("on a scale")
+  ) {
+    if (label.includes("scale")) return "8";
+    if (label.includes("million") || label.includes("capital") || label.includes("usd") || label.includes("decimal")) {
+      return "5.0";
+    }
+    return "5";
+  }
+
+  if (inputType === "email" || label.includes("email")) return "applicant@example.com";
+  if (inputType === "url" || label.includes("linkedin")) return "https://www.linkedin.com/in/applicant";
+  if (label.includes("portfolio") || label.includes("website")) return "https://example.com";
+  if (label.includes("first name")) return "Ahsan";
+  if (label.includes("last name")) return "Khan";
+  if (label.includes("city")) return "Dubai";
+  if (label.includes("country")) return "United Arab Emirates";
+
+  return fallbackAnswerForField(field);
 }
 
 // ─── Tab Loading Helpers ────────────────────────────────
@@ -362,17 +710,22 @@ function reportProgress(event, data) {
   }).catch(() => {});
 }
 
-async function startAutomation(searchId) {
+async function startAutomation(searchId, options = {}) {
   if (automationRunning) {
     reportProgress("task:error", { message: "Automation already running" });
     return;
   }
+
+  let targetApp = null;
+  const normalizedOptions = normalizeAutomationOptions(options);
+  let useAI = normalizedOptions.useAI;
 
   console.log(`[LinkedBoost] ====== STARTING AUTOMATION ======`);
   console.log(`[LinkedBoost] searchId: ${searchId}`);
   console.log(`[LinkedBoost] apiUrl: ${apiUrl}`);
   console.log(`[LinkedBoost] authToken: ${authToken ? `${authToken.substring(0, 8)}...` : "NOT SET"}`);
   console.log(`[LinkedBoost] wsUrl: ${wsUrl}`);
+  console.log(`[LinkedBoost] useAI: ${useAI}`);
 
   automationRunning = true;
   automationAborted = false;
@@ -380,6 +733,11 @@ async function startAutomation(searchId) {
   chrome.storage.local.set({ automationRunning: true, automationSearchId: searchId });
 
   reportProgress("task:start", { label: "Starting job automation..." });
+  reportProgress("task:progress", {
+    message: useAI
+      ? "AI Mode ON: matching and tailored resume generation enabled"
+      : "AI Mode OFF: applying with existing LinkedIn resume (no AI usage)",
+  });
 
   try {
     // Step 1: Get search config and navigate to LinkedIn Jobs
@@ -408,339 +766,515 @@ async function startAutomation(searchId) {
 
     if (automationAborted) return cleanup("Automation stopped by user");
 
-    // Step 2: Scrape job listings
-    console.log(`[LinkedBoost] Step 2: Scraping job listings...`);
-    reportProgress("task:progress", { message: "Scraping job listings..." });
-    await randomDelay(1500, 2500);
+    // Configuration for multi-page processing
+    const MAX_PAGES = 5; // Maximum pages to process
+    const MAX_JOBS_PER_RUN = 50; // Maximum total jobs to process across all pages
+    let totalAppliedCount = 0;
+    let totalFailedCount = 0;
+    let totalSkippedQualificationCount = 0;
+    let currentPage = 1;
+    const processedJobIds = new Set(); // Track processed jobs to avoid duplicates across pages
 
-    const scrapeResult = await sendToContentScript(tab.id, {
-      type: "EXECUTE_ACTION",
-      command: "SCRAPE_JOB_LISTINGS",
-      actionId: "scrape-listings",
-    });
-
-    const scrapedJobs = scrapeResult?.data?.jobs || [];
-    console.log(`[LinkedBoost] Step 2 result: ${scrapedJobs.length} jobs found`);
-    if (scrapedJobs.length > 0) {
-      console.log(`[LinkedBoost] First job:`, JSON.stringify(scrapedJobs[0]));
-    }
-    if (scrapedJobs.length === 0) {
-      console.error(`[LinkedBoost] Step 2 FAILED: scrapeResult =`, JSON.stringify(scrapeResult));
-      throw new Error("No jobs found on the search results page");
-    }
-
-    reportProgress("job:found", {
-      message: `Found ${scrapedJobs.length} jobs, getting details...`,
-      count: scrapedJobs.length,
-    });
-
-    // Step 2b: Get details for each job
-    console.log(`[LinkedBoost] Step 2b: Getting details for up to ${Math.min(scrapedJobs.length, 10)} jobs...`);
-    const jobsWithDetails = [];
-    for (let i = 0; i < Math.min(scrapedJobs.length, 10); i++) {
+    // Multi-page loop
+    pageLoop: for (let pageNum = 1; pageNum <= MAX_PAGES; pageNum++) {
       if (automationAborted) return cleanup("Automation stopped by user");
+      
+      currentPage = pageNum;
+      console.log(`[LinkedBoost] ====== Processing Page ${pageNum}/${MAX_PAGES} ======`);
+      reportProgress("task:progress", { message: `Processing page ${pageNum}...` });
 
-      const job = scrapedJobs[i];
-      if (!job.url) {
-        console.warn(`[LinkedBoost] Job ${i} has no URL, skipping: ${job.title}`);
+      // Step 2: Scrape job listings for current page
+      console.log(`[LinkedBoost] Step 2: Scraping job listings on page ${pageNum}...`);
+      reportProgress("task:progress", { message: `Scraping job listings on page ${pageNum}...` });
+      await randomDelay(1500, 2500);
+
+      const scrapeResult = await sendToContentScript(tab.id, {
+        type: "EXECUTE_ACTION",
+        command: "SCRAPE_JOB_LISTINGS",
+        actionId: `scrape-listings-p${pageNum}`,
+      });
+
+      const scrapedJobs = scrapeResult?.data?.jobs || [];
+      console.log(`[LinkedBoost] Page ${pageNum}: ${scrapedJobs.length} jobs found`);
+      if (scrapedJobs.length > 0) {
+        console.log(`[LinkedBoost] First job:`, JSON.stringify(scrapedJobs[0]));
+      }
+      
+      if (scrapedJobs.length === 0) {
+        if (pageNum === 1) {
+          console.error(`[LinkedBoost] Step 2 FAILED: scrapeResult =`, JSON.stringify(scrapeResult));
+          throw new Error("No jobs found on the search results page");
+        } else {
+          console.log(`[LinkedBoost] No more jobs found on page ${pageNum}, finishing pagination`);
+          break pageLoop;
+        }
+      }
+
+      // Filter eligible jobs, excluding already processed ones
+      const eligibleJobs = scrapedJobs.filter(
+        (job) => job?.url && !job.applied && job.easyApply !== false && !processedJobIds.has(job.jobId || job.url)
+      );
+      const dedupedEligibleJobs = [];
+      const seenJobKeys = new Set();
+      for (const job of eligibleJobs) {
+        const key = (job.jobId || job.url || "").trim();
+        if (!key || seenJobKeys.has(key) || processedJobIds.has(key)) continue;
+        seenJobKeys.add(key);
+        dedupedEligibleJobs.push(job);
+      }
+      const skippedAppliedCount = scrapedJobs.filter((job) => job?.applied).length;
+      const easyApplyDetectedCount = scrapedJobs.filter((job) => job?.easyApply !== false).length;
+
+      console.log(
+        `[LinkedBoost] Page ${pageNum} eligibility: total=${scrapedJobs.length}, easyApply=${easyApplyDetectedCount}, alreadyApplied=${skippedAppliedCount}, eligible=${dedupedEligibleJobs.length}`
+      );
+
+      if (dedupedEligibleJobs.length === 0) {
+        console.log(`[LinkedBoost] No new eligible jobs on page ${pageNum}, trying next page...`);
+        // Try to go to next page
+        const paginationResult = await sendToContentScript(tab.id, {
+          type: "EXECUTE_ACTION",
+          command: "CLICK_PAGINATION_NEXT",
+          actionId: `pagination-${pageNum}`,
+        });
+        
+        if (!paginationResult?.data?.clicked) {
+          console.log(`[LinkedBoost] No more pages available after page ${pageNum}`);
+          break pageLoop;
+        }
+        
+        // Wait for page to load after pagination
+        await randomDelay(2000, 3000);
         continue;
       }
 
-      console.log(`[LinkedBoost] Scraping job ${i + 1}/${Math.min(scrapedJobs.length, 10)}: ${job.title} (${job.url})`);
-      await navigateAndWait(tab.id, job.url);
-
-      // Retry scraping up to 3 times with increasing delays
-      let detail = null;
-      for (let attempt = 0; attempt < 3; attempt++) {
-        try {
-          const detailResult = await sendToContentScript(tab.id, {
-            type: "EXECUTE_ACTION",
-            command: "SCRAPE_JOB_DETAIL",
-            actionId: `detail-${i}-${attempt}`,
-          });
-
-          detail = detailResult?.data?.detail;
-          console.log(`[LinkedBoost] Job ${i} detail attempt ${attempt + 1}: description=${detail?.description ? `${detail.description.length} chars` : 'EMPTY'}, title=${detail?.title || 'EMPTY'}`);
-          if (detail?.description) break;
-        } catch (err) {
-          console.warn(`[LinkedBoost] Scrape attempt ${attempt + 1} failed for job ${i}: ${err.message}`);
-        }
-
-        if (attempt < 2) {
-          await randomDelay(2000 * (attempt + 1), 3000 * (attempt + 1));
-        }
-      }
-
-      if (detail?.description) {
-        jobsWithDetails.push({
-          ...job,
-          title: detail.title || job.title,
-          company: detail.company || job.company,
-          description: detail.description,
-        });
-        console.log(`[LinkedBoost] ✓ Job ${i} details captured: "${detail.title}" - ${detail.description.length} chars`);
-      } else {
-        console.warn(`[LinkedBoost] ✗ Could not get details for job ${i}: ${job.title}`);
-      }
-
-      await randomDelay(1000, 2500);
-    }
-
-    console.log(`[LinkedBoost] Step 2b complete: ${jobsWithDetails.length}/${Math.min(scrapedJobs.length, 10)} jobs with details`);
-
-    if (jobsWithDetails.length === 0) {
-      throw new Error("Could not get job details for any listings");
-    }
-
-    reportProgress("task:progress", {
-      message: `Got details for ${jobsWithDetails.length} jobs, scoring with AI...`,
-    });
-
-    // Step 3: Send to server for AI scoring
-    console.log(`[LinkedBoost] Step 3: Sending ${jobsWithDetails.length} jobs for AI scoring...`);
-    const processResult = await apiCall(`/api/jobs/automate?step=process-jobs`, {
-      jobs: jobsWithDetails,
-      searchId,
-    });
-
-    const qualifyingApps = processResult.applications || [];
-    console.log(`[LinkedBoost] Step 3 result: ${qualifyingApps.length} qualifying applications`);
-    if (qualifyingApps.length > 0) {
-      console.log(`[LinkedBoost] Qualifying apps:`, qualifyingApps.map(a => `${a.jobTitle} (${a.matchScore}%)`));
-    }
-    if (qualifyingApps.length === 0) {
-      reportProgress("task:complete", {
-        message: `Processed ${jobsWithDetails.length} jobs but none matched your profile (score >= 60%). Try broadening your search.`,
-      });
-      return cleanup();
-    }
-
-    reportProgress("task:progress", {
-      message: `${qualifyingApps.length} jobs match your profile! Starting applications...`,
-    });
-
-    // Step 4: Apply to each qualifying job
-    let appliedCount = 0;
-    let failedCount = 0;
-
-    for (const app of qualifyingApps) {
-      if (automationAborted) return cleanup("Automation stopped by user");
-
-      console.log(`[LinkedBoost] Step 4: Applying to "${app.jobTitle}" at ${app.company} (${app.matchScore}% match, appId=${app._id})`);
-      reportProgress("job:applying", {
-        message: `Preparing application for ${app.jobTitle} at ${app.company} (${app.matchScore}% match)...`,
-        jobTitle: app.jobTitle,
-        company: app.company,
+      reportProgress("job:found", {
+        message: `Page ${pageNum}: Found ${scrapedJobs.length} jobs (${skippedAppliedCount} already applied). Processing ${dedupedEligibleJobs.length} eligible jobs.`,
+        count: scrapedJobs.length,
+        page: pageNum,
       });
 
-      try {
-        // 4a: Tailor resume + generate PDF
-        console.log(`[LinkedBoost] Step 4a: Tailoring resume for ${app.jobTitle}...`);
-        const prepData = await apiCall(`/api/jobs/automate?step=prepare-apply`, {
-          applicationId: app._id,
-        });
-        console.log(`[LinkedBoost] Step 4a result: resumePdf=${prepData.resumePdf ? `${prepData.resumePdf.length} chars base64` : 'NONE'}, fileName=${prepData.resumeFileName}`);
+      const storedRules = await getStoredFormRules();
+      // Limit jobs per page, but also check total limit
+      const remainingQuota = MAX_JOBS_PER_RUN - totalAppliedCount - totalFailedCount;
+      const jobsToProcessOnThisPage = Math.min(dedupedEligibleJobs.length, remainingQuota, 25);
+      
+      if (jobsToProcessOnThisPage <= 0) {
+        console.log(`[LinkedBoost] Reached max jobs limit (${MAX_JOBS_PER_RUN}), stopping`);
+        break pageLoop;
+      }
 
-        // 4b: Navigate to job page
-        console.log(`[LinkedBoost] Step 4b: Navigating to job page: ${app.jobUrl}`);
-        await navigateAndWait(tab.id, app.jobUrl);
-        await randomDelay(1500, 2500);
+      let pageAppliedCount = 0;
+      let pageFailedCount = 0;
+      let pageSkippedQualificationCount = 0;
+
+      for (let jobIndex = 0; jobIndex < jobsToProcessOnThisPage; jobIndex++) {
+        const candidateJob = dedupedEligibleJobs[jobIndex];
+        targetApp = null;
+        
+        // Mark as processed to avoid reprocessing
+        processedJobIds.add(candidateJob.jobId || candidateJob.url);
 
         if (automationAborted) return cleanup("Automation stopped by user");
 
-        // 4c: Click Easy Apply
-        console.log(`[LinkedBoost] Step 4c: Clicking Easy Apply...`);
-        const easyApplyResult = await sendToContentScript(tab.id, {
-          type: "EXECUTE_ACTION",
-          command: "CLICK_EASY_APPLY",
-          actionId: `apply-${app._id}`,
-        });
-        console.log(`[LinkedBoost] Step 4c result:`, JSON.stringify(easyApplyResult?.data));
+        try {
+          console.log(`[LinkedBoost] Processing job ${jobIndex + 1}/${jobsToProcessOnThisPage} (page ${pageNum}): ${candidateJob.title}`);
+          await navigateAndWait(tab.id, startData.url);
+          await randomDelay(900, 1500);
 
-        if (!easyApplyResult?.data?.clicked) {
-          throw new Error(`Easy Apply button not found: ${easyApplyResult?.data?.error || 'unknown'}`);
-        }
-
-        // SDUI: Easy Apply navigates to a new page — wait for load and re-inject content script
-        if (easyApplyResult?.data?.sdui) {
-          console.log(`[LinkedBoost] Step 4c: SDUI apply page detected, waiting for navigation...`);
-          await waitForTabLoad(tab.id);
-          await randomDelay(2000, 3000);
-          await ensureContentScriptReady(tab.id);
-        }
-
-        await randomDelay(1500, 2500);
-
-        // 4d: Fill form pages
-        console.log(`[LinkedBoost] Step 4d: Filling form pages...`);
-        let formPage = 0;
-        const MAX_FORM_PAGES = 8;
-        let submitted = false;
-
-        while (formPage < MAX_FORM_PAGES) {
-          if (automationAborted) return cleanup("Automation stopped by user");
-
-          console.log(`[LinkedBoost] Form page ${formPage + 1}: Getting fields...`);
-          const fieldsResult = await sendToContentScript(tab.id, {
+          const selectResult = await sendToContentScript(tab.id, {
             type: "EXECUTE_ACTION",
-            command: "GET_FORM_FIELDS",
-            actionId: `fields-${formPage}`,
+            command: "SELECT_JOB_FROM_LIST",
+            actionId: `select-${jobIndex}`,
+            jobId: candidateJob.jobId,
+            jobUrl: candidateJob.url,
           });
 
-          const fields = fieldsResult?.data?.fields || [];
-          console.log(`[LinkedBoost] Form page ${formPage + 1}: ${fields.length} fields found`);
-          if (fields.length > 0) {
-            console.log(`[LinkedBoost] Fields:`, fields.map(f => `[${f.type}] "${f.label}" = "${f.value || ''}"`));
+          if (!selectResult?.data?.selected) {
+            pageFailedCount++;
+            totalFailedCount++;
+            reportProgress("task:progress", {
+              message: `Skipping ${candidateJob.title}: could not select job card in results list (${selectResult?.data?.error || "unknown"}).`,
+              jobTitle: candidateJob.title,
+            });
+            continue;
           }
 
-          if (fields.length > 0) {
-            // Upload resume if file field exists
-            const fileField = fields.find((f) => f.type === "file");
-            if (fileField && prepData.resumePdf) {
-              console.log(`[LinkedBoost] Uploading tailored resume PDF...`);
+          const qualResult = await sendToContentScript(tab.id, {
+            type: "EXECUTE_ACTION",
+            command: "CHECK_JOB_QUALIFICATION",
+            actionId: `qual-${jobIndex}`,
+            maxAttempts: 12,
+            delayMs: 350,
+          });
+          const qualification = qualResult?.data?.qualification || {
+            status: "unknown",
+            matched: false,
+            text: "",
+          };
+          
+          // Determine if we should proceed with application:
+          // - If status is "unknown" (LinkedIn didn't show qualification info), proceed anyway
+          // - If matched is true (matches_some, matches_several, etc.), proceed
+          // - If status explicitly indicates missing/no match, skip
+          const shouldSkipJob = 
+            qualification.status === "missing_required" || 
+            qualification.status === "no_match" ||
+            (qualification.matched === false && qualification.status !== "unknown");
+          
+          const qualificationLabel =
+            qualification.text ||
+            String(qualification.status || "unknown").replace(/_/g, " ");
+
+          console.log(
+            `[LinkedBoost] Qualification check: status="${qualification.status}", matched=${qualification.matched}, shouldSkip=${shouldSkipJob}, text="${qualification.text || ""}"`
+          );
+
+          if (shouldSkipJob) {
+            pageSkippedQualificationCount++;
+            pageFailedCount++;
+            totalFailedCount++;
+            reportProgress("task:progress", {
+              message: `Skipping ${candidateJob.title}: LinkedIn qualification signal is "${qualificationLabel}".`,
+              jobTitle: candidateJob.title,
+            });
+            continue;
+          }
+
+          console.log(`[LinkedBoost] Proceeding with application for ${candidateJob.title}...`);
+
+          let detail = null;
+          for (let attempt = 0; attempt < 3; attempt++) {
+            const detailResult = await sendToContentScript(tab.id, {
+              type: "EXECUTE_ACTION",
+              command: "SCRAPE_JOB_DETAIL",
+              actionId: `detail-${jobIndex}-${attempt}`,
+            });
+            detail = detailResult?.data?.detail;
+            if (detail?.description) break;
+            await randomDelay(1000, 1800);
+          }
+
+          if (!detail?.description) {
+            throw new Error("Could not extract job description");
+          }
+
+          const jobWithDetail = {
+            ...candidateJob,
+            title: detail.title || candidateJob.title,
+            company: detail.company || candidateJob.company,
+            description: detail.description,
+          };
+
+          let prepData = null;
+
+          const registerResult = await apiCall(`/api/jobs/automate?step=register-job`, {
+            searchId,
+            job: {
+              title: jobWithDetail.title,
+              company: jobWithDetail.company,
+              location: jobWithDetail.location || "",
+              url: jobWithDetail.url,
+              description: jobWithDetail.description || "",
+            },
+          });
+
+          targetApp = registerResult?.application || {
+            _id: null,
+            jobTitle: jobWithDetail.title,
+            company: jobWithDetail.company,
+            jobUrl: jobWithDetail.url,
+          };
+
+          if (!targetApp?._id) {
+            throw new Error("Could not register application record for job");
+          }
+
+          reportProgress("job:applying", {
+            message: useAI
+              ? `Applying to ${targetApp.jobTitle || jobWithDetail.title} at ${targetApp.company || jobWithDetail.company}...`
+              : `Applying (AI OFF) to ${targetApp.jobTitle || jobWithDetail.title} at ${targetApp.company || jobWithDetail.company}...`,
+            jobTitle: targetApp.jobTitle || jobWithDetail.title,
+            company: targetApp.company || jobWithDetail.company,
+          });
+
+          if (useAI) {
+            try {
+              prepData = await apiCall(`/api/jobs/automate?step=prepare-apply`, {
+                applicationId: targetApp._id,
+              });
+            } catch (prepErr) {
+              const prepMessage = prepErr?.message || "";
+              if (isGeminiQuotaErrorMessage(prepMessage)) {
+                useAI = false;
+                reportProgress("task:error", {
+                  message: `${prepMessage} Switched to AI Mode OFF for remaining jobs.`,
+                });
+                reportProgress("task:progress", {
+                  message: "AI Mode OFF active: continuing with existing LinkedIn resume (no AI calls).",
+                });
+              } else {
+                throw prepErr;
+              }
+            }
+
+            if (useAI && !prepData?.resumePdf) {
+              throw new Error("Tailored resume PDF was not generated");
+            }
+          }
+
+          await navigateAndWait(tab.id, targetApp.jobUrl);
+          await randomDelay(1000, 1600);
+
+          const easyApplyResult = await sendToContentScript(tab.id, {
+            type: "EXECUTE_ACTION",
+            command: "CLICK_EASY_APPLY",
+            actionId: `apply-${targetApp._id}`,
+          });
+          if (!easyApplyResult?.data?.clicked) {
+            throw new Error(`Easy Apply button not found: ${easyApplyResult?.data?.error || "unknown"}`);
+          }
+
+          if (easyApplyResult?.data?.sdui) {
+            await waitForTabLoad(tab.id);
+            await randomDelay(1400, 2200);
+            await ensureContentScriptReady(tab.id);
+          }
+
+          const MAX_FORM_STEPS = 15;
+          let uploaded = false;
+          let submitted = false;
+          let lastFieldsSignature = "";
+          let repeatedSignatureCount = 0;
+
+          for (let step = 0; step < MAX_FORM_STEPS; step++) {
+            if (automationAborted) return cleanup("Automation stopped by user");
+
+            const fieldsResult = await sendToContentScript(tab.id, {
+              type: "EXECUTE_ACTION",
+              command: "GET_FORM_FIELDS",
+              actionId: `fields-${targetApp._id}-${step}`,
+            });
+            const fields = fieldsResult?.data?.fields || [];
+
+            const fieldsSignature = fields
+              .filter((f) => f.required)
+              .map((f) => `${f.type}:${(f.label || "").toLowerCase().trim()}:${String(f.value || "").toLowerCase().trim()}`)
+              .sort()
+              .join("|");
+
+            if (fieldsSignature && fieldsSignature === lastFieldsSignature) {
+              repeatedSignatureCount++;
+            } else {
+              repeatedSignatureCount = 0;
+              lastFieldsSignature = fieldsSignature;
+            }
+
+            if (repeatedSignatureCount >= 4) {
+              await recordUnknownAutomationSituation(
+                "form-stuck-no-progress",
+                {
+                  label: "No progress detected across repeated form steps",
+                  source: "GET_FORM_FIELDS",
+                  step: step + 1,
+                  repeatedSignatureCount,
+                  fieldsSignature,
+                },
+                targetApp.jobTitle
+              );
+              throw new Error("No form progress detected; skipping this job");
+            }
+
+            if (useAI && !uploaded && fields.some((f) => f.type === "file")) {
               const uploadResult = await sendToContentScript(tab.id, {
                 type: "EXECUTE_ACTION",
                 command: "UPLOAD_RESUME",
-                actionId: `upload-${formPage}`,
+                actionId: `upload-${targetApp._id}-${step}`,
                 fileData: prepData.resumePdf,
-                fileName: prepData.resumeFileName,
+                fileName: prepData.resumeFileName || "tailored-resume.pdf",
               });
-              console.log(`[LinkedBoost] Upload result:`, JSON.stringify(uploadResult?.data));
-              await randomDelay(2000, 3000);
-            }
-
-            // Get AI answers for empty fields
-            const answerableFields = fields.filter(
-              (f) => f.type !== "file" && f.label && !f.value
-            );
-            console.log(`[LinkedBoost] ${answerableFields.length} fields need answers`);
-
-            if (answerableFields.length > 0) {
-              console.log(`[LinkedBoost] Getting AI answers for:`, answerableFields.map(f => f.label));
-              const answersData = await apiCall(`/api/jobs/automate?step=answer-form`, {
-                questions: answerableFields,
-                applicationId: app._id,
-              });
-
-              const answers = answersData.answers || [];
-              console.log(`[LinkedBoost] Got ${answers.length} answers:`, answers.map(a => `"${a.question}" -> "${a.answer}" (${a.confidence}%)`));
-
-              for (let fi = 0; fi < answers.length; fi++) {
-                if (automationAborted) return cleanup("Automation stopped by user");
-
-                const answer = answers[fi];
-                if (!answer.answer) continue;
-
-                const originalField = fields.find((f) => f.label === answer.question);
-                const originalIndex = fields.indexOf(originalField);
-                if (originalIndex < 0) {
-                  console.warn(`[LinkedBoost] Could not find field for question: "${answer.question}"`);
-                  continue;
-                }
-
-                console.log(`[LinkedBoost] Filling field ${originalIndex} "${answer.question}" with "${answer.answer}"`);
-                await sendToContentScript(tab.id, {
-                  type: "EXECUTE_ACTION",
-                  command: "FILL_FORM_FIELD",
-                  actionId: `fill-${formPage}-${fi}`,
-                  fieldIndex: originalIndex,
-                  value: answer.answer,
-                  fieldType: originalField.type,
-                });
-
-                await randomDelay(300, 800);
+              if (!uploadResult?.data?.uploaded) {
+                throw new Error(`Resume upload failed: ${uploadResult?.data?.error || "unknown"}`);
               }
+              uploaded = true;
+              await randomDelay(1000, 1600);
             }
+
+            const requiredMissing = fields.filter((f) => f.required && isMissingFieldValue(f));
+            for (let i = 0; i < requiredMissing.length; i++) {
+              const field = requiredMissing[i];
+              const raw = getRuleBasedAnswer(field, storedRules);
+              const chosen = normalizeAnswerForField(field, raw) || fallbackAnswerForField(field);
+
+              if (!chosen) {
+                await recordUnknownFieldSituation(field, targetApp.jobTitle);
+                continue;
+              }
+
+              await sendToContentScript(tab.id, {
+                type: "EXECUTE_ACTION",
+                command: "FILL_FORM_FIELD",
+                actionId: `fill-${targetApp._id}-${step}-${i}`,
+                fieldIndex: i,
+                selector: field.selector,
+                value: chosen,
+                fieldType: field.type,
+              });
+              await randomDelay(250, 700);
+            }
+
+            const dropdownResult = await sendToContentScript(tab.id, {
+              type: "EXECUTE_ACTION",
+              command: "AUTO_SELECT_DROPDOWNS",
+              actionId: `auto-dropdown-${targetApp._id}-${step}`,
+            });
+            if ((dropdownResult?.data?.selectedCount || 0) > 0) {
+              await randomDelay(300, 700);
+            }
+
+            const navResult = await sendToContentScript(tab.id, {
+              type: "EXECUTE_ACTION",
+              command: "CLICK_NEXT_OR_SUBMIT",
+              actionId: `nav-${targetApp._id}-${step}`,
+            });
+
+            const navAction = navResult?.data?.action;
+            if (navAction === "submitted") {
+              submitted = true;
+              break;
+            }
+
+            if (navAction === "next" || navAction === "review") {
+              await randomDelay(1000, 1600);
+              continue;
+            }
+
+            if (navAction === "continue_applying") {
+              await recordUnknownAutomationSituation(
+                "linkedin-continue-applying-interstitial",
+                {
+                  label: "LinkedIn safety interstitial after Easy Apply",
+                  source: "CLICK_NEXT_OR_SUBMIT",
+                  href: navResult?.data?.href || "",
+                  safety: !!navResult?.data?.safety,
+                },
+                targetApp.jobTitle
+              );
+              await waitForTabLoad(tab.id);
+              await randomDelay(1400, 2200);
+              await ensureContentScriptReady(tab.id);
+              continue;
+            }
+
+            if (navAction === "blocked") {
+              const stillMissing = requiredMissing.filter((f) => isMissingFieldValue(f));
+              if (stillMissing.length > 0) {
+                for (const field of stillMissing) {
+                  await recordUnknownFieldSituation(field, targetApp.jobTitle);
+                }
+              }
+              throw new Error(`Navigation blocked: ${navResult?.data?.error || "required fields unresolved"}`);
+            }
+
+            await recordUnknownAutomationSituation(
+              "form-navigation-unknown-action",
+              {
+                label: "Unknown form navigation action",
+                source: "CLICK_NEXT_OR_SUBMIT",
+                action: navAction || "none",
+                error: navResult?.data?.error || "",
+                step: step + 1,
+              },
+              targetApp.jobTitle
+            );
+
+            throw new Error(`Form navigation blocked on step ${step + 1} (action=${navAction || "none"})`);
           }
 
-          // Click Next / Review / Submit
-          console.log(`[LinkedBoost] Form page ${formPage + 1}: Clicking Next/Review/Submit...`);
-          await randomDelay(500, 1000);
-          const navResult = await sendToContentScript(tab.id, {
-            type: "EXECUTE_ACTION",
-            command: "CLICK_NEXT_OR_SUBMIT",
-            actionId: `nav-${formPage}`,
-          });
+          if (!submitted) {
+            throw new Error("Application was not submitted within the allowed form steps");
+          }
 
-          const action = navResult?.data?.action;
-          console.log(`[LinkedBoost] Form page ${formPage + 1} navigation result: action="${action}", error="${navResult?.data?.error || ''}"`);
-
-          if (action === "submitted") {
-            submitted = true;
-            console.log(`[LinkedBoost] ✓ Application submitted! Marking complete...`);
+          if (targetApp?._id) {
             await apiCall(`/api/jobs/automate?step=complete`, {
-              applicationId: app._id,
+              applicationId: targetApp._id,
               success: true,
               notes: "Auto-applied via LinkedBoost",
             });
-
-            appliedCount++;
-            reportProgress("job:applied", {
-              message: `Applied to ${app.jobTitle} at ${app.company}!`,
-              jobTitle: app.jobTitle,
-              company: app.company,
-              appliedCount,
-            });
-            break;
-          } else if (action === "next" || action === "review") {
-            console.log(`[LinkedBoost] Moving to form page ${formPage + 2}...`);
-            formPage++;
-            await randomDelay(1000, 2000);
-          } else {
-            throw new Error(`Form navigation stuck on page ${formPage + 1} (action=${action})`);
           }
-        }
 
-        if (!submitted) {
-          throw new Error("Too many form pages");
-        }
-
-        // Cooldown between applications (5-10 min)
-        if (qualifyingApps.indexOf(app) < qualifyingApps.length - 1) {
-          const cooldownMs = Math.round(300000 + Math.random() * 300000);
-          const cooldownMins = Math.round(cooldownMs / 60000);
-
-          reportProgress("task:progress", {
-            message: `Waiting ${cooldownMins} min before next application (anti-detection)...`,
+          pageAppliedCount++;
+          totalAppliedCount++;
+          reportProgress("job:applied", {
+            message: `Applied to ${targetApp.jobTitle} at ${targetApp.company}`,
+            jobTitle: targetApp.jobTitle,
+            company: targetApp.company,
+            appliedCount: totalAppliedCount,
+            page: currentPage,
           });
-
-          await new Promise((resolve) => {
-            const timer = setTimeout(resolve, cooldownMs);
-            const check = setInterval(() => {
-              if (automationAborted) {
-                clearTimeout(timer);
-                clearInterval(check);
-                resolve();
-              }
-            }, 1000);
+        } catch (jobErr) {
+          pageFailedCount++;
+          totalFailedCount++;
+          if (targetApp?._id) {
+            await apiCall(`/api/jobs/automate?step=complete`, {
+              applicationId: targetApp._id,
+              success: false,
+              notes: `Auto-apply failed: ${jobErr.message}`,
+            }).catch(() => {});
+          }
+          reportProgress("task:error", {
+            message: `Skipped ${candidateJob.title}: ${jobErr.message}`,
+            jobTitle: candidateJob.title,
           });
         }
-      } catch (err) {
-        console.error(`[LinkedBoost] ✗ Failed to apply to "${app.jobTitle}":`, err.message, err.stack);
-        failedCount++;
+      }
 
-        await apiCall(`/api/jobs/automate?step=complete`, {
-          applicationId: app._id,
-          success: false,
-          notes: `Auto-apply failed: ${err.message}`,
-        }).catch((e) => console.error(`[LinkedBoost] Could not mark app failed:`, e.message));
+      // Update total skipped count
+      totalSkippedQualificationCount += pageSkippedQualificationCount;
 
-        reportProgress("task:error", {
-          message: `Failed: ${app.jobTitle} — ${err.message}`,
-          jobTitle: app.jobTitle,
+      console.log(`[LinkedBoost] Page ${pageNum} complete: Applied=${pageAppliedCount}, Failed=${pageFailedCount}, Skipped=${pageSkippedQualificationCount}`);
+
+      // Check if we should continue to the next page
+      if (totalAppliedCount + totalFailedCount >= MAX_JOBS_PER_RUN) {
+        console.log(`[LinkedBoost] Reached max jobs limit (${MAX_JOBS_PER_RUN}), stopping pagination`);
+        break pageLoop;
+      }
+
+      // Try to go to the next page
+      if (pageNum < MAX_PAGES) {
+        console.log(`[LinkedBoost] Attempting to navigate to page ${pageNum + 1}...`);
+        reportProgress("task:progress", { message: `Navigating to page ${pageNum + 1}...` });
+
+        // First, navigate back to the search results page
+        await navigateAndWait(tab.id, startData.url);
+        await randomDelay(1500, 2500);
+
+        const paginationResult = await sendToContentScript(tab.id, {
+          type: "EXECUTE_ACTION",
+          command: "CLICK_PAGINATION_NEXT",
+          actionId: `pagination-${pageNum}`,
         });
 
-        await randomDelay(2000, 4000);
-      }
-    }
+        if (!paginationResult?.data?.clicked) {
+          console.log(`[LinkedBoost] No more pages available after page ${pageNum}`);
+          break pageLoop;
+        }
 
-    console.log(`[LinkedBoost] ====== AUTOMATION COMPLETE ======`);
-    console.log(`[LinkedBoost] Applied: ${appliedCount}, Failed: ${failedCount}`);
+        console.log(`[LinkedBoost] Successfully navigated to page ${pageNum + 1}`);
+
+        // Wait for the new page to fully load
+        await randomDelay(2500, 3500);
+      }
+    } // End of pageLoop
+
     reportProgress("task:complete", {
-      message: `Automation complete! Applied: ${appliedCount}, Failed: ${failedCount}`,
-      appliedCount,
-      failedCount,
+      message: `Automation complete. Pages processed: ${currentPage}. Applied: ${totalAppliedCount}, Failed/Skipped: ${totalFailedCount} (${totalSkippedQualificationCount} skipped by LinkedIn qualification signal).`,
+      appliedCount: totalAppliedCount,
+      failedCount: totalFailedCount,
+      skippedQualificationCount: totalSkippedQualificationCount,
+      pagesProcessed: currentPage,
     });
+    return cleanup();
   } catch (err) {
     console.error("[LinkedBoost] ====== AUTOMATION FAILED ======");
     console.error("[LinkedBoost] Error:", err.message);
@@ -776,6 +1310,123 @@ function updateConnectionStatus(connected) {
     type: "CONNECTION_STATUS",
     connected,
   }).catch(() => {});
+}
+
+// ─── AI Field Correction Handler ─────────────────────────
+
+/**
+ * Handle AI field correction request
+ * Sends field context to AI API and returns corrected value
+ */
+async function handleAIFieldCorrection(context) {
+  console.log("[AI Correction] Received correction request for field:", context.fieldLabel);
+
+  try {
+    // Build the AI prompt
+    const prompt = buildAICorrectionPrompt(context);
+
+    // Call AI API
+    const response = await fetch(`${apiUrl}/api/ai/correct-field`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(authToken && { Authorization: `Bearer ${authToken}` }),
+      },
+      body: JSON.stringify({
+        prompt,
+        context,
+        // Add metadata for logging/debugging
+        metadata: {
+          pageUrl: context.pageUrl,
+          pageTitle: context.pageTitle,
+          fieldLabel: context.fieldLabel,
+        },
+      }),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(errorData.error || `AI API returned ${response.status}`);
+    }
+
+    const result = await response.json();
+
+    console.log("[AI Correction] Received corrected value:", result.correctedValue);
+
+    return {
+      correctedValue: result.correctedValue,
+      reasoning: result.reasoning || "",
+      success: true,
+    };
+  } catch (error) {
+    console.error("[AI Correction] Error:", error);
+    throw error;
+  }
+}
+
+/**
+ * Build a detailed prompt for the AI to correct the field value
+ */
+function buildAICorrectionPrompt(context) {
+  const {
+    fieldLabel,
+    fieldType,
+    currentValue,
+    errorMessage,
+    placeholder,
+    hint,
+    options,
+    pattern,
+    min,
+    max,
+    minLength,
+    maxLength,
+  } = context;
+
+  let prompt = `You are a form-filling assistant. A form validation error occurred and you need to fix it.\n\n`;
+  prompt += `**Field Information:**\n`;
+  prompt += `- Label: "${fieldLabel}"\n`;
+  prompt += `- Type: ${fieldType}\n`;
+  prompt += `- Current Value: "${currentValue}"\n`;
+  prompt += `- Error Message: "${errorMessage}"\n\n`;
+
+  if (placeholder) prompt += `- Placeholder: "${placeholder}"\n`;
+  if (hint) prompt += `- Hint: "${hint}"\n`;
+  if (pattern) prompt += `- Pattern (regex): ${pattern}\n`;
+  if (min) prompt += `- Min: ${min}\n`;
+  if (max) prompt += `- Max: ${max}\n`;
+  if (minLength) prompt += `- Min Length: ${minLength}\n`;
+  if (maxLength) prompt += `- Max Length: ${maxLength}\n`;
+
+  if (options && options.length > 0) {
+    prompt += `\n**Available Options:**\n`;
+    options.slice(0, 20).forEach((opt, idx) => {
+      prompt += `${idx + 1}. "${opt.text}" (value: "${opt.value}")\n`;
+    });
+    if (options.length > 20) {
+      prompt += `... and ${options.length - 20} more options\n`;
+    }
+  }
+
+  prompt += `\n**Task:**\n`;
+  prompt += `Based on the error message and field requirements, provide a corrected value that will pass validation.\n\n`;
+
+  prompt += `**Examples of common fixes:**\n`;
+  prompt += `- If error is "Please enter a valid number" and value is "5,00,000" → remove commas → "500000"\n`;
+  prompt += `- If error is "Please select an option" → select the first valid option from the list\n`;
+  prompt += `- If error is "Phone number must be 10 digits" and value has formatting → extract just digits\n`;
+  prompt += `- If error is "Date format must be MM/DD/YYYY" → reformat the date\n\n`;
+
+  prompt += `**Response Format:**\n`;
+  prompt += `Return ONLY a JSON object with this structure:\n`;
+  prompt += `{\n`;
+  prompt += `  "correctedValue": "the fixed value as a string",\n`;
+  prompt += `  "reasoning": "brief explanation of what was fixed"\n`;
+  prompt += `}\n\n`;
+
+  prompt += `Return ONLY the JSON object, no other text.`;
+
+  return prompt;
 }
 
 // ─── Message Listener (from content script & popup) ─────
@@ -818,7 +1469,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       break;
 
     case "START_AUTOMATION":
-      startAutomation(message.searchId);
+      startAutomation(message.searchId, message.options || {});
       sendResponse({ success: true });
       break;
 
@@ -836,6 +1487,12 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       connect();
       sendResponse({ success: true });
       break;
+
+    case "AI_FIELD_CORRECTION":
+      handleAIFieldCorrection(message.context)
+        .then((result) => sendResponse(result))
+        .catch((error) => sendResponse({ error: error.message }));
+      return true; // Keep channel open for async response
 
     default:
       sendResponse({ error: "Unknown message type" });

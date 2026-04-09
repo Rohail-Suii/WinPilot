@@ -16,7 +16,7 @@
   "content_scripts": [
     {
       "matches": ["https://www.linkedin.com/*"],
-      "js": ["content.js"],
+      "js": ["ai-fallback.js", "content.js"],
       "run_at": "document_idle"
     }
   ],

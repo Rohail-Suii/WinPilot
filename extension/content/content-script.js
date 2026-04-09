@@ -255,6 +255,30 @@
           };
         }
 
+        case "CHECK_JOB_QUALIFICATION": {
+          const qualification = await detectQualificationStatusWithRetry(
+            action.maxAttempts || 12,
+            action.delayMs || 350
+          );
+          console.log(
+            `[LinkedBoost CS] CHECK_JOB_QUALIFICATION: status="${qualification.status}", matched=${qualification.matched}, text="${qualification.text || ""}"`
+          );
+          return {
+            status: "success",
+            actionId: action.actionId,
+            data: { qualification },
+          };
+        }
+
+        case "SELECT_JOB_FROM_LIST": {
+          const result = await selectJobFromList(action.jobId, action.jobUrl);
+          return {
+            status: "success",
+            actionId: action.actionId,
+            data: result,
+          };
+        }
+
         // --- Phase 2: Easy Apply Form Filling ---
         case "CLICK_EASY_APPLY": {
           const result = await clickEasyApply();
@@ -271,8 +295,17 @@
         }
 
         case "FILL_FORM_FIELD": {
-          await fillFormField(action.fieldIndex, action.value, action.fieldType);
+          await fillFormField(action.fieldIndex, action.value, action.fieldType, action.selector);
           return { status: "success", actionId: action.actionId };
+        }
+
+        case "AUTO_SELECT_DROPDOWNS": {
+          const result = await autoSelectDropdowns();
+          return {
+            status: "success",
+            actionId: action.actionId,
+            data: result,
+          };
         }
 
         case "CLICK_NEXT_OR_SUBMIT": {
@@ -371,6 +404,19 @@
         ".job-card-container__footer-item--highlighted, " +
         "li-icon[type='linkedin-bug']"
       );
+      const easyApplyLabel = card.querySelector(
+        "[aria-label*='Easy Apply'], [data-control-name*='easy_apply'], [class*='apply-method']"
+      );
+      const cardText = (card.textContent || "").toLowerCase();
+      const easyApplyByText = cardText.includes("easy apply");
+      const appliedBadge = card.querySelector(
+        ".job-card-container__footer-item--success, [data-test-job-card-applied], .artdeco-inline-feedback"
+      );
+      const alreadyApplied =
+        !!appliedBadge ||
+        cardText.includes("applied") ||
+        cardText.includes("application submitted") ||
+        cardText.includes("submitted");
 
       const title = titleEl?.textContent?.trim() || "";
       const url = titleEl?.closest("a")?.href || "";
@@ -381,7 +427,8 @@
           title,
           company: companyEl?.textContent?.trim() || "",
           location: locationEl?.textContent?.trim() || "",
-          easyApply: !!easyApplyBadge,
+          easyApply: !!easyApplyBadge || !!easyApplyLabel || easyApplyByText,
+          applied: alreadyApplied,
           url,
           jobId,
         });
@@ -389,6 +436,168 @@
     }
 
     return jobs;
+  }
+
+  function normalizeTextForMatch(text) {
+    return (text || "").replace(/\s+/g, " ").trim();
+  }
+
+  function detectQualificationStatus() {
+    const candidates = [];
+    const headingNodes = document.querySelectorAll(
+      "h1, h2, h3, strong, [class*='text-heading'], [data-test-id*='qualification'], [class*='qualification']"
+    );
+
+    for (const node of headingNodes) {
+      const text = normalizeTextForMatch(node.textContent || "");
+      if (!text) continue;
+      const lower = text.toLowerCase();
+      if (lower.includes("your profile") || lower.includes("required qualification")) {
+        candidates.push(text);
+      }
+    }
+
+    const pageText = normalizeTextForMatch(document.body?.innerText || "");
+    if (pageText && pageText.toLowerCase().includes("required qualification")) {
+      candidates.push(pageText);
+    }
+
+    const checks = [
+      {
+        status: "missing_required",
+        matched: false,
+        regex: /your profile[^.!?\n]{0,140}missing[^.!?\n]{0,120}required qualifications?/i,
+      },
+      {
+        status: "matches_several",
+        matched: true,
+        regex: /your profile[^.!?\n]{0,140}matches several[^.!?\n]{0,120}required qualifications?/i,
+      },
+      {
+        status: "matches_all",
+        matched: true,
+        regex: /your profile[^.!?\n]{0,140}matches all[^.!?\n]{0,120}required qualifications?/i,
+      },
+      {
+        status: "matches_some",
+        matched: true,
+        regex: /your profile[^.!?\n]{0,140}matches some[^.!?\n]{0,120}required qualifications?/i,
+      },
+      {
+        status: "matches_required",
+        matched: true,
+        regex: /your profile[^.!?\n]{0,140}matches[^.!?\n]{0,120}required qualifications?/i,
+      },
+    ];
+
+    for (const check of checks) {
+      for (const candidate of candidates) {
+        const found = candidate.match(check.regex);
+        if (found) {
+          return {
+            status: check.status,
+            matched: check.matched,
+            text: normalizeTextForMatch(found[0]),
+          };
+        }
+      }
+    }
+
+    return {
+      status: "unknown",
+      matched: false,
+      text: "",
+    };
+  }
+
+  async function detectQualificationStatusWithRetry(maxAttempts = 12, delayMs = 350) {
+    let latest = detectQualificationStatus();
+
+    for (let i = 0; i < maxAttempts; i++) {
+      if (latest.status !== "unknown") {
+        return latest;
+      }
+      await new Promise((r) => setTimeout(r, delayMs));
+      latest = detectQualificationStatus();
+    }
+
+    return latest;
+  }
+
+  function normalizeJobUrl(url) {
+    try {
+      const parsed = new URL(url, window.location.origin);
+      return `${parsed.origin}${parsed.pathname}`.replace(/\/+$/, "");
+    } catch {
+      return String(url || "").split("?")[0].replace(/\/+$/, "");
+    }
+  }
+
+  async function selectJobFromList(jobId, jobUrl) {
+    const cards = document.querySelectorAll(
+      ".jobs-search-results__list-item, .job-card-container, .scaffold-layout__list-item, " +
+      ".jobs-search-results-list__list-item, [data-occludable-job-id], li.jobs-search-results__list-item"
+    );
+    if (!cards.length) {
+      return { selected: false, error: "No job cards found in results list" };
+    }
+
+    const normalizedTargetUrl = normalizeJobUrl(jobUrl || "");
+    let selectedAnchor = null;
+
+    for (const card of cards) {
+      const anchor =
+        card.querySelector("a[href*='/jobs/view/']") ||
+        card.querySelector(".job-card-list__title, .job-card-container__link, .job-card-list__title--link")?.closest("a");
+      if (!anchor) continue;
+
+      const href = anchor.getAttribute("href") || anchor.href || "";
+      const normalizedHref = normalizeJobUrl(href);
+
+      if (jobId && href.includes(`/jobs/view/${jobId}`)) {
+        selectedAnchor = anchor;
+        break;
+      }
+
+      if (normalizedTargetUrl && normalizedHref && normalizedTargetUrl === normalizedHref) {
+        selectedAnchor = anchor;
+        break;
+      }
+    }
+
+    if (!selectedAnchor && jobId) {
+      const row = document.querySelector(`[data-occludable-job-id*='${CSS.escape(String(jobId))}']`);
+      if (row) {
+        selectedAnchor = row.querySelector("a[href*='/jobs/view/']");
+      }
+    }
+
+    if (!selectedAnchor) {
+      return {
+        selected: false,
+        error: `Could not locate job card in list for jobId=${jobId || "n/a"}`,
+      };
+    }
+
+    const clickable =
+      selectedAnchor.closest(".job-card-container, .jobs-search-results__list-item, li") ||
+      selectedAnchor;
+
+    if (clickable instanceof HTMLElement) {
+      clickable.scrollIntoView({ behavior: "instant", block: "center" });
+    }
+
+    dispatchNativeClick(selectedAnchor);
+    await new Promise((r) => setTimeout(r, 350));
+    if (clickable && clickable !== selectedAnchor) {
+      dispatchNativeClick(clickable);
+    }
+
+    await new Promise((r) => setTimeout(r, 1400));
+    return {
+      selected: true,
+      href: selectedAnchor.getAttribute("href") || selectedAnchor.href || "",
+    };
   }
 
   function scrapeJobDetail() {
@@ -581,7 +790,19 @@
     );
     salary = salaryEl?.textContent?.trim() || "";
 
-    return { title, company, location, description, salary, url: window.location.href };
+    const qualification = detectQualificationStatus();
+
+    return {
+      title,
+      company,
+      location,
+      description,
+      salary,
+      url: window.location.href,
+      qualificationStatus: qualification.status,
+      qualificationMatched: qualification.matched,
+      qualificationText: qualification.text,
+    };
   }
 
   // --- Phase 2: Easy Apply Helpers ---
@@ -606,17 +827,18 @@
     const isLink = btn.tagName === "A" && btn.href && btn.href.includes("/apply/");
 
     if (isLink) {
-      // SDUI <a> tags: synthetic MouseEvents don't trigger navigation in Chrome.
-      // Use the native .click() method which activates the link, then fall back
-      // to direct navigation if the URL didn't change.
+      // Return immediately so the message channel can respond before navigation unloads the page.
       const urlBefore = window.location.href;
+      const targetUrl = btn.href;
       btn.click();
-      await new Promise((r) => setTimeout(r, 2000));
-      if (window.location.href === urlBefore) {
-        // .click() didn't navigate — force navigation via href
-        window.location.href = btn.href;
-        await new Promise((r) => setTimeout(r, 3000));
-      }
+
+      // If click doesn't navigate promptly, force it shortly after.
+      setTimeout(() => {
+        if (window.location.href === urlBefore && targetUrl) {
+          window.location.href = targetUrl;
+        }
+      }, 200);
+
       return { clicked: true, sdui: true };
     }
 
@@ -654,6 +876,7 @@
         input.getAttribute("aria-label") || input.getAttribute("placeholder") || "";
       fields.push({
         type: "text",
+        inputType: input.type || "text",
         label,
         value: input.value,
         selector: buildSelector(input),
@@ -710,8 +933,28 @@
           label: legend,
           options,
           value: group.querySelector("input[type='radio']:checked")?.value || "",
+          required:
+            group.querySelector("input[type='radio'][required]") !== null ||
+            group.getAttribute("aria-required") === "true",
         });
       }
+    }
+
+    // Checkboxes
+    const checkboxes = modal.querySelectorAll("input[type='checkbox']");
+    for (const cb of checkboxes) {
+      const label =
+        cb.closest("label")?.textContent?.trim() ||
+        cb.closest(".fb-dash-form-element")?.querySelector("label")?.textContent?.trim() ||
+        cb.getAttribute("aria-label") ||
+        "Consent checkbox";
+      fields.push({
+        type: "checkbox",
+        label,
+        value: cb.checked ? "true" : "",
+        selector: buildSelector(cb),
+        required: cb.required || cb.getAttribute("aria-required") === "true",
+      });
     }
 
     // File inputs
@@ -730,15 +973,15 @@
   }
 
   function buildSelector(element) {
-    if (element.id) return `#${element.id}`;
-    if (element.name) return `[name="${element.name}"]`;
+    if (element.id) return `#${CSS.escape(element.id)}`;
+    if (element.name) return `[name="${CSS.escape(element.name)}"]`;
     // Build a path selector
     const path = [];
     let current = element;
     while (current && current !== document.body) {
       let sel = current.tagName.toLowerCase();
       if (current.id) {
-        sel = `#${current.id}`;
+        sel = `#${CSS.escape(current.id)}`;
         path.unshift(sel);
         break;
       }
@@ -758,7 +1001,48 @@
     return path.join(" > ");
   }
 
-  async function fillFormField(fieldIndex, value, fieldType) {
+  function findContinueApplyingControl(root = document) {
+    const container = root || document;
+    const directSelector =
+      "a[href*='/apply/'][href*='openSDUIApplyFlow=true'], button[aria-label*='Continue applying'], a[aria-label*='Continue applying']";
+    const direct = container.querySelector(directSelector);
+    if (direct) return direct;
+
+    const candidates = container.querySelectorAll("a, button");
+    for (const el of candidates) {
+      const text = (el.textContent || "").trim().toLowerCase();
+      if (!text) continue;
+      if (text.includes("continue applying")) return el;
+    }
+
+    return null;
+  }
+
+  function isSafetyInterstitialVisible(root = document) {
+    const container = root || document;
+    const bodyText = (container.textContent || "").toLowerCase();
+    return (
+      bodyText.includes("job search safety reminder") ||
+      bodyText.includes("report suspicious jobs") ||
+      bodyText.includes("review job post")
+    );
+  }
+
+  function isPlaceholderSelectOption(option) {
+    if (!option) return true;
+    const value = (option.value || "").toString().trim().toLowerCase();
+    const text = (option.textContent || "").toString().trim().toLowerCase();
+    const joined = `${value} ${text}`;
+    return /select|choose|please|option|pick one|--/.test(joined);
+  }
+
+  function pickFirstValidSelectOption(options) {
+    const list = Array.from(options || []);
+    const valid = list.find((o) => !o.disabled && !isPlaceholderSelectOption(o));
+    return valid || list.find((o) => !o.disabled) || list[0] || null;
+  }
+
+  async function fillFormField(fieldIndex, value, fieldType, selector) {
     const modal =
       document.querySelector(".jobs-easy-apply-modal") ||
       document.querySelector("[data-test-modal]") ||
@@ -767,28 +1051,132 @@
       (window.location.href.includes("/apply/") ? document.body : null);
     if (!modal) throw new Error("Application modal not found");
 
+    const resolveFromSelector = () => {
+      if (!selector || typeof selector !== "string") return null;
+      try {
+        return modal.querySelector(selector);
+      } catch {
+        return null;
+      }
+    };
+
     if (fieldType === "select") {
+      const bySelector = resolveFromSelector();
       const selects = modal.querySelectorAll("select");
-      const sel = selects[fieldIndex];
+      const sel = bySelector || selects[fieldIndex];
       if (sel) {
-        sel.value = value;
+        const firstOption = pickFirstValidSelectOption(sel.options);
+        const selectedValue = value || firstOption?.value || "";
+        sel.value = selectedValue;
+        if (sel.value !== selectedValue && firstOption) {
+          sel.selectedIndex = Array.from(sel.options || []).indexOf(firstOption);
+        }
+        sel.dispatchEvent(new Event("input", { bubbles: true }));
         sel.dispatchEvent(new Event("change", { bubbles: true }));
+        sel.dispatchEvent(new FocusEvent("blur", { bubbles: true }));
       }
     } else if (fieldType === "radio") {
+      const bySelector = resolveFromSelector();
+      if (bySelector) {
+        dispatchNativeClick(bySelector);
+        return;
+      }
       // Use CSS.escape to prevent selector injection
       const escapedValue = CSS.escape(value);
       const radios = modal.querySelectorAll(`input[type='radio'][value='${escapedValue}']`);
       if (radios.length > 0) {
         dispatchNativeClick(radios[0]);
       }
+    } else if (fieldType === "checkbox") {
+      const bySelector = resolveFromSelector();
+      const checkboxes = modal.querySelectorAll("input[type='checkbox']");
+      const cb = bySelector || checkboxes[fieldIndex];
+      if (cb) {
+        const shouldCheck = String(value).toLowerCase() !== "false";
+        if (shouldCheck && !cb.checked) {
+          dispatchNativeClick(cb);
+        }
+      }
     } else {
       // Text input or textarea
+      const bySelector = resolveFromSelector();
       const inputs = modal.querySelectorAll("input[type='text'], input[type='number'], input[type='tel'], input[type='email'], input[type='url'], textarea");
-      const input = inputs[fieldIndex];
+      const input = bySelector || inputs[fieldIndex];
       if (input) {
         dispatchNativeInput(input, value);
       }
     }
+  }
+
+  async function autoSelectDropdowns() {
+    const modal =
+      document.querySelector(".jobs-easy-apply-modal") ||
+      document.querySelector("[data-test-modal]") ||
+      document.querySelector(".artdeco-modal") ||
+      document.querySelector("[class*='jobs-easy-apply']") ||
+      (window.location.href.includes("/apply/") ? document.body : null);
+    if (!modal) return { selectedCount: 0 };
+
+    let selectedCount = 0;
+
+    const selects = modal.querySelectorAll("select");
+    for (const sel of selects) {
+      if (sel.disabled) continue;
+      const options = Array.from(sel.options || []);
+      if (options.length === 0) continue;
+
+      const firstOption = pickFirstValidSelectOption(sel.options);
+      if (!firstOption) continue;
+
+      const current = (sel.value || "").trim();
+      const currentOption = options.find((o) => o.value === current);
+      if (current && currentOption && !isPlaceholderSelectOption(currentOption) && current !== firstOption.value) {
+        continue;
+      }
+
+      sel.value = firstOption.value;
+      if (sel.value !== firstOption.value) {
+        sel.selectedIndex = options.indexOf(firstOption);
+      }
+      sel.dispatchEvent(new Event("input", { bubbles: true }));
+      sel.dispatchEvent(new Event("change", { bubbles: true }));
+      sel.dispatchEvent(new FocusEvent("blur", { bubbles: true }));
+      selectedCount++;
+    }
+
+    const customControls = modal.querySelectorAll("[role='combobox'], button[aria-haspopup='listbox']");
+    for (const control of customControls) {
+      if (!(control instanceof HTMLElement)) continue;
+      if (control.getAttribute("aria-disabled") === "true") continue;
+      if (control.offsetParent === null) continue;
+
+      const controlText = (control.textContent || "").trim().toLowerCase();
+      if (controlText && !/select|choose|please|pick/.test(controlText)) {
+        continue;
+      }
+
+      dispatchNativeClick(control);
+      await new Promise((r) => setTimeout(r, 250));
+
+      const options = document.querySelectorAll(
+        "[role='listbox'] [role='option']:not([aria-disabled='true']), li[role='option']:not([aria-disabled='true'])"
+      );
+      let picked = false;
+      for (const opt of options) {
+        if (!(opt instanceof HTMLElement)) continue;
+        if (opt.offsetParent === null) continue;
+        dispatchNativeClick(opt);
+        selectedCount++;
+        picked = true;
+        break;
+      }
+
+      if (picked) {
+        await new Promise((r) => setTimeout(r, 250));
+      }
+    }
+
+    return { selectedCount };
   }
 
   async function clickNextOrSubmit() {
@@ -798,14 +1186,48 @@
       document.querySelector(".artdeco-modal") ||
       document.querySelector("[class*='jobs-easy-apply']") ||
       (window.location.href.includes("/apply/") ? document.body : null);
-    if (!modal) return { action: "none", error: "Modal not found" };
+    if (!modal) {
+      const continueControl = findContinueApplyingControl(document);
+      if (continueControl) {
+        const href = continueControl.tagName === "A" ? continueControl.getAttribute("href") || "" : "";
+        dispatchNativeClick(continueControl);
+        await new Promise((r) => setTimeout(r, 1300));
+        return {
+          action: "continue_applying",
+          interstitial: true,
+          href,
+          safety: isSafetyInterstitialVisible(document),
+        };
+      }
+
+      return { action: "none", error: "Modal not found" };
+    }
 
     // Look for Submit button first
     const submitBtn =
       getElementByText("button", "Submit application") ||
       modal.querySelector("[aria-label='Submit application']");
     if (submitBtn) {
+      if (submitBtn.disabled || submitBtn.getAttribute("aria-disabled") === "true") {
+        return { action: "blocked", error: "Submit button is disabled" };
+      }
       dispatchNativeClick(submitBtn);
+
+      // Monitor for validation errors after submit click (AI Fallback)
+      if (window.AIFallback && window.AIFallback.isEnabled()) {
+        window.AIFallback.monitorForValidationErrors(async (errors) => {
+          await window.AIFallback.handleValidationErrorsWithAI(errors, async () => {
+            // Retry submit after AI corrections
+            const retrySubmitBtn =
+              getElementByText("button", "Submit application") ||
+              modal.querySelector("[aria-label='Submit application']");
+            if (retrySubmitBtn && !retrySubmitBtn.disabled) {
+              dispatchNativeClick(retrySubmitBtn);
+            }
+          });
+        });
+      }
+
       await new Promise((r) => setTimeout(r, 2000));
       return { action: "submitted" };
     }
@@ -813,7 +1235,24 @@
     // Look for Review button
     const reviewBtn = getElementByText("button", "Review");
     if (reviewBtn) {
+      if (reviewBtn.disabled || reviewBtn.getAttribute("aria-disabled") === "true") {
+        return { action: "blocked", error: "Review button is disabled" };
+      }
       dispatchNativeClick(reviewBtn);
+
+      // Monitor for validation errors after review click (AI Fallback)
+      if (window.AIFallback && window.AIFallback.isEnabled()) {
+        window.AIFallback.monitorForValidationErrors(async (errors) => {
+          await window.AIFallback.handleValidationErrorsWithAI(errors, async () => {
+            // Retry review after AI corrections
+            const retryReviewBtn = getElementByText("button", "Review");
+            if (retryReviewBtn && !retryReviewBtn.disabled) {
+              dispatchNativeClick(retryReviewBtn);
+            }
+          });
+        });
+      }
+
       await new Promise((r) => setTimeout(r, 1000));
       return { action: "review" };
     }
@@ -823,9 +1262,41 @@
       getElementByText("button", "Next") ||
       modal.querySelector("[aria-label='Continue to next step']");
     if (nextBtn) {
+      if (nextBtn.disabled || nextBtn.getAttribute("aria-disabled") === "true") {
+        return { action: "blocked", error: "Next button is disabled" };
+      }
       dispatchNativeClick(nextBtn);
+
+      // Monitor for validation errors after next click (AI Fallback)
+      if (window.AIFallback && window.AIFallback.isEnabled()) {
+        window.AIFallback.monitorForValidationErrors(async (errors) => {
+          await window.AIFallback.handleValidationErrorsWithAI(errors, async () => {
+            // Retry next after AI corrections
+            const retryNextBtn =
+              getElementByText("button", "Next") ||
+              modal.querySelector("[aria-label='Continue to next step']");
+            if (retryNextBtn && !retryNextBtn.disabled) {
+              dispatchNativeClick(retryNextBtn);
+            }
+          });
+        });
+      }
+
       await new Promise((r) => setTimeout(r, 1000));
       return { action: "next" };
+    }
+
+    const continueControl = findContinueApplyingControl(modal) || findContinueApplyingControl(document);
+    if (continueControl) {
+      const href = continueControl.tagName === "A" ? continueControl.getAttribute("href") || "" : "";
+      dispatchNativeClick(continueControl);
+      await new Promise((r) => setTimeout(r, 1300));
+      return {
+        action: "continue_applying",
+        interstitial: true,
+        href,
+        safety: isSafetyInterstitialVisible(document),
+      };
     }
 
     return { action: "none", error: "No next/submit button found" };
@@ -840,7 +1311,30 @@
       (window.location.href.includes("/apply/") ? document.body : null);
     if (!modal) return { uploaded: false, error: "Modal not found" };
 
-    const fileInput = modal.querySelector("input[type='file']");
+    const fileInputs = Array.from(modal.querySelectorAll("input[type='file']"));
+    if (fileInputs.length === 0) return { uploaded: false, error: "File input not found" };
+
+    const findResumeInput = () => {
+      for (const input of fileInputs) {
+        const hint = [
+          input.id || "",
+          input.name || "",
+          input.getAttribute("aria-label") || "",
+          input.closest("label")?.textContent || "",
+          input.closest(".jobs-document-upload__upload-button")?.textContent || "",
+          input.closest(".js-jobs-document-upload__container")?.textContent || "",
+        ]
+          .join(" ")
+          .toLowerCase();
+
+        if (hint.includes("resume") || hint.includes("cv")) {
+          return input;
+        }
+      }
+      return fileInputs[0];
+    };
+
+    const fileInput = findResumeInput();
     if (!fileInput) return { uploaded: false, error: "File input not found" };
 
     // Convert base64 to File
@@ -856,10 +1350,11 @@
     const dt = new DataTransfer();
     dt.items.add(file);
     fileInput.files = dt.files;
+    fileInput.dispatchEvent(new Event("input", { bubbles: true }));
     fileInput.dispatchEvent(new Event("change", { bubbles: true }));
 
     await new Promise((r) => setTimeout(r, 2000));
-    return { uploaded: true };
+    return { uploaded: true, fileName: file.name };
   }
 
   // --- Phase 2: Post Creation Helper ---

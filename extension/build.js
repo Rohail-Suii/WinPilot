@@ -47,6 +47,12 @@ fs.copyFileSync(
   path.join(DIST, "content.js")
 );
 
+// Copy AI fallback module
+fs.copyFileSync(
+  path.join(SRC, "content", "ai-fallback.js"),
+  path.join(DIST, "ai-fallback.js")
+);
+
 // Copy popup
 fs.copyFileSync(
   path.join(SRC, "popup", "popup.html"),

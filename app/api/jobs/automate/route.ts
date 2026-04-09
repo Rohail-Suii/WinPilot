@@ -83,6 +83,35 @@ function buildLinkedInSearchURL(search: {
   return `https://www.linkedin.com/jobs/search/?${params.toString()}`;
 }
 
+function extractGeminiQuotaInfo(errorMessage: string) {
+  const text = (errorMessage || "").toString();
+  const isGemini = /gemini/i.test(text);
+  const isQuotaExceeded =
+    /\b429\b/.test(text) &&
+    (/quota exceeded|resource_exhausted|rate[-\s]?limit|exceeded your current quota/i.test(text));
+
+  if (!isGemini || !isQuotaExceeded) {
+    return null;
+  }
+
+  const retryMatch = text.match(/retryDelay\"?\s*:\s*\"?(\d+)s/i) || text.match(/retry in\s+([\d.]+)s/i);
+  const limitMatch = text.match(/quotaValue\"?\s*:\s*\"?(\d+)\"?/i) || text.match(/limit:\s*(\d+)/i);
+  const modelMatch = text.match(/\"model\"\s*:\s*\"([^\"]+)\"/i) || text.match(/model:\s*([a-zA-Z0-9._-]+)/i);
+
+  const retryAfterSeconds = retryMatch ? Math.max(1, Math.round(Number(retryMatch[1]))) : 0;
+  const dailyLimit = limitMatch ? Number(limitMatch[1]) : 0;
+  const model = modelMatch?.[1] || "gemini-2.5-flash";
+
+  return {
+    provider: "gemini",
+    model,
+    exhausted: true,
+    remaining: 0,
+    dailyLimit,
+    retryAfterSeconds,
+  };
+}
+
 export async function POST(req: Request) {
   try {
     const userId = await resolveUserId(req);
@@ -136,10 +165,15 @@ export async function POST(req: Request) {
 
     // ── Step 2: Process scraped jobs — score them, return qualifying ones
     if (step === "process-jobs") {
-      const { jobs, searchId } = body;
+      const { jobs, searchId, minMatchScore } = body;
       if (!jobs?.length || !searchId) {
         return NextResponse.json({ error: "jobs and searchId are required" }, { status: 400 });
       }
+
+      const effectiveMinMatchScore =
+        typeof minMatchScore === "number" && Number.isFinite(minMatchScore)
+          ? Math.max(0, Math.min(100, Math.round(minMatchScore)))
+          : 60;
 
       // Map extension scrape format to DiscoveredJob format
       const discoveredJobs = jobs.map((j: {
@@ -158,7 +192,12 @@ export async function POST(req: Request) {
         easyApply: j.easyApply ?? true,
       }));
 
-      const result = await processDiscoveredJobs(userId, discoveredJobs, searchId);
+      const result = await processDiscoveredJobs(
+        userId,
+        discoveredJobs,
+        searchId,
+        effectiveMinMatchScore
+      );
 
       // Fetch the qualifying applications to send back
       const applications = await JobApplication.find({
@@ -182,6 +221,56 @@ export async function POST(req: Request) {
       });
     }
 
+    // ── Step 2b: Register job without AI (used when AI mode is off)
+    if (step === "register-job") {
+      const { searchId, job } = body as {
+        searchId?: string;
+        job?: {
+          title?: string;
+          company?: string;
+          location?: string;
+          url?: string;
+          description?: string;
+        };
+      };
+
+      if (!searchId || !job?.url || !job?.title || !job?.company) {
+        return NextResponse.json({ error: "searchId and job(title/company/url) are required" }, { status: 400 });
+      }
+
+      const application = await JobApplication.findOneAndUpdate(
+        { userId, jobUrl: job.url },
+        {
+          $setOnInsert: {
+            userId,
+            jobSearchId: searchId,
+            jobTitle: job.title,
+            company: job.company,
+            location: job.location || "",
+            jobUrl: job.url,
+            jobDescription: job.description || "",
+            status: "found",
+            matchScore: 0,
+          },
+        },
+        {
+          upsert: true,
+          new: true,
+        }
+      ).lean();
+
+      return NextResponse.json({
+        success: true,
+        application: {
+          _id: application?._id?.toString(),
+          jobTitle: application?.jobTitle || job.title,
+          company: application?.company || job.company,
+          jobUrl: application?.jobUrl || job.url,
+          matchScore: application?.matchScore ?? 0,
+        },
+      });
+    }
+
     // ── Step 3: Prepare single application — tailor resume + generate PDF
     if (step === "prepare-apply") {
       const { applicationId } = body;
@@ -191,6 +280,23 @@ export async function POST(req: Request) {
 
       const prepResult = await prepareJobApplication(userId, applicationId);
       if (!prepResult.success) {
+        const quota = extractGeminiQuotaInfo(prepResult.error || "");
+        if (quota) {
+          const retryNote = quota.retryAfterSeconds > 0
+            ? `Retry in ~${quota.retryAfterSeconds}s`
+            : "Retry later";
+          const limitNote = quota.dailyLimit > 0 ? `Daily free-tier limit: ${quota.dailyLimit}` : "Daily free-tier quota reached";
+
+          return NextResponse.json(
+            {
+              error: `Gemini API quota exhausted. ${limitNote}. ${retryNote}, switch to a new Gemini API key, or disable AI tailoring for now.`,
+              code: "GEMINI_QUOTA_EXCEEDED",
+              ai: quota,
+            },
+            { status: 429 }
+          );
+        }
+
         return NextResponse.json({ error: prepResult.error }, { status: 400 });
       }
 

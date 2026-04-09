@@ -4,6 +4,7 @@ import { createContext, useContext, useState, useEffect, useCallback, type React
 
 interface DashboardStats {
   totalApplied: number;
+  totalTracked?: number;
   appliedThisWeek: number;
   successRate: number;
   postsThisWeek: number;

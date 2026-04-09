@@ -60,12 +60,27 @@ function setupEventListeners(socket: Socket) {
           break;
         case "task:start":
           store.setCurrentTask(data.label as string || "Running task...");
+          store.setLastTaskError(null);
           break;
         case "task:progress":
           if (data.message) store.setCurrentTask(data.message as string);
           break;
         case "task:complete":
+          store.setLastTaskError(null);
+          store.setAiQuotaStatus(null);
+          store.setCurrentTask(null);
+          break;
         case "task:error":
+          if (data.message) store.setLastTaskError(data.message as string);
+          if (data.aiQuota && typeof data.aiQuota === "object") {
+            store.setAiQuotaStatus(data.aiQuota as {
+              provider?: string;
+              model?: string;
+              remaining?: number;
+              dailyLimit?: number;
+              retryAfterSeconds?: number;
+            });
+          }
           store.setCurrentTask(null);
           break;
         case "limit:warning":
@@ -194,9 +209,9 @@ export function useWebSocket() {
     }
   }, []);
 
-  const startAutomation = useCallback((searchId: string) => {
+  const startAutomation = useCallback((searchId: string, options?: { useAI?: boolean }) => {
     if (sharedSocket?.connected) {
-      sharedSocket.emit("EXECUTE_ACTION", { type: "START_AUTOMATION", searchId });
+      sharedSocket.emit("EXECUTE_ACTION", { type: "START_AUTOMATION", searchId, options: options || {} });
     }
   }, []);
 

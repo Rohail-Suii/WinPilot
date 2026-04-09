@@ -17,6 +17,7 @@ const automationSettingsSchema = z.object({
     inApp: z.boolean(),
     extension: z.boolean(),
   }).optional(),
+  useAIFormFilling: z.boolean().optional(),
 });
 
 export async function GET() {
@@ -72,6 +73,9 @@ export async function PATCH(req: Request) {
     }
     if (parsed.data.notificationPrefs) {
       update["settings.notificationPrefs"] = parsed.data.notificationPrefs;
+    }
+    if (parsed.data.useAIFormFilling !== undefined) {
+      update["settings.useAIFormFilling"] = parsed.data.useAIFormFilling;
     }
 
     await User.findByIdAndUpdate(session.user.id, { $set: update });

@@ -50,14 +50,22 @@ export async function GET() {
       DailyUsage.findOne({ userId, date: today }).lean(),
     ]);
 
+    // Calculate applied this week (status = "applied")
+    const appliedThisWeekActual = await JobApplication.countDocuments({ 
+      userId, 
+      status: "applied",
+      appliedAt: { $gte: weekAgo } 
+    });
+
     const successRate = totalApplied > 0
       ? Math.round(((appliedCount + interviewCount) / totalApplied) * 100)
       : 0;
 
     return NextResponse.json({
       stats: {
-        totalApplied,
-        appliedThisWeek,
+        totalApplied: appliedCount, // Return actual applied count (status="applied"), not total records
+        totalTracked: totalApplied, // Total job records tracked (all statuses)
+        appliedThisWeek: appliedThisWeekActual, // Applied this week with status="applied"
         successRate,
         postsThisWeek,
         totalLeads,
@@ -66,7 +74,7 @@ export async function GET() {
       todayUsage: todayUsage?.actions || { applies: 0, posts: 0, scrapes: 0, profileViews: 0, messages: 0 },
     }, {
       headers: {
-        "Cache-Control": "private, max-age=30, stale-while-revalidate=60",
+        "Cache-Control": "private, max-age=10, stale-while-revalidate=30",
       },
     });
   } catch (error) {

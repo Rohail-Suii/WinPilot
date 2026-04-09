@@ -19,15 +19,35 @@ export const useSidebarStore = create<SidebarStore>((set) => ({
 interface ExtensionStore {
   isConnected: boolean;
   currentTask: string | null;
+  lastTaskError: string | null;
+  aiQuotaStatus: {
+    provider?: string;
+    model?: string;
+    remaining?: number;
+    dailyLimit?: number;
+    retryAfterSeconds?: number;
+  } | null;
   setConnected: (connected: boolean) => void;
   setCurrentTask: (task: string | null) => void;
+  setLastTaskError: (error: string | null) => void;
+  setAiQuotaStatus: (status: {
+    provider?: string;
+    model?: string;
+    remaining?: number;
+    dailyLimit?: number;
+    retryAfterSeconds?: number;
+  } | null) => void;
 }
 
 export const useExtensionStore = create<ExtensionStore>((set) => ({
   isConnected: false,
   currentTask: null,
+  lastTaskError: null,
+  aiQuotaStatus: null,
   setConnected: (connected) => set({ isConnected: connected }),
   setCurrentTask: (task) => set({ currentTask: task }),
+  setLastTaskError: (error) => set({ lastTaskError: error }),
+  setAiQuotaStatus: (status) => set({ aiQuotaStatus: status }),
 }));
 
 interface NotificationItem {
