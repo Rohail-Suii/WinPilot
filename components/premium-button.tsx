@@ -15,10 +15,10 @@ interface PremiumButtonProps {
 const baseStyles = 'inline-flex items-center justify-center font-semibold transition-all duration-300 rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2';
 
 const variants = {
-  primary: 'bg-var(--accent-cyan) text-var(--text-inverse) hover:bg-var(--accent-cyan-light) active:scale-95 focus-visible:ring-var(--accent-cyan)',
-  secondary: 'bg-var(--accent-magenta) text-var(--text-inverse) hover:bg-var(--accent-magenta-light) active:scale-95 focus-visible:ring-var(--accent-magenta)',
-  ghost: 'bg-transparent text-var(--text-primary) hover:bg-var(--bg-secondary) active:scale-95',
-  outline: 'bg-transparent border border-var(--border-color) text-var(--text-primary) hover:border-var(--accent-cyan) hover:text-var(--accent-cyan) active:scale-95',
+  primary: 'bg-[var(--accent-cyan)] text-[var(--text-inverse)] hover:bg-[var(--accent-cyan-light)] active:scale-95 focus-visible:ring-[var(--accent-cyan)]',
+  secondary: 'bg-[var(--accent-magenta)] text-[var(--text-inverse)] hover:bg-[var(--accent-magenta-light)] active:scale-95 focus-visible:ring-[var(--accent-magenta)]',
+  ghost: 'bg-transparent text-[var(--text-primary)] hover:bg-[var(--bg-secondary)] active:scale-95',
+  outline: 'bg-transparent border border-[var(--border-color)] text-[var(--text-primary)] hover:border-[var(--accent-cyan)] hover:text-[var(--accent-cyan)] active:scale-95',
 };
 
 const sizes = {

@@ -21,15 +21,15 @@ export function PremiumHeader() {
   const [isOpen, setIsOpen] = useState(false);
 
   return (
-    <header className="sticky top-0 z-50 w-full border-b border-var(--border-color) glass">
+    <header className="sticky top-0 z-50 w-full border-b border-[var(--border-color)] glass">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <div className="flex items-center justify-between h-16 md:h-20">
           {/* Logo */}
           <Link
             href="/"
-            className="flex items-center gap-2 font-bold text-xl text-var(--text-primary) hover:text-var(--accent-cyan) transition-colors"
+            className="flex items-center gap-2 font-bold text-xl text-[var(--text-primary)] hover:text-[var(--accent-cyan)] transition-colors"
           >
-            <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-var(--accent-cyan) to-var(--accent-magenta) flex items-center justify-center text-var(--text-inverse) font-bold">
+            <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-[var(--accent-cyan)] to-[var(--accent-magenta)] flex items-center justify-center text-[var(--text-inverse)] font-bold">
               LB
             </div>
             <span className="hidden sm:inline">LinkedBoost</span>
@@ -41,7 +41,7 @@ export function PremiumHeader() {
               <Link
                 key={link.href}
                 href={link.href}
-                className="text-var(--text-secondary) hover:text-var(--accent-cyan) transition-colors text-sm font-medium"
+                className="text-[var(--text-secondary)] hover:text-[var(--accent-cyan)] transition-colors text-sm font-medium"
               >
                 {link.label}
               </Link>
@@ -73,7 +73,7 @@ export function PremiumHeader() {
             {/* Mobile Menu Toggle */}
             <button
               onClick={() => setIsOpen(!isOpen)}
-              className="md:hidden p-2 text-var(--text-secondary) hover:text-var(--text-primary) transition-colors"
+              className="md:hidden p-2 text-[var(--text-secondary)] hover:text-[var(--text-primary)] transition-colors"
               aria-label="Toggle menu"
             >
               {isOpen ? <X size={24} /> : <Menu size={24} />}
@@ -83,12 +83,12 @@ export function PremiumHeader() {
 
         {/* Mobile Navigation */}
         {isOpen && (
-          <div className="md:hidden border-t border-var(--border-color) py-4 space-y-3">
+          <div className="md:hidden border-t border-[var(--border-color)] py-4 space-y-3">
             {navLinks.map((link) => (
               <Link
                 key={link.href}
                 href={link.href}
-                className="block px-4 py-2 text-var(--text-secondary) hover:text-var(--accent-cyan) transition-colors text-sm font-medium"
+                className="block px-4 py-2 text-[var(--text-secondary)] hover:text-[var(--accent-cyan)] transition-colors text-sm font-medium"
                 onClick={() => setIsOpen(false)}
               >
                 {link.label}

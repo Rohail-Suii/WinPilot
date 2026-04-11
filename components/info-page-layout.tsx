@@ -8,7 +8,7 @@ interface InfoPageLayoutProps {
 
 export function InfoPageLayout({ children }: InfoPageLayoutProps) {
   return (
-    <div className="min-h-screen bg-var(--bg-primary)">
+    <div className="min-h-screen bg-[var(--bg-primary)]">
       <PremiumHeader />
       <main className="flex-1">
         {children}

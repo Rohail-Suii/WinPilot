@@ -30,14 +30,14 @@ export function TestimonialCard({
             <Star
               key={i}
               size={16}
-              className="fill-var(--accent-amber) text-var(--accent-amber)"
+              className="fill-[var(--accent-amber)] text-[var(--accent-amber)]"
             />
           ))}
         </div>
       )}
 
       {/* Quote */}
-      <blockquote className="text-var(--text-secondary) mb-6 flex-grow text-base md:text-lg italic">
+      <blockquote className="text-[var(--text-secondary)] mb-6 flex-grow text-base md:text-lg italic">
         &ldquo;{quote}&rdquo;
       </blockquote>
 
@@ -47,14 +47,14 @@ export function TestimonialCard({
           <img
             src={image}
             alt={author}
-            className="w-10 h-10 rounded-full object-cover border border-var(--border-color)"
+            className="w-10 h-10 rounded-full object-cover border border-[var(--border-color)]"
           />
         )}
         <div>
-          <div className="font-semibold text-var(--text-primary) text-sm">
+          <div className="font-semibold text-[var(--text-primary)] text-sm">
             {author}
           </div>
-          <div className="text-xs text-var(--text-tertiary)">
+          <div className="text-xs text-[var(--text-tertiary)]">
             {title}
           </div>
         </div>

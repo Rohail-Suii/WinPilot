@@ -20,7 +20,7 @@ export function PremiumInput({
       {label && (
         <label
           htmlFor={props.id}
-          className="block text-sm font-medium text-var(--text-primary) mb-2"
+          className="block text-sm font-medium text-[var(--text-primary)] mb-2"
         >
           {label}
         </label>
@@ -29,13 +29,13 @@ export function PremiumInput({
       <div className="relative">
         <input
           {...props}
-          className={`w-full px-4 py-2.5 rounded-lg bg-var(--bg-secondary) border border-var(--border-color) text-var(--text-primary) placeholder:text-var(--text-tertiary) transition-all duration-300 focus:outline-none focus:border-var(--accent-cyan) focus:ring-1 focus:ring-var(--accent-cyan) focus:ring-opacity-30 disabled:opacity-50 disabled:cursor-not-allowed ${
+          className={`w-full px-4 py-2.5 rounded-lg bg-[var(--bg-secondary)] border border-[var(--border-color)] text-[var(--text-primary)] placeholder:text-[var(--text-tertiary)] transition-all duration-300 focus:outline-none focus:border-[var(--accent-cyan)] focus:ring-1 focus:ring-[var(--accent-cyan)] focus:ring-opacity-30 disabled:opacity-50 disabled:cursor-not-allowed ${
             icon ? 'pl-10' : ''
           } ${error ? 'border-red-500 focus:border-red-500 focus:ring-red-500' : ''} ${className}`}
         />
         
         {icon && (
-          <div className="absolute left-3 top-1/2 -translate-y-1/2 text-var(--text-tertiary)">
+          <div className="absolute left-3 top-1/2 -translate-y-1/2 text-[var(--text-tertiary)]">
             {icon}
           </div>
         )}
@@ -46,7 +46,7 @@ export function PremiumInput({
       )}
       
       {helper && !error && (
-        <p className="text-xs text-var(--text-tertiary) mt-1.5">{helper}</p>
+        <p className="text-xs text-[var(--text-tertiary)] mt-1.5">{helper}</p>
       )}
     </div>
   );

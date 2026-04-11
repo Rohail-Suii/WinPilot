@@ -21,10 +21,10 @@ export function PremiumCard({
   
   const glassStyles = glassEffect
     ? 'glass'
-    : 'bg-var(--bg-secondary) border border-var(--border-color)';
+    : 'bg-[var(--bg-secondary)] border border-[var(--border-color)]';
   
   const hoverStyles = hoverable
-    ? 'hover:shadow-lg hover:border-var(--border-light) cursor-pointer'
+    ? 'hover:shadow-lg hover:border-[var(--border-light)] cursor-pointer'
     : '';
   
   const spotlightStyles = spotlight ? 'spotlight-card' : '';
@@ -38,7 +38,7 @@ export function PremiumCard({
       className={`${baseStyles} ${glassStyles} ${hoverStyles} ${spotlightStyles} ${gradientStyles} ${className}`}
     >
       {gradient && (
-        <div className="absolute inset-0 opacity-0 group-hover:opacity-100 transition-opacity duration-300 bg-gradient-to-br from-var(--accent-cyan) to-var(--accent-magenta)" />
+        <div className="absolute inset-0 opacity-0 group-hover:opacity-100 transition-opacity duration-300 bg-gradient-to-br from-[var(--accent-cyan)] to-[var(--accent-magenta)]" />
       )}
       <div className={gradient ? 'relative z-10' : ''}>
         {children}
