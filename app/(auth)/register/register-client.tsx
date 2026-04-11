@@ -6,20 +6,12 @@ import Link from "next/link";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { toast } from "sonner";
-import { Loader2, Zap, Check, X } from "lucide-react";
+import { Loader2, Check, X, Mail, Lock, User, ArrowRight } from "lucide-react";
 
 import { registerSchema, type RegisterInput } from "@/lib/validators";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardFooter,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+import { PremiumCard } from "@/components/premium-card";
+import { PremiumButton } from "@/components/premium-button";
+import { PremiumInput } from "@/components/premium-input";
 
 function PasswordStrength({ password }: { password: string }) {
   const checks = [
@@ -36,11 +28,11 @@ function PasswordStrength({ password }: { password: string }) {
       {checks.map((check) => (
         <div key={check.label} className="flex items-center gap-2 text-xs">
           {check.met ? (
-            <Check className="h-3 w-3 text-emerald-400" />
+            <Check className="h-3 w-3 text-var(--accent-cyan)" />
           ) : (
-            <X className="h-3 w-3 text-white/30" />
+            <X className="h-3 w-3 text-var(--text-tertiary)" />
           )}
-          <span className={check.met ? "text-emerald-400" : "text-white/30"}>
+          <span className={check.met ? "text-var(--accent-cyan)" : "text-var(--text-tertiary)"}>
             {check.label}
           </span>
         </div>
@@ -90,92 +82,107 @@ export default function RegisterPage() {
   }
 
   return (
-    <Card className="relative z-10 w-full max-w-md border-white/10 bg-white/5 backdrop-blur-2xl">
-      <CardHeader className="text-center">
-        <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-xl bg-blue-600 shadow-lg shadow-blue-600/30">
-          <Zap className="h-6 w-6 text-white" />
+    <PremiumCard
+      glassEffect
+      className="w-full max-w-md p-8 space-y-6"
+    >
+      {/* Header */}
+      <div className="text-center space-y-2">
+        <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-lg bg-gradient-to-br from-var(--accent-cyan) to-var(--accent-magenta) shadow-lg shadow-var(--accent-cyan)/20">
+          <User className="h-7 w-7 text-var(--text-inverse)" />
         </div>
-        <CardTitle className="text-2xl">Create your account</CardTitle>
-        <CardDescription>
+        <h1 className="text-2xl font-bold text-var(--text-primary)">Create account</h1>
+        <p className="text-sm text-var(--text-secondary)">
           Start automating your LinkedIn presence
-        </CardDescription>
-      </CardHeader>
-      <CardContent>
-        <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
-          <div className="space-y-2">
-            <Label htmlFor="name">Name</Label>
-            <Input
-              id="name"
-              placeholder="John Doe"
-              autoComplete="name"
-              {...register("name")}
-            />
-            {errors.name && (
-              <p className="text-xs text-red-400">{errors.name.message}</p>
-            )}
-          </div>
-          <div className="space-y-2">
-            <Label htmlFor="email">Email</Label>
-            <Input
-              id="email"
-              type="email"
-              placeholder="you@example.com"
-              autoComplete="email"
-              {...register("email")}
-            />
-            {errors.email && (
-              <p className="text-xs text-red-400">{errors.email.message}</p>
-            )}
-          </div>
-          <div className="space-y-2">
-            <Label htmlFor="password">Password</Label>
-            <Input
-              id="password"
-              type="password"
-              placeholder="••••••••"
-              autoComplete="new-password"
-              {...register("password")}
-            />
-            {errors.password && (
-              <p className="text-xs text-red-400">{errors.password.message}</p>
-            )}
-            <PasswordStrength password={password} />
-          </div>
-          <div className="space-y-2">
-            <Label htmlFor="confirmPassword">Confirm Password</Label>
-            <Input
-              id="confirmPassword"
-              type="password"
-              placeholder="••••••••"
-              autoComplete="new-password"
-              {...register("confirmPassword")}
-            />
-            {errors.confirmPassword && (
-              <p className="text-xs text-red-400">
-                {errors.confirmPassword.message}
-              </p>
-            )}
-          </div>
-          <Button type="submit" className="w-full" disabled={isLoading}>
-            {isLoading ? (
+        </p>
+      </div>
+
+      {/* Form */}
+      <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
+        <PremiumInput
+          id="name"
+          label="Full Name"
+          placeholder="John Doe"
+          autoComplete="name"
+          icon={<User className="h-4 w-4" />}
+          error={errors.name?.message}
+          {...register("name")}
+        />
+
+        <PremiumInput
+          id="email"
+          type="email"
+          label="Email"
+          placeholder="you@example.com"
+          autoComplete="email"
+          icon={<Mail className="h-4 w-4" />}
+          error={errors.email?.message}
+          {...register("email")}
+        />
+
+        <div className="space-y-2">
+          <label
+            htmlFor="password"
+            className="block text-sm font-medium text-var(--text-primary)"
+          >
+            Password
+          </label>
+          <PremiumInput
+            id="password"
+            type="password"
+            placeholder="••••••••"
+            autoComplete="new-password"
+            icon={<Lock className="h-4 w-4" />}
+            error={errors.password?.message}
+            {...register("password")}
+          />
+          <PasswordStrength password={password} />
+        </div>
+
+        <PremiumInput
+          id="confirmPassword"
+          type="password"
+          label="Confirm Password"
+          placeholder="••••••••"
+          autoComplete="new-password"
+          icon={<Lock className="h-4 w-4" />}
+          error={errors.confirmPassword?.message}
+          {...register("confirmPassword")}
+        />
+
+        <PremiumButton
+          type="submit"
+          variant="primary"
+          size="lg"
+          className="w-full justify-center mt-6"
+          disabled={isLoading}
+        >
+          {isLoading ? (
+            <>
               <Loader2 className="h-4 w-4 animate-spin" />
-            ) : (
-              "Create account"
-            )}
-          </Button>
-        </form>
-      </CardContent>
-      <CardFooter className="justify-center">
-        <p className="text-sm text-white/40">
+              Creating account...
+            </>
+          ) : (
+            <>
+              Create Account
+              <ArrowRight className="h-4 w-4" />
+            </>
+          )}
+        </PremiumButton>
+      </form>
+
+      {/* Footer */}
+      <div className="text-center pt-4 border-t border-var(--border-color)">
+        <p className="text-sm text-var(--text-secondary)">
           Already have an account?{" "}
           <Link
             href="/login"
-            className="text-blue-400 hover:underline font-medium"
+            className="text-var(--accent-cyan) hover:text-var(--accent-cyan-light) font-semibold transition-colors"
           >
             Sign in
           </Link>
         </p>
-      </CardFooter>
-    </Card>
+      </div>
+    </PremiumCard>
   );
 }
