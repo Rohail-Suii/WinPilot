@@ -1,263 +1,328 @@
-import {
-  Zap,
-  Briefcase,
-  Trophy,
-  Database,
-  ArrowRight,
-  Shield,
-  Key,
-  Github,
-  Lock,
-  Sparkles,
-  Target,
-  Rocket,
-  Eye,
-  BarChart3,
-  CheckCircle2,
-} from "lucide-react";
-import { PremiumHeader } from "@/components/premium-header";
-import { PremiumFooter } from "@/components/premium-footer";
-import { PremiumButton } from "@/components/premium-button";
-import { SectionHeading } from "@/components/section-heading";
-import { FeatureCard } from "@/components/feature-card";
-import { TestimonialCard } from "@/components/testimonial-card";
-import { PricingCard } from "@/components/pricing-card";
+import { ArrowRight, Code2, Zap, Database, Calendar, Lock, BarChart3, CheckCircle2, Github, X } from "lucide-react";
 
 export default function Home() {
-  const jsonLd = {
-    "@context": "https://schema.org",
-    "@type": "SoftwareApplication",
-    name: "LinkedBoost",
-    applicationCategory: "BusinessApplication",
-    operatingSystem: "Web",
-    offers: {
-      "@type": "Offer",
-      price: "0",
-      priceCurrency: "USD",
-    },
-    description:
-      "Premium LinkedIn automation powered by AI. Auto-apply to jobs, build your personal brand, and generate qualified leads — completely free with BYOK model.",
-  };
-
   return (
-    <div className="min-h-screen bg-var(--bg-primary) overflow-hidden">
-      <script
-        type="application/ld+json"
-        dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd) }}
-      />
-
-      <PremiumHeader />
-
-      {/* ═══════════════════════════════════════════════════════════
-          HERO SECTION — Cinematic with gradient and aurora effects
-          ═══════════════════════════════════════════════════════════ */}
-      <section className="relative min-h-screen flex items-center justify-center pt-24 pb-32">
-        {/* Aurora gradient background */}
-        <div className="aurora-bg" />
-        {/* Dot grid overlay */}
-        <div className="absolute inset-0 dot-grid opacity-40" />
-
-        <div className="relative mx-auto max-w-5xl px-4 sm:px-6 text-center z-10">
-          {/* Badge */}
-          <div className="animate-fade-in-up inline-flex items-center gap-2 rounded-full border border-var(--border-color) bg-var(--glass-bg) backdrop-blur-sm px-4 py-2 text-sm mb-8">
-            <Github className="h-4 w-4 text-var(--accent-cyan)" />
-            <span className="text-var(--text-secondary)">Free & Open Source</span>
-            <span className="text-var(--text-primary) font-medium">with BYOK AI</span>
-            <ArrowRight className="h-3 w-3 text-var(--text-tertiary)" />
+    <div className="min-h-screen bg-[#0A0A0A] text-white font-sans overflow-hidden">
+      {/* Navigation */}
+      <nav className="sticky top-0 z-50 border-b border-[#222222] bg-[rgba(10,10,10,0.85)] backdrop-blur-[12px] h-14">
+        <div className="max-w-[1200px] mx-auto px-10 h-full flex items-center justify-between">
+          {/* Logo */}
+          <div className="flex items-center gap-2 font-bold text-lg">
+            <div className="w-4 h-4 bg-[#00E5FF]" style={{ clipPath: 'polygon(0 0, 100% 0, 100% 100%, 0 100%)' }} />
+            <span>InPilot</span>
           </div>
 
-          {/* Headline */}
-          <h1 className="animate-fade-in-up animation-delay-100 text-5xl sm:text-6xl lg:text-7xl xl:text-8xl font-bold text-var(--text-primary) leading-[1.05] tracking-tight max-w-4xl mx-auto text-balance">
-            LinkedIn on
-            <br />
-            <span className="gradient-text">Autopilot</span>
-          </h1>
-
-          {/* Subheading */}
-          <p className="animate-fade-in-up animation-delay-200 mt-6 text-lg sm:text-xl text-var(--text-secondary) max-w-2xl mx-auto leading-relaxed">
-            AI-powered job applications, viral content creation, and intelligent lead scraping.
-            Completely free. Bring your own API key.
-          </p>
-
-          {/* CTAs */}
-          <div className="animate-fade-in-up animation-delay-300 mt-10 flex flex-col sm:flex-row items-center justify-center gap-4">
-            <PremiumButton
-              variant="primary"
-              size="lg"
-              href="/register"
-              glowing
-              className="text-base"
-            >
-              Start Free — No Credit Card
-              <ArrowRight className="h-4 w-4" />
-            </PremiumButton>
-            <PremiumButton
-              variant="outline"
-              size="lg"
-              href="#features"
-            >
-              Explore Features
-            </PremiumButton>
+          {/* Center Links */}
+          <div className="hidden md:flex items-center gap-8">
+            {[
+              { label: 'Features', href: '#features' },
+              { label: 'Docs', href: '#docs' },
+              { label: 'Pricing', href: '#pricing' },
+              { label: 'Changelog', href: '#changelog' },
+            ].map((link) => (
+              <a
+                key={link.label}
+                href={link.href}
+                className="text-sm text-[#888888] hover:text-white transition-colors"
+              >
+                {link.label}
+              </a>
+            ))}
           </div>
 
-          {/* Social proof stats */}
-          <div className="animate-fade-in-up animation-delay-400 mt-16 flex flex-wrap items-center justify-center gap-8 sm:gap-12">
-            <div className="text-center">
-              <p className="text-2xl sm:text-3xl font-bold text-var(--accent-cyan) glow-soft">100%</p>
-              <p className="text-xs text-var(--text-tertiary) mt-1">Free Forever</p>
+          {/* Right Actions */}
+          <div className="flex items-center gap-4">
+            <a href="/login" className="text-sm text-[#888888] hover:text-white transition-colors">
+              Sign in
+            </a>
+            <button className="px-4 py-2 bg-white text-black text-sm font-semibold rounded hover:bg-[#00E5FF] transition-colors">
+              Get started free
+            </button>
+            <button className="p-2 text-[#888888] hover:text-white transition-colors">
+              ⌘
+            </button>
+          </div>
+        </div>
+      </nav>
+
+      {/* Hero Section */}
+      <section className="relative min-h-screen flex items-center bg-[#0A0A0A] overflow-hidden">
+        <div className="max-w-[1200px] mx-auto px-10 w-full grid grid-cols-2 gap-20 items-center">
+          {/* Left Column */}
+          <div className="space-y-8">
+            {/* Beta Badge */}
+            <div className="inline-flex items-center gap-2 px-3 py-2 border border-[#222222] bg-[#111111] rounded" style={{ animation: 'fadeInUp 0.6s ease-out' }}>
+              <div className="w-2 h-2 bg-[#00E5FF] rounded-full" style={{ animation: 'pulse 2s infinite' }} />
+              <span className="text-xs font-bold tracking-widest text-[#00E5FF] uppercase">Now in Beta</span>
             </div>
-            <div className="h-8 w-px bg-var(--border-color)" />
-            <div className="text-center">
-              <p className="text-2xl sm:text-3xl font-bold text-var(--accent-magenta) glow-soft">AES-256</p>
-              <p className="text-xs text-var(--text-tertiary) mt-1">Encryption</p>
+
+            {/* Headline */}
+            <div style={{ animation: 'fadeInUp 0.6s ease-out 0.1s both' }}>
+              <h1 className="text-[80px] font-black leading-[0.95] tracking-[-0.04em] text-white">
+                AUTOMATE<br />
+                <span className="text-[#00E5FF]">LINKEDIN.</span><br />
+                SHIP FASTER.
+              </h1>
             </div>
-            <div className="h-8 w-px bg-var(--border-color)" />
-            <div className="text-center">
-              <p className="text-2xl sm:text-3xl font-bold text-var(--accent-amber) glow-soft">BYOK</p>
-              <p className="text-xs text-var(--text-tertiary) mt-1">Your Keys, Your Data</p>
+
+            {/* Subheadline */}
+            <p style={{ animation: 'fadeInUp 0.6s ease-out 0.2s both' }} className="text-lg text-[#888888] max-w-[460px] leading-relaxed">
+              InPilot handles job applications, scraping, and posting — so you can focus on building, not clicking.
+            </p>
+
+            {/* CTAs */}
+            <div style={{ animation: 'fadeInUp 0.6s ease-out 0.3s both' }} className="flex gap-8 pt-4">
+              <button className="px-6 py-3 bg-[#00E5FF] text-black font-bold rounded flex items-center gap-2 hover:scale-105 transition-transform">
+                Start automating
+                <ArrowRight size={16} />
+              </button>
+              <button className="px-6 py-3 border border-[#333333] text-[#888888] rounded hover:border-white hover:text-white transition-colors">
+                View docs
+              </button>
+            </div>
+
+            {/* Social Proof */}
+            <div style={{ animation: 'fadeInUp 0.6s ease-out 0.4s both' }} className="flex items-center gap-3 pt-6">
+              <div className="flex -space-x-2">
+                {[1, 2, 3, 4, 5].map((i) => (
+                  <div key={i} className="w-8 h-8 bg-[#1A1A1A] border border-[#222222] rounded-full flex items-center justify-center text-xs font-bold text-[#888888]">
+                    {String.fromCharCode(64 + i)}
+                  </div>
+                ))}
+              </div>
+              <p className="text-sm text-[#555555]">Used by 2,400+ developers</p>
+            </div>
+          </div>
+
+          {/* Right Column - Terminal */}
+          <div style={{ animation: 'fadeInUp 0.6s ease-out 0.4s both' }}>
+            <div className="bg-[#0D0D0D] border border-[#222222] rounded-lg shadow-[0_0_60px_rgba(0,229,255,0.06)] overflow-hidden">
+              {/* Terminal Header */}
+              <div className="bg-[#1A1A1A] px-4 py-3 flex items-center gap-2 border-b border-[#222222]">
+                <div className="w-3 h-3 rounded-full bg-red-500" />
+                <div className="w-3 h-3 rounded-full bg-yellow-500" />
+                <div className="w-3 h-3 rounded-full bg-green-500" />
+                <span className="text-xs text-[#666666] ml-4 font-mono">inpilot — bash — 80×24</span>
+              </div>
+
+              {/* Terminal Body */}
+              <div className="p-6 font-mono text-sm leading-relaxed text-[#00E5FF] overflow-hidden">
+                <div style={{ animation: 'typeOut 3s steps(100, end) forwards' }}>
+                  <div>$ inpilot apply --jobs 50 --filter "remote AND senior"</div>
+                  <div className="mt-3 text-white opacity-80"></div>
+                  <div>✓ Scraping LinkedIn jobs...     <span className="text-[#555555]">[████████████] 412 found</span></div>
+                  <div>✓ Filtering by criteria...      <span className="text-[#555555]">[████████████] 50 matched</span></div>
+                  <div>✓ Generating cover letters...   <span className="text-[#555555]">[████████████] 50 done</span></div>
+                  <div>→ Submitting applications...    <span className="text-[#555555]">[████████░░░░] 38/50</span></div>
+                  <div className="mt-3 text-white">Applied to 38 jobs in 4m 12s.</div>
+                  <div className="mt-4">$ inpilot post --schedule "Mon,Wed,Fri 9am" --content ./posts/</div>
+                  <div className="mt-1 text-white">✓ Scheduled 12 posts across 3 weeks.</div>
+                  <div className="mt-4">$ <span style={{ animation: 'blink 1s infinite' }}>_</span></div>
+                </div>
+              </div>
             </div>
           </div>
         </div>
       </section>
 
-      {/* ═══════════════════════════════════════════════════════════
-          TECH STACK SECTION
-          ═══════════════════════════════════════════════════════════ */}
-      <section className="border-y border-var(--border-color) py-10 bg-var(--bg-secondary)">
-        <div className="mx-auto max-w-6xl px-4 sm:px-6">
-          <p className="text-center text-xs text-var(--text-tertiary) uppercase tracking-[0.2em] mb-6">Built with industry-leading technology</p>
-          <div className="flex flex-wrap items-center justify-center gap-8 sm:gap-14">
-            {["Next.js 16", "React 19", "MongoDB", "TypeScript", "Tailwind CSS", "Chrome Extension"].map((tech) => (
-              <span key={tech} className="text-sm font-medium text-var(--text-tertiary) hover:text-var(--accent-cyan) transition-colors">{tech}</span>
+      {/* Logos Bar */}
+      <section className="border-y border-[#1A1A1A] bg-[#111111] py-6">
+        <div className="max-w-[1200px] mx-auto px-10">
+          <p className="text-xs text-[#444444] tracking-widest uppercase mb-8">Trusted by engineers at</p>
+          <div className="flex items-center gap-12 overflow-hidden">
+            {['GitHub', 'Stripe', 'Vercel', 'Linear', 'Raycast', 'Supabase'].map((company) => (
+              <div key={company} className="text-[#333333] font-bold text-sm hover:text-[#888888] transition-colors whitespace-nowrap">
+                {company}
+              </div>
+            ))}
+            {['GitHub', 'Stripe', 'Vercel', 'Linear', 'Raycast', 'Supabase'].map((company) => (
+              <div key={`${company}-dup`} className="text-[#333333] font-bold text-sm hover:text-[#888888] transition-colors whitespace-nowrap">
+                {company}
+              </div>
             ))}
           </div>
         </div>
       </section>
 
-      {/* ═══════════════════════════════════════════════════════════
-          FEATURES SHOWCASE — Premium cards with icons
-          ═══════════════════════════════════════════════════════════ */}
-      <section id="features" className="py-20 md:py-32">
-        <div className="mx-auto max-w-6xl px-4 sm:px-6">
-          <SectionHeading
-            title="Everything you need to dominate LinkedIn"
-            subtitle="Three powerful pillars of automation, powered by your own AI keys"
-            centered
-            gradient
-            className="mb-16 md:mb-20"
-          />
+      {/* Features Section - Bento Grid */}
+      <section id="features" className="bg-[#0A0A0A] py-32 border-b border-[#1A1A1A]">
+        <div className="max-w-[1200px] mx-auto px-10">
+          <div className="text-xs text-[#00E5FF] font-bold tracking-widest uppercase mb-6">Capabilities</div>
+          <h2 className="text-5xl font-bold mb-4">Everything LinkedIn. Automated.</h2>
+          <p className="text-lg text-[#888888] mb-16 max-w-2xl">One SDK. Full control over your LinkedIn presence.</p>
 
-          {/* Feature Grid */}
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-            {/* Feature 1 */}
-            <FeatureCard
-              icon={<Briefcase className="w-6 h-6" />}
-              title="Smart Auto-Apply"
-              description="AI reads job descriptions, tailors your resume on the fly, and fills every Easy Apply form automatically."
-              badge="Most Used"
-              details={[
-                "AI Resume Tailoring",
-                "Smart Form Filling",
-                "Job Match Scoring",
-                "Application Analytics",
-              ]}
-              className="lg:col-span-1"
-            />
+          {/* Bento Grid */}
+          <div className="grid grid-cols-3 gap-6 auto-rows-[320px]">
+            {/* Card 1 - Wide */}
+            <div className="col-span-2 bg-[#111111] border border-[#1A1A1A] rounded-lg p-8 hover:border-[#333333] hover:bg-[#131313] transition-all group cursor-pointer">
+              <Zap className="w-6 h-6 text-[#00E5FF] mb-4" />
+              <div className="text-xs text-[#00E5FF] font-bold tracking-widest uppercase mb-3">Job Engine</div>
+              <h3 className="text-xl font-bold mb-4">Job Application Engine</h3>
+              <p className="text-sm text-[#666666] mb-6">Apply to 100+ jobs per day. AI-matched filters, auto-filled forms, personalized cover letters.</p>
+              <div className="text-xs font-mono text-[#00E5FF] bg-[#0D0D0D] px-3 py-2 rounded inline-block">inpilot apply --limit 100 --match-score 0.8</div>
+            </div>
 
-            {/* Feature 2 */}
-            <FeatureCard
-              icon={<Trophy className="w-6 h-6" />}
-              title="Become a Hero"
-              description="AI generates viral posts in your voice. Auto-engage with your niche. Grow your following on autopilot."
-              badge="Going Viral"
-              details={[
-                "Content generation",
-                "Group auto-posting",
-                "Engagement automation",
-              ]}
-              className="lg:col-span-1"
-            />
+            {/* Card 2 */}
+            <div className="bg-[#111111] border border-[#1A1A1A] rounded-lg p-8 hover:border-[#333333] hover:bg-[#131313] transition-all group cursor-pointer">
+              <Database className="w-6 h-6 text-[#00E5FF] mb-4" />
+              <div className="text-xs text-[#00E5FF] font-bold tracking-widest uppercase mb-3">Scraper</div>
+              <h3 className="text-xl font-bold mb-4">LinkedIn Scraper</h3>
+              <p className="text-sm text-[#666666]">Extract profiles, emails, company data. Export to JSON, CSV, or pipe directly into your workflow.</p>
+            </div>
 
-            {/* Feature 3 */}
-            <FeatureCard
-              icon={<Database className="w-6 h-6" />}
-              title="Smart Scraper"
-              description="Find people looking for your services. AI writes personalized outreach. Turn LinkedIn into your lead machine."
-              badge="Lead Gen"
-              details={[
-                "Profile & post scraping",
-                "AI personalized outreach",
-                "Lead management",
-              ]}
-              className="lg:col-span-1"
-            />
+            {/* Card 3 */}
+            <div className="bg-[#111111] border border-[#1A1A1A] rounded-lg p-8 hover:border-[#333333] hover:bg-[#131313] transition-all group cursor-pointer">
+              <Calendar className="w-6 h-6 text-[#00E5FF] mb-4" />
+              <div className="text-xs text-[#00E5FF] font-bold tracking-widest uppercase mb-3">Scheduling</div>
+              <h3 className="text-xl font-bold mb-4">Post Scheduler</h3>
+              <p className="text-sm text-[#666666]">Schedule posts with a cron-like syntax. Supports carousels, polls, and text posts.</p>
+            </div>
 
-            {/* Feature 4 - Anti-Detection (spans 2 columns on lg) */}
-            <FeatureCard
-              icon={<Shield className="w-6 h-6" />}
-              title="Human-Level Anti-Detection"
-              description="Gaussian-distributed delays, natural mouse movements, and smart session management. Your account stays safe — always."
-              badge="Enterprise Grade"
-              details={[
-                "Gaussian timing",
-                "Session limits",
-                "Daily caps",
-                "Cooldown periods",
-              ]}
-              className="lg:col-span-2"
-            />
+            {/* Card 4 - Wide */}
+            <div className="col-span-2 bg-[#111111] border border-[#1A1A1A] rounded-lg p-8 hover:border-[#333333] hover:bg-[#131313] transition-all group cursor-pointer">
+              <Code2 className="w-6 h-6 text-[#00E5FF] mb-4" />
+              <div className="text-xs text-[#00E5FF] font-bold tracking-widest uppercase mb-3">API</div>
+              <h3 className="text-xl font-bold mb-4">API & Webhooks</h3>
+              <p className="text-sm text-[#666666] mb-6">REST API + webhooks. Integrate into your stack in minutes. Full OpenAPI spec included.</p>
+              <div className="flex gap-3">
+                <span className="text-xs font-mono bg-[#0D0D0D] px-2 py-1 rounded text-[#00E5FF]">POST /v1/apply</span>
+                <span className="text-xs font-mono bg-[#0D0D0D] px-2 py-1 rounded text-[#00E5FF]">GET /v1/scrape</span>
+              </div>
+            </div>
+
+            {/* Card 5 - Full Width */}
+            <div className="col-span-3 bg-[#111111] border border-[#1A1A1A] rounded-lg p-8 hover:border-[#333333] hover:bg-[#131313] transition-all group cursor-pointer">
+              <BarChart3 className="w-6 h-6 text-[#00E5FF] mb-4" />
+              <div className="flex justify-between items-start">
+                <div>
+                  <div className="text-xs text-[#00E5FF] font-bold tracking-widest uppercase mb-3">Analytics</div>
+                  <h3 className="text-xl font-bold mb-4">Analytics Dashboard</h3>
+                  <p className="text-sm text-[#666666] mb-6 max-w-2xl">Track application success rates, profile view spikes, post engagement, and scraping quotas in real time.</p>
+                </div>
+                <div className="flex items-end gap-2 h-16">
+                  {[20, 45, 30, 60, 40, 50, 35].map((height, i) => (
+                    <div key={i} className="w-2 bg-[#00E5FF]" style={{ height: `${height}%` }} />
+                  ))}
+                </div>
+              </div>
+            </div>
           </div>
         </div>
       </section>
 
-      {/* ═══════════════════════════════════════════════════════════
-          HOW IT WORKS — Vertical timeline
-          ═══════════════════════════════════════════════════════════ */}
-      <section className="py-20 md:py-32 border-t border-var(--border-color)">
-        <div className="mx-auto max-w-4xl px-4 sm:px-6">
-          <SectionHeading
-            title="Up and running in three minutes"
-            subtitle="Simple setup, powerful results"
-            centered
-            gradient
-            className="mb-16 md:mb-20"
-          />
+      {/* How It Works */}
+      <section className="bg-[#111111] py-32 border-b border-[#1A1A1A]">
+        <div className="max-w-[1200px] mx-auto px-10">
+          <div className="text-xs text-[#00E5FF] font-bold tracking-widest uppercase mb-6">Quickstart</div>
+          <h2 className="text-5xl font-bold mb-16">Up and running in 3 minutes.</h2>
 
-          <div className="space-y-0">
+          <div className="grid grid-cols-3 gap-8 relative">
+            {/* Connector Line */}
+            <div className="absolute top-20 left-0 right-0 h-0.5 bg-[#222222]" style={{ width: 'calc(100% - 60px)', left: '30px' }} />
+
             {[
-              {
-                step: "01",
-                title: "Add Your AI Key",
-                description: "Paste your free Gemini or Groq API key. We encrypt it with AES-256-GCM — we never see it unencrypted.",
-                icon: Key,
-              },
-              {
-                step: "02",
-                title: "Upload Your Resume",
-                description: "Upload your PDF. AI parses and structures it. For each job, AI creates a perfectly tailored version.",
-                icon: Rocket,
-              },
-              {
-                step: "03",
-                title: "Install Extension & Go",
-                description: "Install the Chrome extension, set your preferences, and watch LinkedBoost work while you focus on what matters.",
-                icon: Zap,
-              },
-            ].map((item, index) => (
-              <div key={item.step} className="relative flex gap-6 md:gap-8 group pb-12 md:pb-16 last:pb-0">
-                {/* Timeline line */}
-                {index < 2 && (
-                  <div className="absolute left-6 top-16 w-px h-20 md:h-24 bg-gradient-to-b from-var(--border-color) to-transparent" />
-                )}
-                {/* Step circle */}
-                <div className="relative z-10 flex h-12 w-12 shrink-0 items-center justify-center rounded-lg bg-var(--accent-cyan) text-var(--text-inverse) font-bold transition-all group-hover:scale-110 group-hover:shadow-lg group-hover:shadow-var(--accent-cyan)/50">
-                  <item.icon className="h-5 w-5" />
+              { num: '01', title: 'Install', code: 'npm install -g inpilot' },
+              { num: '02', title: 'Authenticate', code: 'inpilot auth --token YOUR_LINKEDIN_TOKEN' },
+              { num: '03', title: 'Automate', code: 'inpilot apply --jobs 50 --auto' },
+            ].map((step, i) => (
+              <div key={i} className="relative">
+                <div className="text-[96px] font-black text-[#1A1A1A] absolute -top-12 left-0 leading-none">{step.num}</div>
+                <div className="relative z-10 pt-8">
+                  <div className="w-12 h-12 bg-[#00E5FF] rounded-lg flex items-center justify-center mb-6 text-black font-bold">
+                    {i + 1}
+                  </div>
+                  <h3 className="text-xl font-bold mb-4">{step.title}</h3>
+                  <div className="bg-[#0A0A0A] border border-[#222222] rounded px-4 py-3 font-mono text-sm text-[#00E5FF] overflow-x-auto">
+                    {step.code}
+                  </div>
                 </div>
-                {/* Content */}
-                <div className="flex-1">
-                  <span className="text-xs font-mono text-var(--text-tertiary) uppercase tracking-wider">Step {item.step}</span>
-                  <h3 className="text-xl font-bold text-var(--text-primary) mt-2 mb-2">{item.title}</h3>
-                  <p className="text-var(--text-secondary) leading-relaxed max-w-md">{item.description}</p>
+              </div>
+            ))}
+          </div>
+
+          <div className="mt-16 text-center">
+            <button className="px-6 py-3 border border-[#333333] text-[#888888] rounded hover:border-[#00E5FF] hover:text-[#00E5FF] transition-colors flex items-center gap-2 mx-auto">
+              Read the full docs
+              <ArrowRight size={16} />
+            </button>
+          </div>
+        </div>
+      </section>
+
+      {/* Pricing */}
+      <section id="pricing" className="bg-[#0A0A0A] py-32 border-b border-[#1A1A1A]">
+        <div className="max-w-[1200px] mx-auto px-10">
+          <h2 className="text-5xl font-bold mb-4">Simple, usage-based pricing.</h2>
+          <p className="text-lg text-[#888888] mb-16">Pay for what you automate. No seat fees.</p>
+
+          <div className="grid grid-cols-3 gap-8">
+            {[
+              { name: 'Hobby', price: '$0', features: ['50 job apps/mo', '500 scrapes/mo', '5 scheduled posts'], cta: 'Start free' },
+              { name: 'Pro', price: '$29', features: ['2,000 apps/mo', '50,000 scrapes', 'Unlimited posts', 'API access'], cta: 'Get Pro →', featured: true },
+              { name: 'Team', price: '$99', features: ['Unlimited everything', 'Team seats', 'Priority support', 'SLA'], cta: 'Contact us' },
+            ].map((plan, i) => (
+              <div
+                key={i}
+                className={`p-8 rounded-lg border transition-all ${
+                  plan.featured
+                    ? 'bg-[#111111] border-[#00E5FF] shadow-[0_0_40px_rgba(0,229,255,0.08)] scale-105'
+                    : 'bg-[#111111] border-[#1A1A1A] hover:border-[#333333]'
+                }`}
+              >
+                {plan.featured && (
+                  <div className="inline-block px-3 py-1 bg-[#00E5FF] text-black text-xs font-bold rounded-full mb-4">
+                    RECOMMENDED
+                  </div>
+                )}
+                <h3 className="text-2xl font-bold mb-2">{plan.name}</h3>
+                <div className="text-4xl font-bold mb-6">{plan.price}<span className="text-lg text-[#888888]">/month</span></div>
+                <ul className="space-y-3 mb-8">
+                  {plan.features.map((feature, j) => (
+                    <li key={j} className="flex items-center gap-3 text-[#888888]">
+                      <CheckCircle2 size={16} className="text-[#00E5FF] flex-shrink-0" />
+                      {feature}
+                    </li>
+                  ))}
+                </ul>
+                <button
+                  className={`w-full py-3 rounded font-semibold transition-colors ${
+                    plan.featured
+                      ? 'bg-[#00E5FF] text-black hover:bg-white'
+                      : 'border border-[#333333] text-[#888888] hover:border-[#00E5FF] hover:text-[#00E5FF]'
+                  }`}
+                >
+                  {plan.cta}
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      {/* Testimonials */}
+      <section className="bg-[#111111] py-32 border-b border-[#1A1A1A]">
+        <div className="max-w-[1200px] mx-auto px-10">
+          <h2 className="text-4xl font-bold mb-16">What developers say.</h2>
+
+          <div className="grid grid-cols-3 gap-6">
+            {[
+              { quote: "Finally stopped manually applying. InPilot handles 100 apps while I sleep.", author: "@jsdevmike", role: "Senior Eng at Stripe" },
+              { quote: "The scraper API is insane. I piped LinkedIn data straight into my CRM in an afternoon.", author: "@buildwithpriya", role: "Indie hacker" },
+              { quote: "Scheduled 3 months of LinkedIn content in one afternoon. Game changer.", author: "@aaronxyz_", role: "DevRel at Vercel" },
+              { quote: "Saved me 20 hours a week. Now I focus on actual networking instead of sending applications.", author: "@devjoshua", role: "Senior Developer" },
+              { quote: "The API documentation is so clean. Integrated it into our hiring tool in 2 hours.", author: "@alextech", role: "Founder, TechHire" },
+              { quote: "Best developer tool I've invested in. ROI is insane.", author: "@gracedev", role: "CTO at StartupX" },
+            ].map((testimonial, i) => (
+              <div key={i} className="bg-[#0A0A0A] border border-[#1A1A1A] rounded-lg p-6">
+                <div className="flex gap-1 mb-4">
+                  {[1, 2, 3, 4, 5].map((star) => (
+                    <span key={star} className="text-[#00E5FF]">★</span>
+                  ))}
+                </div>
+                <blockquote className="text-[#888888] leading-relaxed mb-4">"{testimonial.quote}"</blockquote>
+                <div>
+                  <div className="font-bold text-white">{testimonial.author}</div>
+                  <div className="text-xs text-[#555555]">{testimonial.role}</div>
                 </div>
               </div>
             ))}
@@ -265,189 +330,152 @@ export default function Home() {
         </div>
       </section>
 
-      {/* ═══════════════════════════════════════════════════════════
-          TESTIMONIALS — Social Proof
-          ═══════════════════════════════════════════════════════════ */}
-      <section className="py-20 md:py-32 border-t border-var(--border-color)">
-        <div className="mx-auto max-w-6xl px-4 sm:px-6">
-          <SectionHeading
-            title="Loved by professionals worldwide"
-            subtitle="Real results from real users"
-            centered
-            gradient={false}
-            className="mb-16 md:mb-20"
-          />
+      {/* Final CTA */}
+      <section className="bg-[#0A0A0A] py-32 border-b border-[#1A1A1A] relative overflow-hidden">
+        {/* Subtle grid background */}
+        <div
+          className="absolute inset-0 opacity-5"
+          style={{
+            backgroundImage: 'linear-gradient(rgba(255,255,255,.1) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,.1) 1px, transparent 1px)',
+            backgroundSize: '40px 40px',
+          }}
+        />
 
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-            <TestimonialCard
-              quote="LinkedBoost increased my job application success rate by 300%. The AI resume tailoring is insanely accurate."
-              author="Sarah Chen"
-              title="Product Manager at Tech Corp"
-              rating={5}
-            />
+        <div className="max-w-[1200px] mx-auto px-10 text-center relative z-10">
+          <div className="text-xs text-[#00E5FF] font-bold tracking-widest uppercase mb-6">Start today</div>
+          <h2 className="text-6xl font-black mb-6">Stop clicking. Start automating.</h2>
+          <p className="text-lg text-[#888888] mb-12">Join 2,400+ developers using InPilot to run LinkedIn on autopilot.</p>
 
-            <TestimonialCard
-              quote="I went from 5k to 50k LinkedIn followers in 3 months using the content automation. Best decision ever."
-              author="Marcus Johnson"
-              title="Freelance Consultant"
-              rating={5}
-            />
-
-            <TestimonialCard
-              quote="The lead scraping feature found me 200+ qualified prospects. Converted 15 into clients. This tool pays for itself."
-              author="Elena Rodriguez"
-              title="B2B Sales Director"
-              rating={5}
-            />
-          </div>
-        </div>
-      </section>
-
-      {/* ═══════════════════════════════════════════════════════════
-          PRICING — Clear and Simple
-          ═══════════════════════════════════════════════════════════ */}
-      <section id="pricing" className="py-20 md:py-32 border-t border-var(--border-color)">
-        <div className="mx-auto max-w-6xl px-4 sm:px-6">
-          <SectionHeading
-            title="Transparent, guilt-free pricing"
-            subtitle="One simple plan. All features included. Forever free."
-            centered
-            gradient
-            className="mb-16 md:mb-20"
-          />
-
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6 max-w-5xl mx-auto">
-            {/* Starter */}
-            <PricingCard
-              name="Personal"
-              description="Perfect for job seekers"
-              price="Free"
-              period="Forever"
-              features={[
-                "Smart Auto-Apply",
-                "Up to 15 applications/day",
-                "Resume tailoring",
-                "Basic analytics",
-                "Community support",
-              ]}
-              cta="Get Started"
-              ctaVariant="outline"
-              ctaHref="/register"
-            />
-
-            {/* Professional - Highlighted */}
-            <PricingCard
-              name="Professional"
-              description="For LinkedIn growth"
-              price="Free"
-              period="Forever"
-              features={[
-                "Everything in Personal +",
-                "Content generation",
-                "Viral post automation",
-                "Engagement automation",
-                "1000+ followers/month",
-                "Premium support",
-              ]}
-              cta="Get Started"
-              ctaVariant="primary"
-              ctaHref="/register"
-              highlighted
-              badge="Most Popular"
-            />
-
-            {/* Enterprise */}
-            <PricingCard
-              name="Enterprise"
-              description="For sales & recruitment"
-              price="Free"
-              period="Forever"
-              features={[
-                "Everything in Professional +",
-                "Smart Scraper",
-                "Lead generation",
-                "Personalized outreach",
-                "Lead management",
-                "Dedicated support",
-              ]}
-              cta="Get Started"
-              ctaVariant="outline"
-              ctaHref="/register"
-            />
+          <div className="flex gap-6 justify-center mb-8">
+            <button className="px-8 py-4 bg-[#00E5FF] text-black font-bold rounded flex items-center gap-2 hover:scale-105 transition-transform">
+              Get started free
+              <ArrowRight size={18} />
+            </button>
+            <button className="px-8 py-4 border border-[#333333] text-[#888888] rounded hover:border-[#00E5FF] hover:text-[#00E5FF] transition-colors">
+              Talk to a founder
+            </button>
           </div>
 
-          <p className="text-center text-var(--text-tertiary) text-sm mt-12">
-            All plans are completely free. No credit card required. No feature gates. No catch.
-          </p>
+          <p className="text-sm text-[#444444]">No credit card required · Cancel anytime · Open API</p>
         </div>
       </section>
 
-      {/* ═══════════════════════════════════════════════════════════
-          SECURITY & TRUST
-          ═══════════════════════════════════════════════════════════ */}
-      <section className="py-20 md:py-32 border-t border-var(--border-color) bg-var(--bg-secondary)">
-        <div className="mx-auto max-w-6xl px-4 sm:px-6">
-          <SectionHeading
-            title="Your data stays yours"
-            subtitle="Enterprise-grade security, transparent operations"
-            centered
-            gradient={false}
-            className="mb-16 md:mb-20"
-          />
+      {/* Footer */}
+      <footer className="bg-[#0A0A0A] border-t border-[#1A1A1A] py-16">
+        <div className="max-w-[1200px] mx-auto px-10">
+          <div className="grid grid-cols-4 gap-12 mb-12">
+            {/* Col 1 */}
+            <div>
+              <div className="flex items-center gap-2 font-bold text-lg mb-4">
+                <div className="w-4 h-4 bg-[#00E5FF]" style={{ clipPath: 'polygon(0 0, 100% 0, 100% 100%, 0 100%)' }} />
+                <span>InPilot</span>
+              </div>
+              <p className="text-sm text-[#444444] mb-4">LinkedIn, automated.</p>
+              <div className="flex gap-4">
+                <a href="#" className="text-[#444444] hover:text-[#888888] transition-colors">
+                  <Github size={18} />
+                </a>
+                <a href="#" className="text-[#444444] hover:text-[#888888] transition-colors">
+                  <X size={18} />
+                </a>
+              </div>
+            </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-            <FeatureCard
-              icon={<Lock className="w-6 h-6" />}
-              title="AES-256-GCM Encryption"
-              description="API keys encrypted at rest with authenticated encryption. Salt + IV + auth tag — military-grade security."
-              details={["End-to-end encrypted", "At-rest encryption", "Industry standard"]}
-            />
+            {/* Col 2 */}
+            <div>
+              <h4 className="font-bold text-white mb-4 text-sm uppercase tracking-widest">Product</h4>
+              <ul className="space-y-2 text-sm">
+                {['Features', 'Pricing', 'Changelog', 'Roadmap'].map((item) => (
+                  <li key={item}>
+                    <a href="#" className="text-[#444444] hover:text-[#888888] transition-colors">
+                      {item}
+                    </a>
+                  </li>
+                ))}
+              </ul>
+            </div>
 
-            <FeatureCard
-              icon={<Key className="w-6 h-6" />}
-              title="BYOK — Bring Your Own Keys"
-              description="We never see your unencrypted keys. They're decrypted in-memory only during AI calls, then immediately discarded."
-              details={["Your API keys", "Your control", "Zero visibility"]}
-            />
+            {/* Col 3 */}
+            <div>
+              <h4 className="font-bold text-white mb-4 text-sm uppercase tracking-widest">Developers</h4>
+              <ul className="space-y-2 text-sm">
+                {['Docs', 'API Reference', 'SDKs', 'Status'].map((item) => (
+                  <li key={item}>
+                    <a href="#" className="text-[#444444] hover:text-[#888888] transition-colors">
+                      {item}
+                    </a>
+                  </li>
+                ))}
+              </ul>
+            </div>
 
-            <FeatureCard
-              icon={<Eye className="w-6 h-6" />}
-              title="Zero Tracking"
-              description="No analytics trackers. No data selling. No premium upsells. Your automation data belongs to you."
-              details={["No trackers", "No data sales", "Open source"]}
-            />
+            {/* Col 4 */}
+            <div>
+              <h4 className="font-bold text-white mb-4 text-sm uppercase tracking-widest">Company</h4>
+              <ul className="space-y-2 text-sm">
+                {['About', 'Blog', 'Careers', 'Privacy'].map((item) => (
+                  <li key={item}>
+                    <a href="#" className="text-[#444444] hover:text-[#888888] transition-colors">
+                      {item}
+                    </a>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          </div>
+
+          {/* Bottom bar */}
+          <div className="border-t border-[#1A1A1A] pt-12 flex justify-between text-sm text-[#444444]">
+            <p>© 2025 InPilot. Built for developers, by developers.</p>
+            <div className="flex gap-6">
+              <a href="#" className="hover:text-[#888888] transition-colors">Terms</a>
+              <a href="#" className="hover:text-[#888888] transition-colors">Privacy</a>
+              <a href="#" className="hover:text-[#888888] transition-colors">Status</a>
+            </div>
           </div>
         </div>
-      </section>
+      </footer>
 
-      {/* ═══════════════════════════════════════════════════════════
-          FINAL CTA
-          ═══════════════════════════════════════════════════════════ */}
-      <section className="relative py-20 md:py-32 border-t border-var(--border-color)">
-        <div className="aurora-bg" />
-        <div className="relative mx-auto max-w-3xl px-4 sm:px-6 text-center z-10">
-          <h2 className="text-4xl sm:text-5xl lg:text-6xl font-bold text-var(--text-primary) tracking-tight mb-6 text-balance">
-            Ready to automate
-            <br />
-            <span className="gradient-text">your LinkedIn?</span>
-          </h2>
-          <p className="text-lg text-var(--text-secondary) max-w-xl mx-auto leading-relaxed mb-10">
-            Join thousands of professionals using LinkedBoost to transform their LinkedIn presence. Free forever.
-          </p>
-          <PremiumButton
-            variant="primary"
-            size="lg"
-            href="/register"
-            glowing
-            className="text-base"
-          >
-            Get Started Free
-            <ArrowRight className="h-4 w-4" />
-          </PremiumButton>
-        </div>
-      </section>
+      {/* Animations */}
+      <style>{`
+        @keyframes fadeInUp {
+          from {
+            opacity: 0;
+            transform: translateY(20px);
+          }
+          to {
+            opacity: 1;
+            transform: translateY(0);
+          }
+        }
 
-      <PremiumFooter />
+        @keyframes typeOut {
+          from {
+            width: 0;
+          }
+          to {
+            width: 100%;
+          }
+        }
+
+        @keyframes blink {
+          0%, 50% {
+            opacity: 1;
+          }
+          51%, 100% {
+            opacity: 0;
+          }
+        }
+
+        @keyframes pulse {
+          0%, 100% {
+            opacity: 1;
+          }
+          50% {
+            opacity: 0.5;
+          }
+        }
+      `}</style>
     </div>
   );
 }

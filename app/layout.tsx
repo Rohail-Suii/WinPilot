@@ -14,32 +14,33 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  metadataBase: new URL(process.env.NEXTAUTH_URL || "https://linkedboost.app"),
+  metadataBase: new URL(process.env.NEXTAUTH_URL || "https://inpilot.dev"),
   title: {
-    default: "LinkedBoost — LinkedIn Automation That Goes Viral",
-    template: "%s — LinkedBoost",
+    default: "InPilot — LinkedIn Automation for Developers",
+    template: "%s — InPilot",
   },
   description:
-    "The best free LinkedIn automation tool. Auto-apply to jobs, build your personal brand, and scrape leads — all with your own AI keys.",
+    "Automate your LinkedIn presence. Job applications, profile scraping, and post scheduling for developers and founders who hate clicking.",
   keywords: [
     "LinkedIn automation",
-    "job application bot",
-    "LinkedIn Easy Apply",
-    "personal branding",
+    "job application automation",
+    "LinkedIn API",
+    "developer tools",
     "LinkedIn scraper",
+    "post scheduler",
   ],
   openGraph: {
-    title: "LinkedBoost — LinkedIn Automation That Goes Viral",
+    title: "InPilot — LinkedIn Automation for Developers",
     description:
-      "Auto-apply to jobs, build your personal brand, and scrape leads on LinkedIn — completely free with BYOK AI.",
+      "Automate job applications, scraping, and posting on LinkedIn. One SDK. Full control.",
     type: "website",
     locale: "en_US",
   },
   twitter: {
     card: "summary_large_image",
-    title: "LinkedBoost — LinkedIn Automation That Goes Viral",
+    title: "InPilot — LinkedIn Automation for Developers",
     description:
-      "Auto-apply to jobs, build your personal brand, and scrape leads on LinkedIn — completely free.",
+      "Stop clicking. Start automating. LinkedIn, on your terms.",
   },
   robots: {
     index: true,

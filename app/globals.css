@@ -1,75 +1,39 @@
 @import "tailwindcss";
 
 /* ═══════════════════════════════════════════════════════════
-   PREMIUM DUAL THEME SYSTEM - LIGHT & DARK
+   INPILOT COLOR SYSTEM - DARK DEVELOPER THEME
    ═══════════════════════════════════════════════════════════ */
 
-/* DARK THEME (Default) */
 :root {
-  /* Background & Surface */
-  --bg-primary: #0A0E27;
-  --bg-secondary: #1A1F3A;
-  --bg-tertiary: #252C47;
+  /* Background & Surface - InPilot Dark Theme */
+  --bg-primary: #0A0A0A;
+  --bg-secondary: #111111;
+  --bg-tertiary: #1A1A1A;
   
-  /* Accent Colors - Modern Bold */
-  --accent-cyan: #00D9FF;
-  --accent-cyan-light: #00F5FF;
-  --accent-magenta: #FF006E;
-  --accent-magenta-light: #FF3399;
-  --accent-amber: #FFB500;
-  --accent-amber-light: #FFD700;
+  /* Accent Colors */
+  --accent-cyan: #00E5FF;
+  --accent-cyan-dim: #00E5FF18;
   
   /* Text Colors */
   --text-primary: #FFFFFF;
-  --text-secondary: #B0B8D4;
-  --text-tertiary: #8890A8;
-  --text-inverse: #0A0E27;
+  --text-secondary: #888888;
+  --text-tertiary: #444444;
   
   /* UI Elements */
-  --border-color: #2A325A;
-  --border-light: rgba(255, 255, 255, 0.05);
-  --glass-bg: rgba(26, 31, 58, 0.4);
-  --glass-border: rgba(255, 255, 255, 0.08);
+  --border-color: #222222;
+  --border-bright: #333333;
   
-  /* Legacy support */
-  --background: #0A0E27;
-  --foreground: #F8FAFC;
-  --primary: #00D9FF;
-  --primary-hover: #00F5FF;
+  /* Legacy support for components */
+  --background: #0A0A0A;
+  --foreground: #FFFFFF;
+  --primary: #00E5FF;
+  --primary-hover: #00E5FF;
   --card: rgba(255, 255, 255, 0.05);
-  --card-border: rgba(255, 255, 255, 0.1);
-  --muted: rgba(255, 255, 255, 0.5);
+  --card-border: #222222;
+  --muted: #888888;
   --sidebar-width: 280px;
   --sidebar-collapsed-width: 72px;
-  --topbar-height: 64px;
-}
-
-/* LIGHT THEME */
-html.light {
-  /* Background & Surface */
-  --bg-primary: #FFFFFF;
-  --bg-secondary: #F8FAFC;
-  --bg-tertiary: #EFF2F8;
-  
-  /* Accent Colors - Modern Bold */
-  --accent-cyan: #0066CC;
-  --accent-cyan-light: #0099FF;
-  --accent-magenta: #D60066;
-  --accent-magenta-light: #E63384;
-  --accent-amber: #FF9900;
-  --accent-amber-light: #FFAA00;
-  
-  /* Text Colors */
-  --text-primary: #0F1419;
-  --text-secondary: #5A6B7D;
-  --text-tertiary: #8B95A8;
-  --text-inverse: #FFFFFF;
-  
-  /* UI Elements */
-  --border-color: #D5DCE8;
-  --border-light: rgba(15, 20, 25, 0.05);
-  --glass-bg: rgba(255, 255, 255, 0.6);
-  --glass-border: rgba(15, 20, 25, 0.08);
+  --topbar-height: 56px;
 }
 
 @theme inline {
