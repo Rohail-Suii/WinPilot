@@ -157,3 +157,22 @@ body {
   outline-offset: 2px;
 }
 
+/* Bento grid — responsive layout */
+.bento-grid {
+  grid-template-areas:
+    "a"
+    "b"
+    "c"
+    "d"
+    "e";
+}
+
+@media (min-width: 768px) {
+  .bento-grid {
+    grid-template-areas:
+      "a a b"
+      "c d d"
+      "e e e";
+  }
+}
+

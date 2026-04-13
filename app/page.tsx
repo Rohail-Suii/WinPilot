@@ -405,7 +405,7 @@ function TerminalBlock() {
         <span className="w-3 h-3 rounded-full bg-[#FFBD2E]" />
         <span className="w-3 h-3 rounded-full bg-[#28C840]" />
         <span className="ml-4 text-xs text-[#555] font-mono">
-          inpilot &mdash; bash &mdash; 80&times;24
+          inpilot {"\u2014"} bash {"\u2014"} 80{"\u00D7"}24
         </span>
       </div>
 
@@ -514,7 +514,7 @@ function HeroSection() {
           <p
             className="text-[#888] text-lg leading-relaxed max-w-[460px] mb-8 animate-fade-in-up animation-delay-400"
           >
-            InPilot handles job applications, scraping, and posting &mdash; so
+            InPilot handles job applications, scraping, and posting {"\u2014"} so
             you can focus on building, not clicking.
           </p>
 
@@ -771,15 +771,7 @@ function FeaturesSection() {
 
         {/* Bento grid */}
         <div
-          className="grid gap-4"
-          style={{
-            gridTemplateColumns: "repeat(3, 1fr)",
-            gridTemplateAreas: `
-              "a a b"
-              "c d d"
-              "e e e"
-            `,
-          }}
+          className="bento-grid grid gap-4 grid-cols-1 md:grid-cols-3"
         >
           {CARDS.map((card, i) => (
             <BentoCard key={card.gridArea} card={card} delay={i * 80} />
