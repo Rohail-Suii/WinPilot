@@ -1,465 +1,905 @@
+"use client";
+
 import Link from "next/link";
-import {
-  Zap,
-  Briefcase,
-  Trophy,
-  Database,
-  ArrowRight,
-  Shield,
-  Key,
-  Github,
-  Lock,
-  Sparkles,
-  Target,
-  Rocket,
-  ChevronRight,
-  CheckCircle2,
-  Eye,
-  MessageSquare,
-  BarChart3,
-  Globe,
-} from "lucide-react";
-import { Button } from "@/components/ui/button";
+import { useRouter } from "next/navigation";
+import { useEffect, useMemo, useRef, useState } from "react";
+import styles from "./page.module.css";
+
+type IconProps = {
+  className?: string;
+};
+
+type Capability = {
+  label: string;
+  title: string;
+  body: string;
+  icon: (props: IconProps) => React.JSX.Element;
+  snippet?: string;
+  chips?: string[];
+  wide?: boolean;
+  full?: boolean;
+  chart?: boolean;
+};
+
+const NAV_LINKS = [
+  { label: "Features", href: "#capabilities" },
+  { label: "Docs", href: "#quickstart" },
+  { label: "Pricing", href: "#pricing" },
+  { label: "Changelog", href: "#footer" },
+];
+
+const TRUSTED_COMPANIES = ["GitHub", "Stripe", "Vercel", "Linear", "Raycast", "Supabase"];
+
+const CAPABILITIES: Capability[] = [
+  {
+    label: "AUTOMATION",
+    title: "Job Application Engine",
+    body: "Apply to 100+ jobs per day. AI-matched filters, auto-filled forms, personalized cover letters.",
+    icon: CursorIcon,
+    snippet: "inpilot apply --limit 100 --match-score 0.8",
+    wide: true,
+  },
+  {
+    label: "SCRAPING",
+    title: "LinkedIn Scraper",
+    body: "Extract profiles, emails, company data. Export to JSON, CSV, or pipe directly into your workflow.",
+    icon: SearchIcon,
+  },
+  {
+    label: "CONTENT",
+    title: "Post Scheduler",
+    body: "Schedule posts with a cron-like syntax. Supports carousels, polls, and text posts.",
+    icon: CalendarIcon,
+  },
+  {
+    label: "INTEGRATION",
+    title: "API & Webhooks",
+    body: "REST API + webhooks. Integrate into your stack in minutes. Full OpenAPI spec included.",
+    icon: PlugIcon,
+    chips: ["POST /v1/apply", "GET /v1/scrape"],
+    wide: true,
+  },
+  {
+    label: "INSIGHTS",
+    title: "Analytics Dashboard",
+    body: "Track application success rates, profile view spikes, post engagement, and scraping quotas in real time.",
+    icon: ChartIcon,
+    full: true,
+    chart: true,
+  },
+];
+
+const QUICKSTART_STEPS = [
+  {
+    number: "01",
+    title: "Install",
+    body: "Install the CLI globally and get immediate access to automation commands.",
+    command: "npm install -g inpilot",
+    icon: InstallIcon,
+  },
+  {
+    number: "02",
+    title: "Authenticate",
+    body: "Connect your account once and keep automation secured behind your token.",
+    command: "inpilot auth --token YOUR_LINKEDIN_TOKEN",
+    icon: AuthIcon,
+  },
+  {
+    number: "03",
+    title: "Automate",
+    body: "Launch automated applications and let InPilot execute the repetitive workflow.",
+    command: "inpilot apply --jobs 50 --auto",
+    icon: BoltIcon,
+  },
+];
+
+const PRICING_PLANS = [
+  {
+    name: "Hobby",
+    price: "$0",
+    cadence: "/ month",
+    features: ["50 job apps/mo", "500 scrapes/mo", "5 scheduled posts"],
+    cta: "Start free",
+    highlighted: false,
+  },
+  {
+    name: "Pro",
+    price: "$29",
+    cadence: "/ month",
+    features: ["2,000 apps/mo", "50,000 scrapes", "Unlimited posts", "API access"],
+    cta: "Get Pro →",
+    highlighted: true,
+  },
+  {
+    name: "Team",
+    price: "$99",
+    cadence: "/ month",
+    features: ["Unlimited everything", "Team seats", "Priority support", "SLA"],
+    cta: "Contact us",
+    highlighted: false,
+  },
+];
+
+const TESTIMONIALS = [
+  {
+    quote: "Finally stopped manually applying. InPilot handles 100 apps while I sleep.",
+    author: "@jsdevmike",
+    role: "Senior Eng at Stripe",
+    initials: "JM",
+  },
+  {
+    quote: "The scraper API is insane. I piped LinkedIn data straight into my CRM in an afternoon.",
+    author: "@buildwithpriya",
+    role: "Indie hacker",
+    initials: "BP",
+  },
+  {
+    quote: "Scheduled 3 months of LinkedIn content in one afternoon. Game changer.",
+    author: "@aaronxyz_",
+    role: "DevRel at Vercel",
+    initials: "AX",
+  },
+  {
+    quote: "Our growth team replaced manual prospecting with scheduled scrapes and webhooks in two days.",
+    author: "@nadiadev",
+    role: "Growth Engineer",
+    initials: "ND",
+  },
+  {
+    quote: "I plugged InPilot into my internal tooling and now LinkedIn outreach is just another cron job.",
+    author: "@opswithleo",
+    role: "Platform Engineer",
+    initials: "OL",
+  },
+  {
+    quote: "The command-first workflow feels built for devs. No dashboard maze, just automation that works.",
+    author: "@samcodesfast",
+    role: "Technical Founder",
+    initials: "SC",
+  },
+];
+
+const FOOTER_COLUMNS = [
+  {
+    title: "Product",
+    links: ["Features", "Pricing", "Changelog", "Roadmap"],
+  },
+  {
+    title: "Developers",
+    links: ["Docs", "API Reference", "SDKs", "Status"],
+  },
+  {
+    title: "Company",
+    links: ["About", "Blog", "Careers", "Privacy"],
+  },
+];
+
+const PALETTE_COMMANDS = [
+  { label: "Jump to Features", hint: "#capabilities", href: "#capabilities" },
+  { label: "Open Quickstart", hint: "#quickstart", href: "#quickstart" },
+  { label: "View Pricing", hint: "#pricing", href: "#pricing" },
+  { label: "Start Free", hint: "/register", href: "/register" },
+];
+
+const AVATARS = ["RK", "AL", "SM", "TP", "DN"];
+
+const CHART_BARS = [48, 72, 58, 84, 66, 92, 74];
+
+function renderBar(filledBlocks: number): string {
+  const boundedBlocks = Math.max(0, Math.min(12, filledBlocks));
+  return `${"█".repeat(boundedBlocks)}${"░".repeat(12 - boundedBlocks)}`;
+}
+
+function buildTerminalText(progress: number[]): string {
+  return `$ inpilot apply --jobs 50 --filter "remote AND senior"
+
+✓ Scraping LinkedIn jobs...     [${renderBar(progress[0])}] 412 found
+✓ Filtering by criteria...      [${renderBar(progress[1])}] 50 matched
+✓ Generating cover letters...   [${renderBar(progress[2])}] 50 done
+→ Submitting applications...    [${renderBar(progress[3])}] 38/50
+
+Applied to 38 jobs in 4m 12s.
+
+$ inpilot post --schedule "Mon,Wed,Fri 9am" --content ./posts/
+✓ Scheduled 12 posts across 3 weeks.
+
+$ `;
+}
 
 export default function Home() {
-  const jsonLd = {
-    "@context": "https://schema.org",
-    "@type": "SoftwareApplication",
-    name: "LinkedBoost",
-    applicationCategory: "BusinessApplication",
-    operatingSystem: "Web",
-    offers: {
-      "@type": "Offer",
-      price: "0",
-      priceCurrency: "USD",
-    },
-    description:
-      "The best free LinkedIn automation tool. Auto-apply to jobs, build your personal brand, and scrape leads — all with your own AI keys.",
+  const router = useRouter();
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  const [navHidden, setNavHidden] = useState(false);
+  const [typedLength, setTypedLength] = useState(0);
+  const [typingDone, setTypingDone] = useState(false);
+  const [progressBars, setProgressBars] = useState<number[]>([0, 0, 0, 0]);
+  const [visibleCards, setVisibleCards] = useState<Record<number, boolean>>({});
+
+  const cardRefs = useRef<(HTMLDivElement | null)[]>([]);
+  const previousScrollY = useRef(0);
+
+  const initialTerminalText = useMemo(() => buildTerminalText([0, 0, 0, 0]), []);
+
+  useEffect(() => {
+    const onScroll = () => {
+      const currentScrollY = window.scrollY;
+
+      if (currentScrollY > previousScrollY.current + 10 && currentScrollY > 90) {
+        setNavHidden(true);
+      } else if (currentScrollY < previousScrollY.current - 10) {
+        setNavHidden(false);
+      }
+
+      previousScrollY.current = currentScrollY;
+    };
+
+    window.addEventListener("scroll", onScroll, { passive: true });
+    return () => window.removeEventListener("scroll", onScroll);
+  }, []);
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      const isCommandPaletteShortcut = (event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k";
+
+      if (isCommandPaletteShortcut) {
+        event.preventDefault();
+        setPaletteOpen((current) => !current);
+      }
+
+      if (event.key === "Escape") {
+        setMobileMenuOpen(false);
+        setPaletteOpen(false);
+      }
+    };
+
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
+
+  useEffect(() => {
+    const terminal = buildTerminalText([0, 0, 0, 0]);
+    const typingInterval = window.setInterval(() => {
+      setTypedLength((currentLength) => {
+        const nextLength = Math.min(currentLength + 1, terminal.length);
+
+        if (nextLength >= terminal.length) {
+          window.clearInterval(typingInterval);
+          setTypingDone(true);
+        }
+
+        return nextLength;
+      });
+    }, 12);
+
+    return () => window.clearInterval(typingInterval);
+  }, []);
+
+  useEffect(() => {
+    if (!typingDone) {
+      return;
+    }
+
+    const targetBars = [12, 12, 12, 8];
+    const duration = 1500;
+    let animationFrameId = 0;
+    const start = performance.now();
+
+    const animateBars = (currentTime: number) => {
+      const progress = Math.min(1, (currentTime - start) / duration);
+      const nextBars = targetBars.map((target) => Math.round(target * progress));
+      setProgressBars(nextBars);
+
+      if (progress < 1) {
+        animationFrameId = window.requestAnimationFrame(animateBars);
+      }
+    };
+
+    animationFrameId = window.requestAnimationFrame(animateBars);
+    return () => window.cancelAnimationFrame(animationFrameId);
+  }, [typingDone]);
+
+  useEffect(() => {
+    const timeoutIds: number[] = [];
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        entries.forEach((entry) => {
+          if (!entry.isIntersecting) {
+            return;
+          }
+
+          const target = entry.target as HTMLDivElement;
+          const cardIndex = Number(target.dataset.cardIndex ?? "0");
+          const timeoutId = window.setTimeout(() => {
+            setVisibleCards((current) => ({ ...current, [cardIndex]: true }));
+          }, cardIndex * 80);
+
+          timeoutIds.push(timeoutId);
+          observer.unobserve(target);
+        });
+      },
+      { threshold: 0.25 },
+    );
+
+    cardRefs.current.forEach((card) => {
+      if (card) {
+        observer.observe(card);
+      }
+    });
+
+    return () => {
+      observer.disconnect();
+      timeoutIds.forEach((timeoutId) => window.clearTimeout(timeoutId));
+    };
+  }, []);
+
+  useEffect(() => {
+    if (mobileMenuOpen || paletteOpen) {
+      document.body.style.overflow = "hidden";
+      return;
+    }
+
+    document.body.style.overflow = "";
+  }, [mobileMenuOpen, paletteOpen]);
+
+  const typedText = typingDone ? buildTerminalText(progressBars) : initialTerminalText.slice(0, typedLength);
+
+  const handleCommandClick = (href: string) => {
+    setPaletteOpen(false);
+    setMobileMenuOpen(false);
+
+    if (href.startsWith("#")) {
+      const section = document.querySelector(href);
+      if (section) {
+        section.scrollIntoView({ behavior: "smooth", block: "start" });
+      }
+      return;
+    }
+
+    router.push(href);
   };
 
   return (
-    <div className="min-h-screen bg-[#0A0F1C] overflow-hidden">
-      <script
-        type="application/ld+json"
-        dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd) }}
-      />
+    <div className={styles.page}>
+      <nav className={`${styles.navbar} ${navHidden ? styles.navbarHidden : ""}`}>
+        <div className={styles.container}>
+          <div className={styles.navInner}>
+            <Link href="/" className={styles.logo}>
+              <span className={styles.logoSquare} aria-hidden="true">
+                ■
+              </span>
+              <span className={styles.logoWordmark}>InPilot</span>
+            </Link>
 
-      {/* ══════════════════════════════════════════════
-          FLOATING NAV — Glassmorphism sticky
-       ══════════════════════════════════════════════ */}
-      <nav className="fixed top-0 left-0 right-0 z-50">
-        <div className="mx-auto max-w-6xl px-6 pt-4">
-          <div className="flex items-center justify-between rounded-2xl border border-white/10 bg-[#0A0F1C]/80 backdrop-blur-2xl px-6 py-3">
-            <div className="flex items-center gap-3">
-              <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-blue-600 shadow-lg shadow-blue-600/25">
-                <Zap className="h-5 w-5 text-white" />
-              </div>
-              <span className="text-lg font-bold text-white tracking-tight">LinkedBoost</span>
+            <div className={styles.navLinks}>
+              {NAV_LINKS.map((link) => (
+                <a key={link.label} href={link.href} className={styles.navLink}>
+                  {link.label}
+                </a>
+              ))}
             </div>
-            <div className="hidden md:flex items-center gap-8">
-              <a href="#features" className="text-sm text-white/50 hover:text-white transition-colors">Features</a>
-              <a href="#how-it-works" className="text-sm text-white/50 hover:text-white transition-colors">How it works</a>
-              <a href="#security" className="text-sm text-white/50 hover:text-white transition-colors">Security</a>
-            </div>
-            <div className="flex items-center gap-3">
-              <Link href="/login">
-                <Button variant="ghost" size="sm" className="text-white/70 hover:text-white">Sign in</Button>
+
+            <div className={styles.navActions}>
+              <Link href="/login" className={styles.signInLink}>
+                Sign in
               </Link>
-              <Link href="/register">
-                <Button size="sm" className="bg-white text-[#0A0F1C] hover:bg-white/90 font-semibold shadow-lg shadow-white/10">
-                  Get Started
-                  <ArrowRight className="h-3.5 w-3.5" />
-                </Button>
+              <Link href="/register" className={styles.navPrimaryCta}>
+                Get started free
               </Link>
+              <button
+                type="button"
+                className={styles.commandButton}
+                aria-label="Open command palette"
+                onClick={() => setPaletteOpen(true)}
+              >
+                ⌘
+              </button>
+              <button
+                type="button"
+                className={styles.mobileMenuButton}
+                onClick={() => setMobileMenuOpen(true)}
+                aria-label="Open menu"
+              >
+                ☰
+              </button>
             </div>
           </div>
         </div>
       </nav>
 
-      {/* ══════════════════════════════════════════════
-          HERO — Cinematic with aurora gradient
-       ══════════════════════════════════════════════ */}
-      <section className="relative min-h-screen flex items-center justify-center pt-24 pb-32">
-        {/* Aurora gradient background */}
-        <div className="aurora-bg" />
-        {/* Dot grid overlay */}
-        <div className="absolute inset-0 dot-grid" />
-
-        <div className="relative mx-auto max-w-5xl px-6 text-center">
-          {/* Badge */}
-          <div className="animate-fade-in-up inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/5 backdrop-blur-sm px-4 py-2 text-sm mb-8">
-            <Github className="h-4 w-4 text-white/70" />
-            <span className="text-white/60">Powered by</span>
-            <span className="text-white font-medium">GitHub Student Developer Pack</span>
-            <ChevronRight className="h-3 w-3 text-white/40" />
+      {mobileMenuOpen && (
+        <div className={styles.mobileMenuOverlay}>
+          <div className={styles.mobileMenuHeader}>
+            <span className={styles.mobileMenuBrand}>■ InPilot</span>
+            <button
+              type="button"
+              className={styles.mobileCloseButton}
+              onClick={() => setMobileMenuOpen(false)}
+              aria-label="Close menu"
+            >
+              ✕
+            </button>
           </div>
 
-          {/* Headline */}
-          <h1 className="animate-fade-in-up animation-delay-100 text-5xl sm:text-6xl lg:text-7xl xl:text-8xl font-bold text-white leading-[1.05] tracking-tight max-w-4xl mx-auto">
-            LinkedIn on
-            <br />
-            <span className="gradient-text">Autopilot</span>
-          </h1>
-
-          <p className="animate-fade-in-up animation-delay-200 mt-6 text-lg sm:text-xl text-white/40 max-w-2xl mx-auto leading-relaxed">
-            AI-powered job applications, viral content creation, and intelligent lead scraping.
-            Completely free. Bring your own API key.
-          </p>
-
-          {/* CTAs */}
-          <div className="animate-fade-in-up animation-delay-300 mt-10 flex flex-col sm:flex-row items-center justify-center gap-4">
-            <Link href="/register">
-              <Button size="lg" className="text-base px-8 h-13 bg-blue-600 hover:bg-blue-500 glow-pulse font-semibold shadow-2xl shadow-blue-600/30">
-                Start Free — No Credit Card
-                <ArrowRight className="h-4 w-4" />
-              </Button>
-            </Link>
-            <a href="#features">
-              <Button variant="outline" size="lg" className="text-base h-13 border-white/10 bg-white/5 hover:bg-white/10">
-                Explore Features
-              </Button>
-            </a>
-          </div>
-
-          {/* Social proof stats */}
-          <div className="animate-fade-in-up animation-delay-400 mt-16 flex flex-wrap items-center justify-center gap-8 sm:gap-12">
-            <div className="text-center">
-              <p className="text-2xl sm:text-3xl font-bold text-white stat-glow">100%</p>
-              <p className="text-xs text-white/30 mt-1">Free Forever</p>
-            </div>
-            <div className="h-8 w-px bg-white/10" />
-            <div className="text-center">
-              <p className="text-2xl sm:text-3xl font-bold text-white stat-glow">AES-256</p>
-              <p className="text-xs text-white/30 mt-1">Encryption</p>
-            </div>
-            <div className="h-8 w-px bg-white/10" />
-            <div className="text-center">
-              <p className="text-2xl sm:text-3xl font-bold text-white stat-glow">BYOK</p>
-              <p className="text-xs text-white/30 mt-1">Your Keys, Your Data</p>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      {/* ══════════════════════════════════════════════
-          LOGOS BAR — Tech stack / backed by
-       ══════════════════════════════════════════════ */}
-      <section className="border-y border-white/5 py-10 bg-white/2">
-        <div className="mx-auto max-w-6xl px-6">
-          <p className="text-center text-xs text-white/20 uppercase tracking-[0.2em] mb-6">Built with industry-leading technology</p>
-          <div className="flex flex-wrap items-center justify-center gap-8 sm:gap-14">
-            {["Next.js 16", "React 19", "MongoDB", "TypeScript", "Tailwind CSS", "Chrome Extension"].map((tech) => (
-              <span key={tech} className="text-sm font-medium text-white/20 hover:text-white/40 transition-colors">{tech}</span>
+          <div className={styles.mobileMenuLinks}>
+            {NAV_LINKS.map((link) => (
+              <a
+                key={link.label}
+                href={link.href}
+                className={styles.mobileMenuLink}
+                onClick={() => setMobileMenuOpen(false)}
+              >
+                {link.label}
+              </a>
             ))}
           </div>
-        </div>
-      </section>
 
-      {/* ══════════════════════════════════════════════
-          FEATURES — Bento grid (Apple-style)
-       ══════════════════════════════════════════════ */}
-      <section id="features" className="py-32">
-        <div className="mx-auto max-w-6xl px-6">
-          <div className="text-center mb-20">
-            <p className="text-sm font-medium text-blue-400 uppercase tracking-[0.2em] mb-4">Three Pillars</p>
-            <h2 className="text-4xl sm:text-5xl font-bold text-white tracking-tight">
-              Everything you need to
-              <br />
-              <span className="gradient-text">dominate LinkedIn</span>
-            </h2>
+          <div className={styles.mobileMenuActions}>
+            <Link href="/login" className={styles.mobileSecondaryCta} onClick={() => setMobileMenuOpen(false)}>
+              Sign in
+            </Link>
+            <Link href="/register" className={styles.mobilePrimaryCta} onClick={() => setMobileMenuOpen(false)}>
+              Get started free
+            </Link>
           </div>
+        </div>
+      )}
 
-          {/* Bento Grid */}
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            {/* Card 1 — Smart Auto-Apply (Large) */}
-            <div className="spotlight-card lg:col-span-2 group rounded-3xl border border-white/8 bg-white/3 p-8 sm:p-10 hover:border-blue-500/20 transition-all duration-500">
-              <div className="flex items-start justify-between mb-8">
-                <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-blue-500/10 ring-1 ring-blue-500/20">
-                  <Briefcase className="h-6 w-6 text-blue-400" />
-                </div>
-                <span className="text-xs font-mono text-white/20 bg-white/5 px-3 py-1 rounded-full">01</span>
-              </div>
-              <h3 className="text-2xl sm:text-3xl font-bold text-white mb-4 tracking-tight">Smart Auto-Apply</h3>
-              <p className="text-white/40 leading-relaxed text-base sm:text-lg max-w-xl">
-                AI reads job descriptions, tailors your resume on the fly, and fills every Easy Apply form automatically.
-                Apply to 15+ jobs daily while you sleep.
-              </p>
-              <div className="mt-8 grid grid-cols-2 gap-4">
-                {[
-                  { icon: Target, text: "AI Resume Tailoring" },
-                  { icon: Sparkles, text: "Smart Form Filling" },
-                  { icon: Eye, text: "Job Match Scoring" },
-                  { icon: BarChart3, text: "Application Analytics" },
-                ].map((feature) => (
-                  <div key={feature.text} className="flex items-center gap-2.5 text-sm text-white/50">
-                    <feature.icon className="h-4 w-4 text-blue-400/60 shrink-0" />
-                    {feature.text}
-                  </div>
-                ))}
-              </div>
+      {paletteOpen && (
+        <div className={styles.paletteOverlay} onClick={() => setPaletteOpen(false)}>
+          <div
+            className={styles.paletteDialog}
+            onClick={(event) => event.stopPropagation()}
+            role="dialog"
+            aria-modal="true"
+            aria-label="Command palette"
+          >
+            <div className={styles.paletteHeader}>⌘ Command Palette</div>
+            <input className={styles.paletteInput} readOnly value="Type a command..." aria-label="Command input" />
+            <div className={styles.paletteCommandList}>
+              {PALETTE_COMMANDS.map((command) => (
+                <button
+                  key={command.label}
+                  type="button"
+                  className={styles.paletteCommand}
+                  onClick={() => handleCommandClick(command.href)}
+                >
+                  <span>{command.label}</span>
+                  <span className={styles.paletteHint}>{command.hint}</span>
+                </button>
+              ))}
             </div>
+          </div>
+        </div>
+      )}
 
-            {/* Card 2 — Become a Hero */}
-            <div className="spotlight-card group rounded-3xl border border-white/8 bg-white/3 p-8 sm:p-10 hover:border-purple-500/20 transition-all duration-500">
-              <div className="flex items-start justify-between mb-8">
-                <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-purple-500/10 ring-1 ring-purple-500/20">
-                  <Trophy className="h-6 w-6 text-purple-400" />
+      <main>
+        <section className={styles.heroSection}>
+          <div className={styles.container}>
+            <div className={styles.heroGrid}>
+              <div className={styles.heroCopy}>
+                <div className={styles.betaBadge}>
+                  <span className={styles.betaDot} aria-hidden="true" />
+                  <span>■ NOW IN BETA</span>
                 </div>
-                <span className="text-xs font-mono text-white/20 bg-white/5 px-3 py-1 rounded-full">02</span>
-              </div>
-              <h3 className="text-2xl font-bold text-white mb-4 tracking-tight">Become a Hero</h3>
-              <p className="text-white/40 leading-relaxed">
-                AI generates viral posts in your voice. Auto-engage with your niche. Grow your following on autopilot.
-              </p>
-              <div className="mt-6 space-y-3">
-                {["Content generation", "Group auto-posting", "Engagement automation"].map((item) => (
-                  <div key={item} className="flex items-center gap-2 text-sm text-white/50">
-                    <CheckCircle2 className="h-3.5 w-3.5 text-purple-400/60 shrink-0" />
-                    {item}
-                  </div>
-                ))}
-              </div>
-            </div>
 
-            {/* Card 3 — Smart Scraper */}
-            <div className="spotlight-card group rounded-3xl border border-white/8 bg-white/3 p-8 sm:p-10 hover:border-amber-500/20 transition-all duration-500">
-              <div className="flex items-start justify-between mb-8">
-                <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-amber-500/10 ring-1 ring-amber-500/20">
-                  <Database className="h-6 w-6 text-amber-400" />
-                </div>
-                <span className="text-xs font-mono text-white/20 bg-white/5 px-3 py-1 rounded-full">03</span>
-              </div>
-              <h3 className="text-2xl font-bold text-white mb-4 tracking-tight">Smart Scraper</h3>
-              <p className="text-white/40 leading-relaxed">
-                Find people looking for your services. AI writes personalized outreach. Turn LinkedIn into your lead machine.
-              </p>
-              <div className="mt-6 space-y-3">
-                {["Profile & post scraping", "AI personalized outreach", "Lead management"].map((item) => (
-                  <div key={item} className="flex items-center gap-2 text-sm text-white/50">
-                    <CheckCircle2 className="h-3.5 w-3.5 text-amber-400/60 shrink-0" />
-                    {item}
-                  </div>
-                ))}
-              </div>
-            </div>
+                <h1 className={styles.heroHeadline}>
+                  <span className={`${styles.heroLine} ${styles.heroLineOne}`}>AUTOMATE</span>
+                  <span className={`${styles.heroLine} ${styles.heroLineTwo}`}>LINKEDIN.</span>
+                  <span className={`${styles.heroLine} ${styles.heroLineThree}`}>SHIP FASTER.</span>
+                </h1>
 
-            {/* Card 4 — Anti-Detection (wide) */}
-            <div className="spotlight-card lg:col-span-2 group rounded-3xl border border-white/8 bg-white/3 p-8 sm:p-10 hover:border-emerald-500/20 transition-all duration-500">
-              <div className="flex flex-col sm:flex-row sm:items-center gap-6 sm:gap-10">
-                <div>
-                  <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-emerald-500/10 ring-1 ring-emerald-500/20 mb-4">
-                    <Shield className="h-6 w-6 text-emerald-400" />
-                  </div>
-                  <h3 className="text-2xl font-bold text-white mb-3 tracking-tight">Human-Level Anti-Detection</h3>
-                  <p className="text-white/40 leading-relaxed max-w-md">
-                    Gaussian-distributed delays, natural mouse movements, and smart session management.
-                    Your account stays safe — always.
-                  </p>
+                <p className={styles.heroSubheadline}>
+                  InPilot handles job applications, scraping, and posting so you can focus on building, not clicking.
+                </p>
+
+                <div className={styles.heroCtas}>
+                  <Link href="/register" className={`${styles.ctaButton} ${styles.ctaPrimary}`}>
+                    Start automating →
+                  </Link>
+                  <a href="#quickstart" className={`${styles.ctaButton} ${styles.ctaGhost}`}>
+                    View docs
+                  </a>
                 </div>
-                <div className="flex-1 grid grid-cols-2 gap-3">
-                  {[
-                    "Gaussian timing",
-                    "Session limits",
-                    "Daily caps",
-                    "Cooldown periods",
-                    "Natural clicks",
-                    "Reading pauses",
-                  ].map((item) => (
-                    <div key={item} className="flex items-center gap-2 text-sm text-white/40 bg-white/3 rounded-xl px-3 py-2.5 border border-white/5">
-                      <div className="h-1.5 w-1.5 rounded-full bg-emerald-400/60 shrink-0" />
-                      {item}
+
+                <div className={styles.socialProof}>
+                  <div className={styles.avatarStack}>
+                    {AVATARS.map((initials) => (
+                      <span key={initials} className={styles.avatarBubble}>
+                        {initials}
+                      </span>
+                    ))}
+                  </div>
+                  <span className={styles.socialProofText}>Used by 2,400+ developers</span>
+                </div>
+              </div>
+
+              <div className={styles.heroVisual}>
+                <div className={styles.terminalCard}>
+                  <div className={styles.terminalChrome}>
+                    <div className={styles.chromeDots}>
+                      <span className={styles.dotRed} />
+                      <span className={styles.dotYellow} />
+                      <span className={styles.dotGreen} />
                     </div>
+                    <span className={styles.terminalTitle}>inpilot — bash — 80×24</span>
+                  </div>
+
+                  <div className={styles.terminalBody}>
+                    {!typingDone && (
+                      <pre className={styles.terminalTypingText}>
+                        {typedText}
+                        <span className={styles.cursor}>_</span>
+                      </pre>
+                    )}
+
+                    {typingDone && (
+                      <div className={styles.terminalRendered}>
+                        <div className={styles.terminalCommandLine}>{'$ inpilot apply --jobs 50 --filter "remote AND senior"'}</div>
+                        <div className={styles.terminalSpacer} />
+
+                        <div className={styles.terminalProgressLine}>
+                          <span className={styles.terminalSymbol}>✓</span>
+                          <span className={styles.terminalLabel}>Scraping LinkedIn jobs...</span>
+                          <span className={styles.terminalBar}>[{renderBar(progressBars[0])}]</span>
+                          <span className={styles.terminalMeta}>412 found</span>
+                        </div>
+
+                        <div className={styles.terminalProgressLine}>
+                          <span className={styles.terminalSymbol}>✓</span>
+                          <span className={styles.terminalLabel}>Filtering by criteria...</span>
+                          <span className={styles.terminalBar}>[{renderBar(progressBars[1])}]</span>
+                          <span className={styles.terminalMeta}>50 matched</span>
+                        </div>
+
+                        <div className={styles.terminalProgressLine}>
+                          <span className={styles.terminalSymbol}>✓</span>
+                          <span className={styles.terminalLabel}>Generating cover letters...</span>
+                          <span className={styles.terminalBar}>[{renderBar(progressBars[2])}]</span>
+                          <span className={styles.terminalMeta}>50 done</span>
+                        </div>
+
+                        <div className={styles.terminalProgressLine}>
+                          <span className={styles.terminalArrow}>→</span>
+                          <span className={styles.terminalLabel}>Submitting applications...</span>
+                          <span className={styles.terminalBar}>[{renderBar(progressBars[3])}]</span>
+                          <span className={styles.terminalMeta}>38/50</span>
+                        </div>
+
+                        <div className={styles.terminalSpacer} />
+                        <div className={styles.terminalSummary}>Applied to 38 jobs in 4m 12s.</div>
+                        <div className={styles.terminalSpacer} />
+                        <div className={styles.terminalCommandLine}>{'$ inpilot post --schedule "Mon,Wed,Fri 9am" --content ./posts/'}</div>
+                        <div className={styles.terminalProgressLine}>
+                          <span className={styles.terminalSymbol}>✓</span>
+                          <span className={styles.terminalLabel}>Scheduled 12 posts across 3 weeks.</span>
+                        </div>
+                        <div className={styles.terminalSpacer} />
+                        <div className={styles.terminalPrompt}>
+                          $ <span className={styles.cursor}>_</span>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section className={styles.trustedStrip}>
+          <div className={styles.container}>
+            <p className={styles.trustedLabel}>TRUSTED BY ENGINEERS AT</p>
+            <div className={styles.marqueeMask}>
+              <div className={styles.marqueeTrack}>
+                {[...TRUSTED_COMPANIES, ...TRUSTED_COMPANIES].map((company, index) => (
+                  <span key={`${company}-${index}`} className={styles.companyWordmark}>
+                    {company}
+                  </span>
+                ))}
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section id="capabilities" className={styles.featuresSection}>
+          <div className={styles.container}>
+            <div className={styles.sectionHeader}>
+              <p className={styles.sectionEyebrow}>CAPABILITIES</p>
+              <h2 className={styles.sectionTitle}>Everything LinkedIn. Automated.</h2>
+              <p className={styles.sectionSubtitle}>One SDK. Full control over your LinkedIn presence.</p>
+            </div>
+
+            <div className={styles.bentoGrid}>
+              {CAPABILITIES.map((card, index) => (
+                <div
+                  key={card.title}
+                  ref={(node) => {
+                    cardRefs.current[index] = node;
+                  }}
+                  data-card-index={index}
+                  className={`${styles.bentoCard} ${card.wide ? styles.bentoWide : ""} ${card.full ? styles.bentoFull : ""} ${visibleCards[index] ? styles.bentoVisible : ""}`}
+                >
+                  {card.chart ? (
+                    <div className={styles.analyticsCardLayout}>
+                      <div>
+                        <card.icon className={styles.cardIcon} />
+                        <p className={styles.cardLabel}>{card.label}</p>
+                        <h3 className={styles.cardTitle}>{card.title}</h3>
+                        <p className={styles.cardBody}>{card.body}</p>
+                      </div>
+                      <div className={styles.inlineChart}>
+                        {CHART_BARS.map((height, barIndex) => (
+                          <span
+                            key={`bar-${height}-${barIndex}`}
+                            className={styles.chartBar}
+                            style={{ height: `${height}%` }}
+                            aria-hidden="true"
+                          />
+                        ))}
+                      </div>
+                    </div>
+                  ) : (
+                    <>
+                      <card.icon className={styles.cardIcon} />
+                      <p className={styles.cardLabel}>{card.label}</p>
+                      <h3 className={styles.cardTitle}>{card.title}</h3>
+                      <p className={styles.cardBody}>{card.body}</p>
+
+                      {card.snippet && <code className={styles.cardSnippet}>{card.snippet}</code>}
+
+                      {card.chips && (
+                        <div className={styles.endpointChips}>
+                          {card.chips.map((chip) => (
+                            <span key={chip} className={styles.endpointChip}>
+                              {chip}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                    </>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        </section>
+
+        <section id="quickstart" className={styles.quickstartSection}>
+          <div className={styles.container}>
+            <div className={styles.sectionHeader}>
+              <p className={styles.sectionEyebrow}>QUICKSTART</p>
+              <h2 className={styles.sectionTitle}>Up and running in 3 minutes.</h2>
+            </div>
+
+            <div className={styles.stepper}>
+              {QUICKSTART_STEPS.map((step) => (
+                <article key={step.number} className={styles.stepCard}>
+                  <span className={styles.stepBackdropNumber}>{step.number}</span>
+                  <div className={styles.stepContent}>
+                    <step.icon className={styles.stepIcon} />
+                    <h3 className={styles.stepTitle}>{step.title}</h3>
+                    <p className={styles.stepBody}>{step.body}</p>
+                    <code className={styles.stepCode}>{step.command}</code>
+                  </div>
+                </article>
+              ))}
+            </div>
+
+            <div className={styles.quickstartCtaWrap}>
+              <a href="/features" className={`${styles.ctaButton} ${styles.ctaOutlineCyan}`}>
+                Read the full docs →
+              </a>
+            </div>
+          </div>
+        </section>
+
+        <section id="pricing" className={styles.pricingSection}>
+          <div className={styles.container}>
+            <div className={styles.sectionHeader}>
+              <h2 className={styles.sectionTitle}>Simple, usage-based pricing.</h2>
+              <p className={styles.sectionSubtitle}>Pay for what you automate. No seat fees.</p>
+            </div>
+
+            <div className={styles.pricingGrid}>
+              {PRICING_PLANS.map((plan) => (
+                <article
+                  key={plan.name}
+                  className={`${styles.pricingCard} ${plan.highlighted ? styles.pricingCardHighlighted : ""}`}
+                >
+                  <div className={styles.pricingTopRow}>
+                    <h3 className={styles.planName}>{plan.name}</h3>
+                    {plan.highlighted && <span className={styles.recommendedBadge}>RECOMMENDED</span>}
+                  </div>
+
+                  <p className={styles.planPrice}>
+                    {plan.price}
+                    <span className={styles.planCadence}> {plan.cadence}</span>
+                  </p>
+
+                  <ul className={styles.planFeatureList}>
+                    {plan.features.map((feature) => (
+                      <li key={feature} className={styles.planFeatureItem}>
+                        <span className={styles.checkmark}>✓</span>
+                        <span>{feature}</span>
+                      </li>
+                    ))}
+                  </ul>
+
+                  <a
+                    href={plan.name === "Team" ? "/about" : "/register"}
+                    className={`${styles.pricingCta} ${plan.highlighted ? styles.pricingCtaPrimary : styles.pricingCtaGhost}`}
+                  >
+                    {plan.cta}
+                  </a>
+                </article>
+              ))}
+            </div>
+          </div>
+        </section>
+
+        <section id="testimonials" className={styles.testimonialsSection}>
+          <div className={styles.container}>
+            <div className={styles.sectionHeader}>
+              <h2 className={styles.sectionTitle}>What developers say.</h2>
+            </div>
+
+            <div className={styles.masonryColumns}>
+              {TESTIMONIALS.map((item) => (
+                <article key={item.author} className={styles.testimonialCard}>
+                  <p className={styles.testimonialQuote}>“{item.quote}”</p>
+                  <div className={styles.testimonialAuthorRow}>
+                    <span className={styles.testimonialAvatar}>{item.initials}</span>
+                    <div>
+                      <p className={styles.testimonialAuthor}>{item.author}</p>
+                      <p className={styles.testimonialRole}>{item.role}</p>
+                    </div>
+                  </div>
+                </article>
+              ))}
+            </div>
+          </div>
+        </section>
+
+        <section className={styles.finalCtaSection}>
+          <div className={styles.finalCtaGrid} aria-hidden="true" />
+          <div className={`${styles.container} ${styles.finalCtaContent}`}>
+            <p className={styles.sectionEyebrow}>START TODAY</p>
+            <h2 className={styles.finalCtaHeadline}>Stop clicking. Start automating.</h2>
+            <p className={styles.finalCtaSubtext}>
+              Join 2,400+ developers using InPilot to run LinkedIn on autopilot.
+            </p>
+
+            <div className={styles.finalCtaButtons}>
+              <Link href="/register" className={`${styles.ctaButton} ${styles.ctaPrimary}`}>
+                Get started free →
+              </Link>
+              <a href="/about" className={`${styles.ctaButton} ${styles.ctaGhost}`}>
+                Talk to a founder
+              </a>
+            </div>
+
+            <p className={styles.finalCtaMeta}>No credit card required · Cancel anytime · Open API</p>
+          </div>
+        </section>
+      </main>
+
+      <footer id="footer" className={styles.footer}>
+        <div className={styles.container}>
+          <div className={styles.footerGrid}>
+            <div>
+              <div className={styles.footerBrand}>■ InPilot</div>
+              <p className={styles.footerTagline}>LinkedIn, automated.</p>
+              <div className={styles.footerSocials}>
+                <a href="https://github.com" className={styles.footerLink}>
+                  GitHub
+                </a>
+                <a href="https://x.com" className={styles.footerLink}>
+                  X
+                </a>
+              </div>
+            </div>
+
+            {FOOTER_COLUMNS.map((column) => (
+              <div key={column.title}>
+                <h3 className={styles.footerColumnTitle}>{column.title}</h3>
+                <div className={styles.footerColumnLinks}>
+                  {column.links.map((item) => (
+                    <a key={item} href="#" className={styles.footerLink}>
+                      {item}
+                    </a>
                   ))}
                 </div>
               </div>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      {/* ══════════════════════════════════════════════
-          HOW IT WORKS — Vertical timeline
-       ══════════════════════════════════════════════ */}
-      <section id="how-it-works" className="py-32 border-t border-white/5">
-        <div className="mx-auto max-w-4xl px-6">
-          <div className="text-center mb-20">
-            <p className="text-sm font-medium text-blue-400 uppercase tracking-[0.2em] mb-4">Getting Started</p>
-            <h2 className="text-4xl sm:text-5xl font-bold text-white tracking-tight">
-              Up and running in
-              <br />
-              <span className="gradient-text">three minutes</span>
-            </h2>
-          </div>
-
-          <div className="space-y-0">
-            {[
-              {
-                step: "01",
-                title: "Add Your AI Key",
-                description: "Paste your free Gemini or Groq API key. We encrypt it with AES-256-GCM — we never see it unencrypted.",
-                icon: Key,
-                color: "blue",
-              },
-              {
-                step: "02",
-                title: "Upload Your Resume",
-                description: "Upload your PDF. AI parses and structures it. For each job, AI creates a perfectly tailored version.",
-                icon: Rocket,
-                color: "purple",
-              },
-              {
-                step: "03",
-                title: "Install Extension & Go",
-                description: "Install the Chrome extension, set your preferences, and watch LinkedBoost work while you focus on what matters.",
-                icon: Globe,
-                color: "emerald",
-              },
-            ].map((item, index) => (
-              <div key={item.step} className="relative flex gap-8 group">
-                {/* Timeline line */}
-                {index < 2 && (
-                  <div className="absolute left-6 top-16 w-px h-full bg-linear-to-b from-white/10 to-transparent" />
-                )}
-                {/* Step circle */}
-                <div className="relative z-10 flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-white/5 border border-white/10 group-hover:border-blue-500/30 transition-colors">
-                  <item.icon className="h-5 w-5 text-white/60 group-hover:text-blue-400 transition-colors" />
-                </div>
-                {/* Content */}
-                <div className="pb-16">
-                  <span className="text-xs font-mono text-white/20">Step {item.step}</span>
-                  <h3 className="text-xl font-bold text-white mt-1 mb-2">{item.title}</h3>
-                  <p className="text-white/40 leading-relaxed max-w-md">{item.description}</p>
-                </div>
-              </div>
             ))}
           </div>
-        </div>
-      </section>
 
-      {/* ══════════════════════════════════════════════
-          SECURITY & TRUST — Premium detail section
-       ══════════════════════════════════════════════ */}
-      <section id="security" className="py-32 border-t border-white/5">
-        <div className="mx-auto max-w-6xl px-6">
-          <div className="text-center mb-20">
-            <p className="text-sm font-medium text-emerald-400 uppercase tracking-[0.2em] mb-4">Security First</p>
-            <h2 className="text-4xl sm:text-5xl font-bold text-white tracking-tight">
-              Your data stays
-              <br />
-              <span className="gradient-text">yours</span>
-            </h2>
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-            {[
-              {
-                icon: Lock,
-                title: "AES-256-GCM Encryption",
-                description: "API keys encrypted at rest with authenticated encryption. Salt + IV + auth tag — military-grade security.",
-                accent: "emerald",
-              },
-              {
-                icon: Key,
-                title: "BYOK — Bring Your Own Keys",
-                description: "We never see your unencrypted keys. They're decrypted in-memory only during AI calls, then immediately discarded.",
-                accent: "blue",
-              },
-              {
-                icon: Shield,
-                title: "Zero Tracking",
-                description: "No analytics trackers. No data selling. No premium upsells. Your automation data belongs to you.",
-                accent: "purple",
-              },
-            ].map((item) => (
-              <div key={item.title} className="spotlight-card rounded-3xl border border-white/8 bg-white/3 p-8 hover:border-white/15 transition-all duration-500">
-                <item.icon className={`h-8 w-8 text-${item.accent}-400 mb-6`} />
-                <h3 className="text-lg font-semibold text-white mb-3">{item.title}</h3>
-                <p className="text-sm text-white/40 leading-relaxed">{item.description}</p>
-              </div>
-            ))}
-          </div>
-        </div>
-      </section>
-
-      {/* ══════════════════════════════════════════════
-          GITHUB STUDENT DEV PACK SECTION
-       ══════════════════════════════════════════════ */}
-      <section className="py-32 border-t border-white/5 relative">
-        <div className="absolute inset-0 bg-linear-to-b from-purple-600/3 to-transparent" />
-        <div className="relative mx-auto max-w-4xl px-6 text-center">
-          <div className="inline-flex items-center gap-2 rounded-full border border-purple-500/20 bg-purple-500/10 px-4 py-2 text-sm mb-8">
-            <Github className="h-4 w-4 text-purple-400" />
-            <span className="text-purple-300 font-medium">GitHub Student Developer Pack</span>
-          </div>
-          <h2 className="text-4xl sm:text-5xl font-bold text-white tracking-tight mb-6">
-            Built for students,
-            <br />
-            <span className="gradient-text">powered by GitHub</span>
-          </h2>
-          <p className="text-lg text-white/40 max-w-2xl mx-auto leading-relaxed mb-10">
-            LinkedBoost is part of the GitHub Student Developer Pack. Get access to the full platform
-            for free — no credit card, no trial period. Just sign up and start automating your LinkedIn presence.
-          </p>
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 max-w-2xl mx-auto">
-            {[
-              { label: "Free AI Credits", desc: "Use Gemini or Groq free tiers" },
-              { label: "Full Platform Access", desc: "Every feature, no restrictions" },
-              { label: "Open Source", desc: "Transparent, auditable code" },
-            ].map((item) => (
-              <div key={item.label} className="rounded-2xl border border-white/8 bg-white/3 p-5 text-left">
-                <p className="text-sm font-semibold text-white mb-1">{item.label}</p>
-                <p className="text-xs text-white/40">{item.desc}</p>
-              </div>
-            ))}
-          </div>
-        </div>
-      </section>
-
-      {/* ══════════════════════════════════════════════
-          FINAL CTA
-       ══════════════════════════════════════════════ */}
-      <section className="py-32 border-t border-white/5 relative">
-        <div className="aurora-bg" />
-        <div className="relative mx-auto max-w-3xl px-6 text-center">
-          <h2 className="text-4xl sm:text-5xl lg:text-6xl font-bold text-white tracking-tight mb-6">
-            Ready to automate
-            <br />
-            <span className="gradient-text">your LinkedIn?</span>
-          </h2>
-          <p className="text-lg text-white/40 max-w-xl mx-auto leading-relaxed mb-10">
-            Join LinkedBoost today. Free forever — no credit card, no feature gates, no catch.
-          </p>
-          <Link href="/register">
-            <Button size="lg" className="text-base px-10 h-14 bg-white text-[#0A0F1C] hover:bg-white/90 font-semibold shadow-2xl shadow-white/10">
-              Get Started Free
-              <ArrowRight className="h-4 w-4" />
-            </Button>
-          </Link>
-        </div>
-      </section>
-
-      {/* ══════════════════════════════════════════════
-          FOOTER
-       ══════════════════════════════════════════════ */}
-      <footer className="border-t border-white/5 py-12">
-        <div className="mx-auto max-w-6xl px-6">
-          <div className="flex flex-col md:flex-row items-center justify-between gap-6">
-            <div className="flex items-center gap-3">
-              <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-blue-600">
-                <Zap className="h-4 w-4 text-white" />
-              </div>
-              <span className="text-sm font-semibold text-white">LinkedBoost</span>
+          <div className={styles.footerBottomBar}>
+            <span>© 2025 InPilot. Built for developers, by developers.</span>
+            <div className={styles.footerBottomLinks}>
+              <a href="/terms" className={styles.footerLink}>
+                Terms
+              </a>
+              <a href="/privacy" className={styles.footerLink}>
+                Privacy
+              </a>
+              <a href="#" className={styles.footerLink}>
+                Status
+              </a>
             </div>
-            <div className="flex items-center gap-6">
-              <Link href="/features" className="text-xs text-white/30 hover:text-white/50 transition-colors">Features</Link>
-              <Link href="/about" className="text-xs text-white/30 hover:text-white/50 transition-colors">About</Link>
-              <Link href="/privacy" className="text-xs text-white/30 hover:text-white/50 transition-colors">Privacy</Link>
-              <Link href="/terms" className="text-xs text-white/30 hover:text-white/50 transition-colors">Terms</Link>
-            </div>
-            <p className="text-xs text-white/20">&copy; {new Date().getFullYear()} LinkedBoost. Free and open source.</p>
           </div>
         </div>
       </footer>
     </div>
+  );
+}
+
+function CursorIcon({ className }: IconProps) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className={className}>
+      <path d="M5 3l13 7-6 2 2 6-3 1-2-6-4 4z" />
+    </svg>
+  );
+}
+
+function SearchIcon({ className }: IconProps) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className={className}>
+      <circle cx="11" cy="11" r="6" />
+      <path d="m16 16 5 5" />
+    </svg>
+  );
+}
+
+function CalendarIcon({ className }: IconProps) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className={className}>
+      <rect x="3" y="5" width="18" height="16" rx="2" />
+      <path d="M8 3v4M16 3v4M3 10h18" />
+    </svg>
+  );
+}
+
+function PlugIcon({ className }: IconProps) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className={className}>
+      <path d="M9 3v6M15 3v6M7 9h10v2a5 5 0 0 1-5 5 5 5 0 0 1-5-5z" />
+      <path d="M12 16v5" />
+    </svg>
+  );
+}
+
+function ChartIcon({ className }: IconProps) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className={className}>
+      <path d="M4 20V10M10 20V6M16 20v-8M22 20H2" />
+    </svg>
+  );
+}
+
+function InstallIcon({ className }: IconProps) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className={className}>
+      <path d="M12 4v10M8 10l4 4 4-4" />
+      <rect x="4" y="17" width="16" height="3" rx="1" />
+    </svg>
+  );
+}
+
+function AuthIcon({ className }: IconProps) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className={className}>
+      <rect x="4" y="11" width="16" height="10" rx="2" />
+      <path d="M8 11V8a4 4 0 1 1 8 0v3" />
+    </svg>
+  );
+}
+
+function BoltIcon({ className }: IconProps) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className={className}>
+      <path d="M13 2 4 14h6l-1 8 9-12h-6z" />
+    </svg>
   );
 }

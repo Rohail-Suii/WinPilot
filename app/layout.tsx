@@ -14,32 +14,32 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  metadataBase: new URL(process.env.NEXTAUTH_URL || "https://linkedboost.app"),
+  metadataBase: new URL(process.env.NEXTAUTH_URL || "https://inpilot.app"),
   title: {
-    default: "LinkedBoost — LinkedIn Automation That Goes Viral",
-    template: "%s — LinkedBoost",
+    default: "InPilot — LinkedIn Automation For Developers",
+    template: "%s — InPilot",
   },
   description:
-    "The best free LinkedIn automation tool. Auto-apply to jobs, build your personal brand, and scrape leads — all with your own AI keys.",
+    "Automate LinkedIn job applications, profile scraping, and post scheduling with a command-first platform built for developers.",
   keywords: [
     "LinkedIn automation",
-    "job application bot",
-    "LinkedIn Easy Apply",
-    "personal branding",
+    "job application automation",
     "LinkedIn scraper",
+    "post scheduling automation",
+    "developer growth tools",
   ],
   openGraph: {
-    title: "LinkedBoost — LinkedIn Automation That Goes Viral",
+    title: "InPilot — LinkedIn Automation For Developers",
     description:
-      "Auto-apply to jobs, build your personal brand, and scrape leads on LinkedIn — completely free with BYOK AI.",
+      "Automate applications, scraping, and posting on LinkedIn with a command-first workflow.",
     type: "website",
     locale: "en_US",
   },
   twitter: {
     card: "summary_large_image",
-    title: "LinkedBoost — LinkedIn Automation That Goes Viral",
+    title: "InPilot — LinkedIn Automation For Developers",
     description:
-      "Auto-apply to jobs, build your personal brand, and scrape leads on LinkedIn — completely free.",
+      "Automate applications, scraping, and post scheduling on LinkedIn with InPilot.",
   },
   robots: {
     index: true,
@@ -58,7 +58,7 @@ export default function RootLayout({
   return (
     <html lang="en" className="dark">
       <body
-        className={`${geistSans.variable} ${geistMono.variable} antialiased bg-[#0A0F1C] text-white`}
+        className={`${geistSans.variable} ${geistMono.variable} antialiased bg-[#0A0A0A] text-white`}
       >
         <Providers>{children}</Providers>
       </body>
