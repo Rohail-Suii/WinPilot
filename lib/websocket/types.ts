@@ -60,6 +60,9 @@ export const WS_EVENTS = {
   LIMIT_REACHED: "limit:reached",
   SAFETY_ALERT: "safety:alert",
 
+  // Automation logs
+  AUTOMATION_LOG: "automation:log",
+
   // Heartbeat
   HEARTBEAT: "heartbeat",
   HEARTBEAT_ACK: "heartbeat:ack",
@@ -311,6 +314,7 @@ export type SseEventType =
   | "limit:warning"
   | "limit:reached"
   | "safety:alert"
+  | "automation:log"
   | "heartbeat:ack"
   | "notification";
 

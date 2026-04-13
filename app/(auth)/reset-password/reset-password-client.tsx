@@ -36,11 +36,11 @@ function PasswordStrength({ password }: { password: string }) {
       {checks.map((check) => (
         <div key={check.label} className="flex items-center gap-2 text-xs">
           {check.met ? (
-            <Check className="h-3 w-3 text-emerald-400" />
+            <Check className="h-3 w-3 text-[#28C840]" />
           ) : (
-            <X className="h-3 w-3 text-white/30" />
+            <X className="h-3 w-3 text-[#333333]" />
           )}
-          <span className={check.met ? "text-emerald-400" : "text-white/30"}>
+          <span className={check.met ? "text-[#28C840]" : "text-[#333333]"}>
             {check.label}
           </span>
         </div>
@@ -102,9 +102,9 @@ function ResetPasswordForm() {
 
   if (!token) {
     return (
-      <Card className="relative z-10 w-full max-w-md border-white/10 bg-white/5 backdrop-blur-2xl">
+      <Card className="relative z-10 w-full max-w-md border-[#1A1A1A] bg-[#111111]">
         <CardHeader className="text-center">
-          <CardTitle className="text-2xl">Invalid Link</CardTitle>
+          <CardTitle className="text-2xl tracking-tight">Invalid Link</CardTitle>
           <CardDescription>
             This password reset link is invalid or has expired. Please request a new one.
           </CardDescription>
@@ -112,7 +112,7 @@ function ResetPasswordForm() {
         <CardFooter className="justify-center">
           <Link
             href="/forgot-password"
-            className="text-sm text-blue-400 hover:underline"
+            className="text-sm text-[#00E5FF] hover:underline"
           >
             Request new reset link
           </Link>
@@ -122,12 +122,12 @@ function ResetPasswordForm() {
   }
 
   return (
-    <Card className="relative z-10 w-full max-w-md border-white/10 bg-white/5 backdrop-blur-2xl">
+    <Card className="relative z-10 w-full max-w-md border-[#1A1A1A] bg-[#111111]">
       <CardHeader className="text-center">
-        <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-xl bg-blue-600 shadow-lg shadow-blue-600/30">
-          <ShieldCheck className="h-6 w-6 text-white" />
+        <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-xl bg-[#00E5FF]/10 border border-[#00E5FF]/20">
+          <ShieldCheck className="h-6 w-6 text-[#00E5FF]" />
         </div>
-        <CardTitle className="text-2xl">Set new password</CardTitle>
+        <CardTitle className="text-2xl tracking-tight">Set new password</CardTitle>
         <CardDescription>
           Choose a strong password for your account.
         </CardDescription>
@@ -145,7 +145,7 @@ function ResetPasswordForm() {
               {...register("password")}
             />
             {errors.password && (
-              <p className="text-xs text-red-400">{errors.password.message}</p>
+              <p className="text-xs text-[#FF5F57]">{errors.password.message}</p>
             )}
             <PasswordStrength password={password} />
           </div>
@@ -159,7 +159,7 @@ function ResetPasswordForm() {
               {...register("confirmPassword")}
             />
             {errors.confirmPassword && (
-              <p className="text-xs text-red-400">
+              <p className="text-xs text-[#FF5F57]">
                 {errors.confirmPassword.message}
               </p>
             )}
@@ -176,7 +176,7 @@ function ResetPasswordForm() {
       <CardFooter className="justify-center">
         <Link
           href="/login"
-          className="flex items-center gap-1 text-sm text-white/40 hover:text-white/60"
+          className="flex items-center gap-1 text-sm text-[#444444] hover:text-[#888888]"
         >
           <ArrowLeft className="h-3 w-3" />
           Back to sign in

@@ -139,12 +139,12 @@ function VerifyEmailForm() {
   }
 
   return (
-    <Card className="relative z-10 w-full max-w-md border-white/10 bg-white/5 backdrop-blur-2xl">
+    <Card className="relative z-10 w-full max-w-md border-[#1A1A1A] bg-[#111111]">
       <CardHeader className="text-center">
-        <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-xl bg-blue-600 shadow-lg shadow-blue-600/30">
-          <MailCheck className="h-6 w-6 text-white" />
+        <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-xl bg-[#00E5FF]/10 border border-[#00E5FF]/20">
+          <MailCheck className="h-6 w-6 text-[#00E5FF]" />
         </div>
-        <CardTitle className="text-2xl">Check your email</CardTitle>
+        <CardTitle className="text-2xl tracking-tight">Check your email</CardTitle>
         <CardDescription>
           We sent a 6-digit code to{" "}
           <span className="text-white font-medium">{email}</span>
@@ -182,7 +182,7 @@ function VerifyEmailForm() {
           <button
             onClick={handleResend}
             disabled={isResending || cooldown > 0}
-            className="text-sm text-blue-400 hover:underline disabled:text-white/30 disabled:no-underline"
+            className="text-sm text-[#00E5FF] hover:underline disabled:text-[#333333] disabled:no-underline"
           >
             {isResending ? (
               "Sending..."
@@ -197,7 +197,7 @@ function VerifyEmailForm() {
       <CardFooter className="justify-center">
         <Link
           href="/login"
-          className="flex items-center gap-1 text-sm text-white/40 hover:text-white/60"
+          className="flex items-center gap-1 text-sm text-[#444444] hover:text-[#888888]"
         >
           <ArrowLeft className="h-3 w-3" />
           Back to sign in

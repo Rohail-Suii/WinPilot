@@ -279,6 +279,15 @@
           };
         }
 
+        case "CLICK_PAGINATION_NEXT": {
+          const result = await clickPaginationNext();
+          return {
+            status: "success",
+            actionId: action.actionId,
+            data: result,
+          };
+        }
+
         // --- Phase 2: Easy Apply Form Filling ---
         case "CLICK_EASY_APPLY": {
           const result = await clickEasyApply();
@@ -598,6 +607,71 @@
       selected: true,
       href: selectedAnchor.getAttribute("href") || selectedAnchor.href || "",
     };
+  }
+
+  /**
+   * Click the "Next" pagination button to go to the next page of job results.
+   * Returns { clicked: boolean, hasNextPage: boolean, currentPage: number }
+   */
+  async function clickPaginationNext() {
+    // LinkedIn pagination selectors for current active page
+    const paginationSelectors = [
+      'button[aria-current="true"]',
+      'li.artdeco-pagination__indicator--number.active button',
+      '.artdeco-pagination__indicator--number.selected button',
+    ];
+
+    const nextButtonSelectors = [
+      'button[aria-label="View next page"]',
+      'button[aria-label="Next"]',
+      '.artdeco-pagination__button--next',
+    ];
+
+    let currentPage = 1;
+
+    // Try to find current page number
+    for (const sel of paginationSelectors) {
+      const activeBtn = document.querySelector(sel);
+      if (activeBtn) {
+        const pageNum = parseInt(activeBtn.textContent?.trim() || "1", 10);
+        if (!isNaN(pageNum)) {
+          currentPage = pageNum;
+          break;
+        }
+      }
+    }
+
+    console.log(`[LinkedBoost CS] clickPaginationNext: Current page appears to be ${currentPage}`);
+
+    // Try to find and click the "Next" button
+    for (const sel of nextButtonSelectors) {
+      const nextBtn = document.querySelector(sel);
+      if (nextBtn && !nextBtn.disabled && nextBtn.offsetParent !== null) {
+        console.log(`[LinkedBoost CS] clickPaginationNext: Found next button with selector: ${sel}`);
+        nextBtn.click();
+        await new Promise((r) => setTimeout(r, 2000));
+        return { clicked: true, hasNextPage: true, currentPage, nextPage: currentPage + 1 };
+      }
+    }
+
+    // Alternative: try to find the next page number button directly
+    const allPageBtns = document.querySelectorAll(
+      '.artdeco-pagination__indicator--number button, ' +
+      'li[data-test-pagination-page-btn] button'
+    );
+
+    for (const btn of allPageBtns) {
+      const pageNum = parseInt(btn.textContent?.trim() || "0", 10);
+      if (pageNum === currentPage + 1) {
+        console.log(`[LinkedBoost CS] clickPaginationNext: Clicking page ${pageNum} button`);
+        btn.click();
+        await new Promise((r) => setTimeout(r, 2000));
+        return { clicked: true, hasNextPage: true, currentPage, nextPage: pageNum };
+      }
+    }
+
+    console.log(`[LinkedBoost CS] clickPaginationNext: No next page found`);
+    return { clicked: false, hasNextPage: false, currentPage, nextPage: null };
   }
 
   function scrapeJobDetail() {

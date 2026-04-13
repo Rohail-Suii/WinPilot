@@ -93,30 +93,82 @@ const QUICKSTART_STEPS = [
   },
 ];
 
+// ─── Regional Pricing ─────────────────────────────
+const REGION_PRICES: Record<string, { symbol: string; amount: number; code: string }> = {
+  US: { symbol: "$", amount: 20, code: "USD" },
+  CA: { symbol: "CA$", amount: 27, code: "CAD" },
+  GB: { symbol: "£", amount: 16, code: "GBP" },
+  EU: { symbol: "€", amount: 18, code: "EUR" },
+  DE: { symbol: "€", amount: 18, code: "EUR" },
+  FR: { symbol: "€", amount: 18, code: "EUR" },
+  ES: { symbol: "€", amount: 18, code: "EUR" },
+  IT: { symbol: "€", amount: 18, code: "EUR" },
+  NL: { symbol: "€", amount: 18, code: "EUR" },
+  IN: { symbol: "₹", amount: 499, code: "INR" },
+  PK: { symbol: "Rs", amount: 2500, code: "PKR" },
+  BD: { symbol: "৳", amount: 1500, code: "BDT" },
+  NG: { symbol: "₦", amount: 15000, code: "NGN" },
+  BR: { symbol: "R$", amount: 99, code: "BRL" },
+  MX: { symbol: "MX$", amount: 349, code: "MXN" },
+  AU: { symbol: "A$", amount: 30, code: "AUD" },
+  JP: { symbol: "¥", amount: 2900, code: "JPY" },
+  KR: { symbol: "₩", amount: 26000, code: "KRW" },
+  AE: { symbol: "AED", amount: 75, code: "AED" },
+  SA: { symbol: "SAR", amount: 75, code: "SAR" },
+  TR: { symbol: "₺", amount: 650, code: "TRY" },
+  PH: { symbol: "₱", amount: 1100, code: "PHP" },
+  ID: { symbol: "Rp", amount: 310000, code: "IDR" },
+  ZA: { symbol: "R", amount: 350, code: "ZAR" },
+  EG: { symbol: "E£", amount: 950, code: "EGP" },
+  KE: { symbol: "KSh", amount: 2500, code: "KES" },
+};
+
+const EU_COUNTRIES = ["AT", "BE", "BG", "HR", "CY", "CZ", "DK", "EE", "FI", "FR", "DE", "GR", "HU", "IE", "IT", "LV", "LT", "LU", "MT", "NL", "PL", "PT", "RO", "SK", "SI", "ES", "SE"];
+
+function getRegionPrice(countryCode: string): { symbol: string; amount: number; code: string } {
+  if (REGION_PRICES[countryCode]) return REGION_PRICES[countryCode];
+  if (EU_COUNTRIES.includes(countryCode)) return REGION_PRICES.EU;
+  return REGION_PRICES.US;
+}
+
 const PRICING_PLANS = [
   {
-    name: "Hobby",
-    price: "$0",
-    cadence: "/ month",
-    features: ["50 job apps/mo", "500 scrapes/mo", "5 scheduled posts"],
-    cta: "Start free",
+    name: "Free",
+    priceUsd: 0,
+    cadence: "forever",
+    features: [
+      "Auto-apply to jobs on LinkedIn",
+      "AI resume tailoring per job",
+      "Bring your own AI key (Gemini, Groq — free)",
+      "LinkedIn post scheduling",
+      "Data scraping",
+      "Chrome extension",
+    ],
+    excluded: [
+      "AI credits included",
+      "Priority support",
+      "Advanced analytics",
+    ],
+    cta: "Start Free",
     highlighted: false,
   },
   {
     name: "Pro",
-    price: "$29",
+    priceUsd: 20,
     cadence: "/ month",
-    features: ["2,000 apps/mo", "50,000 scrapes", "Unlimited posts", "API access"],
+    features: [
+      "Everything in Free",
+      "AI credits included — no API key needed",
+      "Unlimited resume tailoring",
+      "Interview prep with AI",
+      "Market insights & salary data",
+      "Profile optimization",
+      "Priority support",
+      "Advanced analytics",
+    ],
+    excluded: [],
     cta: "Get Pro →",
     highlighted: true,
-  },
-  {
-    name: "Team",
-    price: "$99",
-    cadence: "/ month",
-    features: ["Unlimited everything", "Team seats", "Priority support", "SLA"],
-    cta: "Contact us",
-    highlighted: false,
   },
 ];
 
@@ -215,6 +267,7 @@ export default function Home() {
   const [typingDone, setTypingDone] = useState(false);
   const [progressBars, setProgressBars] = useState<number[]>([0, 0, 0, 0]);
   const [visibleCards, setVisibleCards] = useState<Record<number, boolean>>({});
+  const [regionPrice, setRegionPrice] = useState<{ symbol: string; amount: number; code: string }>({ symbol: "$", amount: 20, code: "USD" });
 
   const cardRefs = useRef<(HTMLDivElement | null)[]>([]);
   const previousScrollY = useRef(0);
@@ -236,6 +289,37 @@ export default function Home() {
 
     window.addEventListener("scroll", onScroll, { passive: true });
     return () => window.removeEventListener("scroll", onScroll);
+  }, []);
+
+  // Detect region for pricing
+  useEffect(() => {
+    try {
+      const tz = Intl.DateTimeFormat().resolvedOptions().timeZone ?? "";
+      const locale = navigator.language ?? "";
+      // Map timezone/locale to country
+      const tzCountryMap: Record<string, string> = {
+        "Asia/Kolkata": "IN", "Asia/Calcutta": "IN", "Asia/Karachi": "PK",
+        "Asia/Dhaka": "BD", "Asia/Tokyo": "JP", "Asia/Seoul": "KR",
+        "Asia/Manila": "PH", "Asia/Jakarta": "ID", "Asia/Dubai": "AE",
+        "Asia/Riyadh": "SA", "Europe/Istanbul": "TR", "Europe/London": "GB",
+        "Europe/Berlin": "DE", "Europe/Paris": "FR", "Europe/Madrid": "ES",
+        "Europe/Rome": "IT", "Europe/Amsterdam": "NL",
+        "America/Sao_Paulo": "BR", "America/Mexico_City": "MX",
+        "America/Toronto": "CA", "Australia/Sydney": "AU",
+        "Africa/Lagos": "NG", "Africa/Johannesburg": "ZA",
+        "Africa/Cairo": "EG", "Africa/Nairobi": "KE",
+      };
+      const localeCountryMap: Record<string, string> = {
+        "en-IN": "IN", "hi-IN": "IN", "en-PK": "PK", "ur-PK": "PK",
+        "en-GB": "GB", "en-AU": "AU", "en-CA": "CA", "pt-BR": "BR",
+        "es-MX": "MX", "ja-JP": "JP", "ko-KR": "KR", "tr-TR": "TR",
+        "ar-AE": "AE", "ar-SA": "SA", "ar-EG": "EG",
+      };
+      const country = tzCountryMap[tz] || localeCountryMap[locale] || locale.split("-")[1]?.toUpperCase() || "US";
+      setRegionPrice(getRegionPrice(country));
+    } catch {
+      // Keep default USD
+    }
   }, []);
 
   useEffect(() => {
@@ -698,43 +782,56 @@ export default function Home() {
         <section id="pricing" className={styles.pricingSection}>
           <div className={styles.container}>
             <div className={styles.sectionHeader}>
-              <h2 className={styles.sectionTitle}>Simple, usage-based pricing.</h2>
-              <p className={styles.sectionSubtitle}>Pay for what you automate. No seat fees.</p>
+              <h2 className={styles.sectionTitle}>Two plans. Zero surprises.</h2>
+              <p className={styles.sectionSubtitle}>Start free with your own AI key, or go Pro and let us handle everything.</p>
             </div>
 
             <div className={styles.pricingGrid}>
-              {PRICING_PLANS.map((plan) => (
-                <article
-                  key={plan.name}
-                  className={`${styles.pricingCard} ${plan.highlighted ? styles.pricingCardHighlighted : ""}`}
-                >
-                  <div className={styles.pricingTopRow}>
-                    <h3 className={styles.planName}>{plan.name}</h3>
-                    {plan.highlighted && <span className={styles.recommendedBadge}>RECOMMENDED</span>}
-                  </div>
-
-                  <p className={styles.planPrice}>
-                    {plan.price}
-                    <span className={styles.planCadence}> {plan.cadence}</span>
-                  </p>
-
-                  <ul className={styles.planFeatureList}>
-                    {plan.features.map((feature) => (
-                      <li key={feature} className={styles.planFeatureItem}>
-                        <span className={styles.checkmark}>✓</span>
-                        <span>{feature}</span>
-                      </li>
-                    ))}
-                  </ul>
-
-                  <a
-                    href={plan.name === "Team" ? "/about" : "/register"}
-                    className={`${styles.pricingCta} ${plan.highlighted ? styles.pricingCtaPrimary : styles.pricingCtaGhost}`}
+              {PRICING_PLANS.map((plan) => {
+                const displayPrice = plan.priceUsd === 0 ? "$0" : `${regionPrice.symbol}${regionPrice.amount.toLocaleString()}`;
+                const displayCadence = plan.priceUsd === 0 ? plan.cadence : plan.cadence;
+                return (
+                  <article
+                    key={plan.name}
+                    className={`${styles.pricingCard} ${plan.highlighted ? styles.pricingCardHighlighted : ""}`}
                   >
-                    {plan.cta}
-                  </a>
-                </article>
-              ))}
+                    <div className={styles.pricingTopRow}>
+                      <h3 className={styles.planName}>{plan.name}</h3>
+                      {plan.highlighted && <span className={styles.recommendedBadge}>BEST VALUE</span>}
+                    </div>
+
+                    <p className={styles.planPrice}>
+                      {displayPrice}
+                      <span className={styles.planCadence}> {displayCadence}</span>
+                    </p>
+                    {plan.priceUsd > 0 && regionPrice.code !== "USD" && (
+                      <p className={styles.planPriceNote}>${plan.priceUsd} USD</p>
+                    )}
+
+                    <ul className={styles.planFeatureList}>
+                      {plan.features.map((feature) => (
+                        <li key={feature} className={styles.planFeatureItem}>
+                          <span className={styles.checkmark}>✓</span>
+                          <span>{feature}</span>
+                        </li>
+                      ))}
+                      {plan.excluded.map((feature) => (
+                        <li key={feature} className={styles.planFeatureItemExcluded}>
+                          <span className={styles.crossmark}>✕</span>
+                          <span>{feature}</span>
+                        </li>
+                      ))}
+                    </ul>
+
+                    <a
+                      href="/register"
+                      className={`${styles.pricingCta} ${plan.highlighted ? styles.pricingCtaPrimary : styles.pricingCtaGhost}`}
+                    >
+                      {plan.cta}
+                    </a>
+                  </article>
+                );
+              })}
             </div>
           </div>
         </section>

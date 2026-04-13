@@ -1,8 +1,10 @@
 import { NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { aiApiKeySchema } from "@/lib/validators";
-import { saveApiKey, removeApiKey, getUserApiKeys } from "@/lib/ai/key-manager";
+import { saveApiKey, removeApiKey, getUserApiKeys, revalidateApiKey } from "@/lib/ai/key-manager";
 import { checkApiRateLimit } from "@/lib/utils/rate-limit";
+import connectDB from "@/lib/db/connection";
+import User from "@/lib/db/models/user";
 import type { AIProviderName } from "@/lib/ai/provider";
 
 export async function GET() {
@@ -13,7 +15,10 @@ export async function GET() {
     }
 
     const keys = await getUserApiKeys(session.user.id);
-    return NextResponse.json({ keys });
+    await connectDB();
+    const user = await User.findById(session.user.id).lean();
+    const preferredProvider = (user as unknown as { preferredAIProvider?: string })?.preferredAIProvider || "";
+    return NextResponse.json({ keys, preferredProvider });
   } catch (error) {
     console.error("[Settings/ApiKeys] Error:", error);
     return NextResponse.json({ error: "Internal server error" }, { status: 500 });
@@ -65,7 +70,7 @@ export async function DELETE(req: Request) {
 
     const { searchParams } = new URL(req.url);
     const provider = searchParams.get("provider");
-    if (!provider || !["gemini", "openai", "anthropic", "groq"].includes(provider)) {
+    if (!provider || !["gemini", "openai", "anthropic", "groq", "openrouter"].includes(provider)) {
       return NextResponse.json({ error: "Invalid provider" }, { status: 400 });
     }
 
@@ -73,6 +78,51 @@ export async function DELETE(req: Request) {
     return NextResponse.json({ success: true });
   } catch (error) {
     console.error("[Settings/ApiKeys] Error:", error);
+    return NextResponse.json({ error: "Internal server error" }, { status: 500 });
+  }
+}
+
+export async function PATCH(req: Request) {
+  try {
+    const session = await auth();
+    if (!session?.user?.id) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+    const { searchParams } = new URL(req.url);
+    const provider = searchParams.get("provider");
+    if (!provider || !["gemini", "openai", "anthropic", "groq", "openrouter"].includes(provider)) {
+      return NextResponse.json({ error: "Invalid provider" }, { status: 400 });
+    }
+    const result = await revalidateApiKey(session.user.id, provider as AIProviderName);
+    if ("error" in result) {
+      return NextResponse.json({ error: result.error }, { status: 400 });
+    }
+    return NextResponse.json({ isValid: result.isValid });
+  } catch (error) {
+    console.error("[Settings/ApiKeys] Revalidate error:", error);
+    return NextResponse.json({ error: "Internal server error" }, { status: 500 });
+  }
+}
+
+export async function PUT(req: Request) {
+  try {
+    const session = await auth();
+    if (!session?.user?.id) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+    const body = await req.json();
+    const { preferredProvider } = body;
+    if (preferredProvider !== "" && !["gemini", "openai", "anthropic", "groq", "openrouter"].includes(preferredProvider)) {
+      return NextResponse.json({ error: "Invalid provider" }, { status: 400 });
+    }
+    await connectDB();
+    await User.updateOne(
+      { _id: session.user.id },
+      { $set: { preferredAIProvider: preferredProvider } }
+    );
+    return NextResponse.json({ success: true });
+  } catch (error) {
+    console.error("[Settings/ApiKeys] Set preferred error:", error);
     return NextResponse.json({ error: "Internal server error" }, { status: 500 });
   }
 }

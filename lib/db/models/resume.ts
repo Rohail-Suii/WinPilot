@@ -44,6 +44,7 @@ export interface IResume extends Document {
     tech: string[];
   }[];
   rawText: string;
+  customTailoringPrompt?: string;
   pdfUrl?: string;
   createdAt: Date;
   updatedAt: Date;
@@ -96,6 +97,7 @@ const ResumeSchema = new Schema<IResume>(
       },
     ],
     rawText: { type: String, default: "" },
+    customTailoringPrompt: { type: String, default: "" },
     pdfUrl: String,
   },
   { timestamps: true }

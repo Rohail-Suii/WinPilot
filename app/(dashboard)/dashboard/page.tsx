@@ -10,20 +10,20 @@ import { CardSkeleton } from "@/components/ui/spinner";
 
 export const metadata: Metadata = {
   title: "Dashboard",
-  description: "Your LinkedBoost dashboard - track automation and activity.",
+  description: "Your InPilot dashboard - track automation and activity.",
 };
 
 export default async function DashboardPage() {
   const session = await auth();
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-8 max-w-[1400px]">
       {/* Welcome */}
       <div>
-        <h2 className="text-2xl font-bold text-white">
+        <h2 className="text-2xl font-bold text-white tracking-tight">
           Welcome back, {session?.user?.name?.split(" ")[0] || "there"}
         </h2>
-        <p className="text-white/50 mt-1">
+        <p className="text-[#888888] mt-1 text-sm">
           Here&apos;s your LinkedIn automation overview
         </p>
       </div>

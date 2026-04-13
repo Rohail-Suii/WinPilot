@@ -16,4 +16,4 @@ export interface AIProvider {
   validateKey(): Promise<boolean>;
 }
 
-export type AIProviderName = "gemini" | "openai" | "anthropic" | "groq";
+export type AIProviderName = "gemini" | "openai" | "anthropic" | "groq" | "openrouter";

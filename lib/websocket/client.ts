@@ -43,7 +43,24 @@ function setupEventListeners(socket: Socket) {
     "limit:warning",
     "limit:reached",
     "safety:alert",
+    "automation:log",
   ];
+
+  function pushLog(
+    level: "info" | "warn" | "error" | "success",
+    source: "extension" | "api" | "content-script" | "system",
+    message: string,
+    details?: string,
+  ) {
+    useExtensionStore.getState().addLog({
+      id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      timestamp: new Date().toISOString(),
+      level,
+      source,
+      message,
+      details,
+    });
+  }
 
   for (const event of events) {
     socket.on(event, (data: Record<string, unknown>) => {
@@ -53,22 +70,30 @@ function setupEventListeners(socket: Socket) {
       switch (event) {
         case "extension:connected":
           store.setConnected(true);
+          pushLog("success", "system", "Extension connected");
           break;
         case "extension:disconnected":
           store.setConnected(false);
           store.setCurrentTask(null);
+          store.setAutomationRunning(false);
+          pushLog("warn", "system", "Extension disconnected");
           break;
         case "task:start":
           store.setCurrentTask(data.label as string || "Running task...");
           store.setLastTaskError(null);
+          store.setAutomationRunning(true);
+          pushLog("info", "system", data.label as string || "Task started");
           break;
         case "task:progress":
           if (data.message) store.setCurrentTask(data.message as string);
+          pushLog("info", "extension", data.message as string || "Progress update");
           break;
         case "task:complete":
           store.setLastTaskError(null);
           store.setAiQuotaStatus(null);
           store.setCurrentTask(null);
+          store.setAutomationRunning(false);
+          pushLog("success", "system", data.message as string || "Task complete");
           break;
         case "task:error":
           if (data.message) store.setLastTaskError(data.message as string);
@@ -82,7 +107,26 @@ function setupEventListeners(socket: Socket) {
             });
           }
           store.setCurrentTask(null);
+          store.setAutomationRunning(false);
+          pushLog("error", "extension", data.message as string || "Task error");
           break;
+        case "job:found":
+          pushLog("info", "extension", data.message as string || `Found ${data.count || 0} jobs (page ${data.page || "?"})`);
+          break;
+        case "job:applying":
+          pushLog("info", "extension", data.message as string || `Applying to ${data.jobTitle || "job"} at ${data.company || "company"}`);
+          break;
+        case "job:applied":
+          pushLog("success", "extension", data.message as string || `Applied to ${data.jobTitle || "job"} at ${data.company || "company"}`);
+          break;
+        case "automation:log": {
+          const level = (data.level as string) || "info";
+          const source = (data.source as string) || "extension";
+          const validLevel = (["info", "warn", "error", "success"].includes(level) ? level : "info") as "info" | "warn" | "error" | "success";
+          const validSource = (["extension", "api", "content-script", "system"].includes(source) ? source : "extension") as "extension" | "api" | "content-script" | "system";
+          pushLog(validLevel, validSource, data.message as string || "", data.details as string);
+          break;
+        }
         case "limit:warning":
         case "limit:reached":
         case "safety:alert":
@@ -95,6 +139,7 @@ function setupEventListeners(socket: Socket) {
             read: false,
             createdAt: new Date().toISOString(),
           });
+          pushLog("warn", "system", data.message as string || event);
           break;
       }
     });

@@ -766,20 +766,44 @@ async function startAutomation(searchId, options = {}) {
 
     if (automationAborted) return cleanup("Automation stopped by user");
 
+    // Helper: build a search URL for a specific page number
+    function getSearchUrlForPage(baseUrl, pageNum) {
+      try {
+        const url = new URL(baseUrl);
+        if (pageNum > 1) {
+          url.searchParams.set("start", String((pageNum - 1) * 25));
+        } else {
+          url.searchParams.delete("start");
+        }
+        return url.toString();
+      } catch {
+        return baseUrl;
+      }
+    }
+
     // Configuration for multi-page processing
-    const MAX_PAGES = 5; // Maximum pages to process
-    const MAX_JOBS_PER_RUN = 50; // Maximum total jobs to process across all pages
+    const MAX_PAGES = 5;
+    const MAX_JOBS_PER_RUN = 50;
     let totalAppliedCount = 0;
     let totalFailedCount = 0;
     let totalSkippedQualificationCount = 0;
     let currentPage = 1;
-    const processedJobIds = new Set(); // Track processed jobs to avoid duplicates across pages
+    const processedJobIds = new Set();
 
     // Multi-page loop
     pageLoop: for (let pageNum = 1; pageNum <= MAX_PAGES; pageNum++) {
       if (automationAborted) return cleanup("Automation stopped by user");
-      
+
       currentPage = pageNum;
+      const currentPageUrl = getSearchUrlForPage(startData.url, pageNum);
+
+      // Navigate to the correct page (only if pageNum > 1 or first time)
+      if (pageNum > 1) {
+        console.log(`[LinkedBoost] Navigating to page ${pageNum}: ${currentPageUrl}`);
+        await navigateAndWait(tab.id, currentPageUrl);
+        await randomDelay(2000, 3000);
+      }
+
       console.log(`[LinkedBoost] ====== Processing Page ${pageNum}/${MAX_PAGES} ======`);
       reportProgress("task:progress", { message: `Processing page ${pageNum}...` });
 
@@ -799,7 +823,7 @@ async function startAutomation(searchId, options = {}) {
       if (scrapedJobs.length > 0) {
         console.log(`[LinkedBoost] First job:`, JSON.stringify(scrapedJobs[0]));
       }
-      
+
       if (scrapedJobs.length === 0) {
         if (pageNum === 1) {
           console.error(`[LinkedBoost] Step 2 FAILED: scrapeResult =`, JSON.stringify(scrapeResult));
@@ -831,20 +855,6 @@ async function startAutomation(searchId, options = {}) {
 
       if (dedupedEligibleJobs.length === 0) {
         console.log(`[LinkedBoost] No new eligible jobs on page ${pageNum}, trying next page...`);
-        // Try to go to next page
-        const paginationResult = await sendToContentScript(tab.id, {
-          type: "EXECUTE_ACTION",
-          command: "CLICK_PAGINATION_NEXT",
-          actionId: `pagination-${pageNum}`,
-        });
-        
-        if (!paginationResult?.data?.clicked) {
-          console.log(`[LinkedBoost] No more pages available after page ${pageNum}`);
-          break pageLoop;
-        }
-        
-        // Wait for page to load after pagination
-        await randomDelay(2000, 3000);
         continue;
       }
 
@@ -855,10 +865,9 @@ async function startAutomation(searchId, options = {}) {
       });
 
       const storedRules = await getStoredFormRules();
-      // Limit jobs per page, but also check total limit
       const remainingQuota = MAX_JOBS_PER_RUN - totalAppliedCount - totalFailedCount;
       const jobsToProcessOnThisPage = Math.min(dedupedEligibleJobs.length, remainingQuota, 25);
-      
+
       if (jobsToProcessOnThisPage <= 0) {
         console.log(`[LinkedBoost] Reached max jobs limit (${MAX_JOBS_PER_RUN}), stopping`);
         break pageLoop;
@@ -867,11 +876,12 @@ async function startAutomation(searchId, options = {}) {
       let pageAppliedCount = 0;
       let pageFailedCount = 0;
       let pageSkippedQualificationCount = 0;
+      let needsReturnToSearchPage = false;
 
       for (let jobIndex = 0; jobIndex < jobsToProcessOnThisPage; jobIndex++) {
         const candidateJob = dedupedEligibleJobs[jobIndex];
         targetApp = null;
-        
+
         // Mark as processed to avoid reprocessing
         processedJobIds.add(candidateJob.jobId || candidateJob.url);
 
@@ -879,13 +889,32 @@ async function startAutomation(searchId, options = {}) {
 
         try {
           console.log(`[LinkedBoost] Processing job ${jobIndex + 1}/${jobsToProcessOnThisPage} (page ${pageNum}): ${candidateJob.title}`);
-          await navigateAndWait(tab.id, startData.url);
-          await randomDelay(900, 1500);
+
+          // Navigate back to the CORRECT page if we navigated away (e.g., after applying)
+          if (needsReturnToSearchPage) {
+            console.log(`[LinkedBoost] Returning to search results page ${pageNum}...`);
+            await navigateAndWait(tab.id, currentPageUrl);
+            await randomDelay(900, 1500);
+            needsReturnToSearchPage = false;
+          }
+
+          // Verify we're on the right page before selecting
+          const pageInfoCheck = await sendToContentScript(tab.id, {
+            type: "EXECUTE_ACTION",
+            command: "GET_PAGE_INFO",
+            actionId: `pagecheck-${pageNum}-${jobIndex}`,
+          });
+          const currentTabUrl = pageInfoCheck?.data?.url || "";
+          if (!currentTabUrl.includes("/jobs/search") && !currentTabUrl.includes("/jobs/collection")) {
+            console.log(`[LinkedBoost] Not on search results page (url=${currentTabUrl}), navigating back...`);
+            await navigateAndWait(tab.id, currentPageUrl);
+            await randomDelay(900, 1500);
+          }
 
           const selectResult = await sendToContentScript(tab.id, {
             type: "EXECUTE_ACTION",
             command: "SELECT_JOB_FROM_LIST",
-            actionId: `select-${jobIndex}`,
+            actionId: `select-p${pageNum}-${jobIndex}`,
             jobId: candidateJob.jobId,
             jobUrl: candidateJob.url,
           });
@@ -900,10 +929,12 @@ async function startAutomation(searchId, options = {}) {
             continue;
           }
 
+          await randomDelay(800, 1200);
+
           const qualResult = await sendToContentScript(tab.id, {
             type: "EXECUTE_ACTION",
             command: "CHECK_JOB_QUALIFICATION",
-            actionId: `qual-${jobIndex}`,
+            actionId: `qual-p${pageNum}-${jobIndex}`,
             maxAttempts: 12,
             delayMs: 350,
           });
@@ -912,16 +943,12 @@ async function startAutomation(searchId, options = {}) {
             matched: false,
             text: "",
           };
-          
-          // Determine if we should proceed with application:
-          // - If status is "unknown" (LinkedIn didn't show qualification info), proceed anyway
-          // - If matched is true (matches_some, matches_several, etc.), proceed
-          // - If status explicitly indicates missing/no match, skip
-          const shouldSkipJob = 
-            qualification.status === "missing_required" || 
+
+          // Proceed if matched OR if status is unknown (LinkedIn didn't show qualification info)
+          const shouldSkipJob =
+            qualification.status === "missing_required" ||
             qualification.status === "no_match" ||
             (qualification.matched === false && qualification.status !== "unknown");
-          
           const qualificationLabel =
             qualification.text ||
             String(qualification.status || "unknown").replace(/_/g, " ");
@@ -948,7 +975,7 @@ async function startAutomation(searchId, options = {}) {
             const detailResult = await sendToContentScript(tab.id, {
               type: "EXECUTE_ACTION",
               command: "SCRAPE_JOB_DETAIL",
-              actionId: `detail-${jobIndex}-${attempt}`,
+              actionId: `detail-p${pageNum}-${jobIndex}-${attempt}`,
             });
             detail = detailResult?.data?.detail;
             if (detail?.description) break;
@@ -1023,19 +1050,33 @@ async function startAutomation(searchId, options = {}) {
             }
           }
 
-          await navigateAndWait(tab.id, targetApp.jobUrl);
-          await randomDelay(1000, 1600);
-
-          const easyApplyResult = await sendToContentScript(tab.id, {
+          // Try clicking Easy Apply from the search results side panel first
+          // (avoids navigating away from the search page)
+          let easyApplyResult = await sendToContentScript(tab.id, {
             type: "EXECUTE_ACTION",
             command: "CLICK_EASY_APPLY",
             actionId: `apply-${targetApp._id}`,
           });
+
           if (!easyApplyResult?.data?.clicked) {
-            throw new Error(`Easy Apply button not found: ${easyApplyResult?.data?.error || "unknown"}`);
+            // If Easy Apply button wasn't found on side panel, navigate to the job page
+            console.log(`[LinkedBoost] Easy Apply not found on side panel, navigating to job page...`);
+            await navigateAndWait(tab.id, targetApp.jobUrl);
+            needsReturnToSearchPage = true;
+            await randomDelay(1000, 1600);
+
+            easyApplyResult = await sendToContentScript(tab.id, {
+              type: "EXECUTE_ACTION",
+              command: "CLICK_EASY_APPLY",
+              actionId: `apply-${targetApp._id}-retry`,
+            });
+            if (!easyApplyResult?.data?.clicked) {
+              throw new Error(`Easy Apply button not found: ${easyApplyResult?.data?.error || "unknown"}`);
+            }
           }
 
           if (easyApplyResult?.data?.sdui) {
+            needsReturnToSearchPage = true;
             await waitForTabLoad(tab.id);
             await randomDelay(1400, 2200);
             await ensureContentScriptReady(tab.id);
@@ -1141,6 +1182,15 @@ async function startAutomation(searchId, options = {}) {
             const navAction = navResult?.data?.action;
             if (navAction === "submitted") {
               submitted = true;
+              // After submission, dismiss the confirmation dialog if present
+              await randomDelay(1000, 1500);
+              try {
+                await sendToContentScript(tab.id, {
+                  type: "EXECUTE_ACTION",
+                  command: "GET_PAGE_INFO",
+                  actionId: `post-submit-check-${targetApp._id}`,
+                });
+              } catch { /* ignore - page may have navigated */ }
               break;
             }
 
@@ -1160,6 +1210,7 @@ async function startAutomation(searchId, options = {}) {
                 },
                 targetApp.jobTitle
               );
+              needsReturnToSearchPage = true;
               await waitForTabLoad(tab.id);
               await randomDelay(1400, 2200);
               await ensureContentScriptReady(tab.id);
@@ -1195,6 +1246,9 @@ async function startAutomation(searchId, options = {}) {
             throw new Error("Application was not submitted within the allowed form steps");
           }
 
+          // Mark that we need to return to search results for the next job
+          needsReturnToSearchPage = true;
+
           if (targetApp?._id) {
             await apiCall(`/api/jobs/automate?step=complete`, {
               applicationId: targetApp._id,
@@ -1226,6 +1280,8 @@ async function startAutomation(searchId, options = {}) {
             message: `Skipped ${candidateJob.title}: ${jobErr.message}`,
             jobTitle: candidateJob.title,
           });
+          // If the error might have caused navigation, flag for return
+          needsReturnToSearchPage = true;
         }
       }
 
@@ -1238,32 +1294,6 @@ async function startAutomation(searchId, options = {}) {
       if (totalAppliedCount + totalFailedCount >= MAX_JOBS_PER_RUN) {
         console.log(`[LinkedBoost] Reached max jobs limit (${MAX_JOBS_PER_RUN}), stopping pagination`);
         break pageLoop;
-      }
-
-      // Try to go to the next page
-      if (pageNum < MAX_PAGES) {
-        console.log(`[LinkedBoost] Attempting to navigate to page ${pageNum + 1}...`);
-        reportProgress("task:progress", { message: `Navigating to page ${pageNum + 1}...` });
-
-        // First, navigate back to the search results page
-        await navigateAndWait(tab.id, startData.url);
-        await randomDelay(1500, 2500);
-
-        const paginationResult = await sendToContentScript(tab.id, {
-          type: "EXECUTE_ACTION",
-          command: "CLICK_PAGINATION_NEXT",
-          actionId: `pagination-${pageNum}`,
-        });
-
-        if (!paginationResult?.data?.clicked) {
-          console.log(`[LinkedBoost] No more pages available after page ${pageNum}`);
-          break pageLoop;
-        }
-
-        console.log(`[LinkedBoost] Successfully navigated to page ${pageNum + 1}`);
-
-        // Wait for the new page to fully load
-        await randomDelay(2500, 3500);
       }
     } // End of pageLoop
 

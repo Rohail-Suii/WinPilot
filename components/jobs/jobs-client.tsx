@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { toast } from "sonner";
@@ -27,6 +27,8 @@ import {
   Zap,
   AlertTriangle,
   Bot,
+  Terminal,
+  ArrowDown,
 } from "lucide-react";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -102,10 +104,11 @@ export function JobsClient() {
   const [statusFilter, setStatusFilter] = useState("");
   const [expandedApp, setExpandedApp] = useState<string | null>(null);
 
-  const { isConnected, currentTask, lastTaskError, aiQuotaStatus } = useExtensionStore();
+  const { isConnected, currentTask, lastTaskError, aiQuotaStatus, automationRunning, automationLogs, clearLogs, setAutomationRunning } = useExtensionStore();
   const { startAutomation, stopAutomation } = useWebSocket();
-  const [automationRunning, setAutomationRunning] = useState(false);
   const [useAI, setUseAI] = useState(true);
+  const logsEndRef = useRef<HTMLDivElement>(null);
+  const [autoScroll, setAutoScroll] = useState(true);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -195,14 +198,22 @@ export function JobsClient() {
     return () => clearInterval(interval);
   }, [automationRunning, fetchApplications, fetchStats]);
 
-  // Detect when automation completes via currentTask
+  // Refresh data when automation completes
+  const wasRunning = useRef(false);
   useEffect(() => {
-    if (currentTask === null && automationRunning) {
-      setAutomationRunning(false);
+    if (!automationRunning && wasRunning.current) {
       fetchApplications();
       fetchStats();
     }
-  }, [currentTask, automationRunning, fetchApplications, fetchStats]);
+    wasRunning.current = automationRunning;
+  }, [automationRunning, fetchApplications, fetchStats]);
+
+  // Auto-scroll logs
+  useEffect(() => {
+    if (autoScroll && logsEndRef.current) {
+      logsEndRef.current.scrollIntoView({ behavior: "smooth" });
+    }
+  }, [automationLogs.length, autoScroll]);
 
   return (
     <div className="space-y-6">
@@ -270,6 +281,12 @@ export function JobsClient() {
           </TabsTrigger>
           <TabsTrigger value="applications">
             <FileText className="h-4 w-4 mr-2" />Applications ({appTotal})
+          </TabsTrigger>
+          <TabsTrigger value="logs">
+            <Terminal className="h-4 w-4 mr-2" />Logs
+            {automationLogs.length > 0 && (
+              <Badge variant="default" className="ml-1.5 text-[10px] px-1.5 py-0">{automationLogs.length}</Badge>
+            )}
           </TabsTrigger>
         </TabsList>
 
@@ -476,6 +493,63 @@ export function JobsClient() {
               ))}
             </div>
           )}
+        </TabsContent>
+
+        <TabsContent value="logs">
+          <div className="flex items-center justify-between mb-3">
+            <p className="text-xs text-white/40">{automationLogs.length} log entries</p>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setAutoScroll(!autoScroll)}
+                className={`flex items-center gap-1 text-xs px-2 py-1 rounded-md transition-colors ${
+                  autoScroll ? "bg-blue-500/20 text-blue-300" : "bg-white/5 text-white/40"
+                }`}
+              >
+                <ArrowDown className="h-3 w-3" />Auto-scroll
+              </button>
+              <Button variant="ghost" size="sm" onClick={clearLogs} className="text-xs text-white/40 hover:text-white/60">
+                Clear
+              </Button>
+            </div>
+          </div>
+
+          <div className="rounded-xl bg-[#0d1117] border border-white/10 overflow-hidden">
+            <div className="max-h-[500px] overflow-y-auto p-3 font-mono text-xs space-y-0.5">
+              {automationLogs.length === 0 ? (
+                <p className="text-white/20 text-center py-8">
+                  No logs yet. Start an automation to see real-time logs here.
+                </p>
+              ) : (
+                automationLogs.map((log) => (
+                  <div key={log.id} className="flex gap-2 py-0.5 hover:bg-white/[0.03] rounded px-1">
+                    <span className="text-white/20 shrink-0 tabular-nums">
+                      {new Date(log.timestamp).toLocaleTimeString("en-US", { hour12: false, hour: "2-digit", minute: "2-digit", second: "2-digit" })}
+                    </span>
+                    <span className={`shrink-0 w-[70px] ${
+                      log.source === "api" ? "text-cyan-400/70" :
+                      log.source === "content-script" ? "text-purple-400/70" :
+                      log.source === "system" ? "text-amber-400/70" :
+                      "text-blue-400/70"
+                    }`}>
+                      [{log.source}]
+                    </span>
+                    <span className={`${
+                      log.level === "error" ? "text-red-400" :
+                      log.level === "warn" ? "text-amber-300" :
+                      log.level === "success" ? "text-emerald-400" :
+                      "text-white/70"
+                    }`}>
+                      {log.message}
+                    </span>
+                    {log.details && (
+                      <span className="text-white/25 truncate">{log.details}</span>
+                    )}
+                  </div>
+                ))
+              )}
+              <div ref={logsEndRef} />
+            </div>
+          </div>
         </TabsContent>
       </Tabs>
 

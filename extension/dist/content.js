@@ -191,11 +191,6 @@
             console.warn("[LinkedBoost CS] SCRAPE_JOB_LISTINGS: No listing elements found within timeout");
           }
           await new Promise((r) => setTimeout(r, 500));
-          
-          // Scroll the job list to load all jobs via infinite scroll
-          console.log("[LinkedBoost CS] SCRAPE_JOB_LISTINGS: Scrolling to load all jobs...");
-          await scrollJobListToLoadAll();
-          
           const jobs = scrapeJobListings();
           console.log(`[LinkedBoost CS] SCRAPE_JOB_LISTINGS: Scraped ${jobs.length} jobs`);
           if (jobs.length > 0) console.log("[LinkedBoost CS] First job:", JSON.stringify(jobs[0]));
@@ -391,158 +386,6 @@
   }
 
   // --- Phase 2: Job Scraping Helpers ---
-
-  /**
-   * Scrolls the job list container to load all jobs via LinkedIn's infinite scroll.
-   * Returns the number of jobs loaded.
-   */
-  async function scrollJobListToLoadAll(maxScrollAttempts = 20) {
-    const listSelectors = [
-      ".jobs-search-results-list",
-      ".jobs-search-results__list",
-      ".scaffold-layout__list-container",
-      "[class*='jobs-search-results']",
-      ".jobs-search-two-pane__results"
-    ];
-    
-    let jobList = null;
-    for (const sel of listSelectors) {
-      jobList = document.querySelector(sel);
-      if (jobList) break;
-    }
-    
-    if (!jobList) {
-      console.log("[LinkedBoost CS] scrollJobListToLoadAll: No job list container found");
-      return 0;
-    }
-    
-    console.log("[LinkedBoost CS] scrollJobListToLoadAll: Starting infinite scroll...");
-    
-    let previousJobCount = 0;
-    let sameCountAttempts = 0;
-    const maxSameCount = 3; // Stop after 3 attempts with no new jobs
-    
-    for (let i = 0; i < maxScrollAttempts; i++) {
-      // Scroll the job list container to bottom
-      jobList.scrollTop = jobList.scrollHeight;
-      
-      // Also try scrolling the inner list if it exists
-      const innerList = jobList.querySelector("ul, .jobs-search-results__list");
-      if (innerList && innerList !== jobList) {
-        innerList.scrollTop = innerList.scrollHeight;
-      }
-      
-      // Wait for LinkedIn to load more jobs
-      await new Promise(r => setTimeout(r, 1000));
-      
-      // Count current jobs
-      const currentJobs = document.querySelectorAll(
-        ".jobs-search-results__list-item, .job-card-container, .scaffold-layout__list-item, " +
-        ".jobs-search-results-list__list-item, [data-occludable-job-id], " +
-        "li.jobs-search-results__list-item, .job-card-list"
-      );
-      const currentCount = currentJobs.length;
-      
-      console.log(`[LinkedBoost CS] scrollJobListToLoadAll: Scroll ${i + 1}/${maxScrollAttempts}, jobs found: ${currentCount}`);
-      
-      if (currentCount === previousJobCount) {
-        sameCountAttempts++;
-        if (sameCountAttempts >= maxSameCount) {
-          console.log(`[LinkedBoost CS] scrollJobListToLoadAll: No new jobs after ${maxSameCount} attempts, stopping`);
-          break;
-        }
-      } else {
-        sameCountAttempts = 0;
-      }
-      
-      previousJobCount = currentCount;
-    }
-    
-    // Scroll back to top for consistent state
-    jobList.scrollTop = 0;
-    await new Promise(r => setTimeout(r, 300));
-    
-    console.log(`[LinkedBoost CS] scrollJobListToLoadAll: Finished, total jobs: ${previousJobCount}`);
-    return previousJobCount;
-  }
-
-  /**
-   * Click the "Next" pagination button to go to the next page of job results.
-   * Returns { clicked: boolean, hasNextPage: boolean, currentPage: number }
-   */
-  async function clickPaginationNext() {
-    // LinkedIn pagination selectors
-    const paginationSelectors = [
-      // Current active page button
-      'button[aria-current="true"]',
-      'li.artdeco-pagination__indicator--number.active button',
-      '.artdeco-pagination__indicator--number.selected button',
-    ];
-    
-    const nextButtonSelectors = [
-      // Next button
-      'button[aria-label="View next page"]',
-      'button[aria-label="Next"]',
-      '.artdeco-pagination__button--next',
-      'li.artdeco-pagination__indicator:last-child button',
-      // Page number buttons (we'll find the next one)
-    ];
-    
-    let currentPage = 1;
-    let hasNextPage = false;
-    
-    // Try to find current page number
-    for (const sel of paginationSelectors) {
-      const activeBtn = document.querySelector(sel);
-      if (activeBtn) {
-        const pageNum = parseInt(activeBtn.textContent?.trim() || "1", 10);
-        if (!isNaN(pageNum)) {
-          currentPage = pageNum;
-          break;
-        }
-      }
-    }
-    
-    console.log(`[LinkedBoost CS] clickPaginationNext: Current page appears to be ${currentPage}`);
-    
-    // Try to find and click the "Next" button
-    for (const sel of nextButtonSelectors) {
-      const nextBtn = document.querySelector(sel);
-      if (nextBtn && !nextBtn.disabled && nextBtn.offsetParent !== null) {
-        console.log(`[LinkedBoost CS] clickPaginationNext: Found next button with selector: ${sel}`);
-        nextBtn.click();
-        hasNextPage = true;
-        
-        // Wait for page to load
-        await new Promise(r => setTimeout(r, 2000));
-        
-        return { clicked: true, hasNextPage: true, currentPage, nextPage: currentPage + 1 };
-      }
-    }
-    
-    // Alternative: try to find the next page number button directly
-    const allPageBtns = document.querySelectorAll(
-      '.artdeco-pagination__indicator--number button, ' +
-      'li[data-test-pagination-page-btn] button'
-    );
-    
-    for (const btn of allPageBtns) {
-      const pageNum = parseInt(btn.textContent?.trim() || "0", 10);
-      if (pageNum === currentPage + 1) {
-        console.log(`[LinkedBoost CS] clickPaginationNext: Clicking page ${pageNum} button`);
-        btn.click();
-        hasNextPage = true;
-        
-        // Wait for page to load
-        await new Promise(r => setTimeout(r, 2000));
-        
-        return { clicked: true, hasNextPage: true, currentPage, nextPage: pageNum };
-      }
-    }
-    
-    console.log(`[LinkedBoost CS] clickPaginationNext: No next page found`);
-    return { clicked: false, hasNextPage: false, currentPage, nextPage: null };
-  }
 
   function scrapeJobListings() {
     const jobCards = document.querySelectorAll(
@@ -764,6 +607,71 @@
       selected: true,
       href: selectedAnchor.getAttribute("href") || selectedAnchor.href || "",
     };
+  }
+
+  /**
+   * Click the "Next" pagination button to go to the next page of job results.
+   * Returns { clicked: boolean, hasNextPage: boolean, currentPage: number }
+   */
+  async function clickPaginationNext() {
+    // LinkedIn pagination selectors for current active page
+    const paginationSelectors = [
+      'button[aria-current="true"]',
+      'li.artdeco-pagination__indicator--number.active button',
+      '.artdeco-pagination__indicator--number.selected button',
+    ];
+
+    const nextButtonSelectors = [
+      'button[aria-label="View next page"]',
+      'button[aria-label="Next"]',
+      '.artdeco-pagination__button--next',
+    ];
+
+    let currentPage = 1;
+
+    // Try to find current page number
+    for (const sel of paginationSelectors) {
+      const activeBtn = document.querySelector(sel);
+      if (activeBtn) {
+        const pageNum = parseInt(activeBtn.textContent?.trim() || "1", 10);
+        if (!isNaN(pageNum)) {
+          currentPage = pageNum;
+          break;
+        }
+      }
+    }
+
+    console.log(`[LinkedBoost CS] clickPaginationNext: Current page appears to be ${currentPage}`);
+
+    // Try to find and click the "Next" button
+    for (const sel of nextButtonSelectors) {
+      const nextBtn = document.querySelector(sel);
+      if (nextBtn && !nextBtn.disabled && nextBtn.offsetParent !== null) {
+        console.log(`[LinkedBoost CS] clickPaginationNext: Found next button with selector: ${sel}`);
+        nextBtn.click();
+        await new Promise((r) => setTimeout(r, 2000));
+        return { clicked: true, hasNextPage: true, currentPage, nextPage: currentPage + 1 };
+      }
+    }
+
+    // Alternative: try to find the next page number button directly
+    const allPageBtns = document.querySelectorAll(
+      '.artdeco-pagination__indicator--number button, ' +
+      'li[data-test-pagination-page-btn] button'
+    );
+
+    for (const btn of allPageBtns) {
+      const pageNum = parseInt(btn.textContent?.trim() || "0", 10);
+      if (pageNum === currentPage + 1) {
+        console.log(`[LinkedBoost CS] clickPaginationNext: Clicking page ${pageNum} button`);
+        btn.click();
+        await new Promise((r) => setTimeout(r, 2000));
+        return { clicked: true, hasNextPage: true, currentPage, nextPage: pageNum };
+      }
+    }
+
+    console.log(`[LinkedBoost CS] clickPaginationNext: No next page found`);
+    return { clicked: false, hasNextPage: false, currentPage, nextPage: null };
   }
 
   function scrapeJobDetail() {

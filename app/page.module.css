@@ -907,8 +907,11 @@
 .pricingGrid {
   margin-top: 42px;
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 16px;
+  max-width: 720px;
+  margin-left: auto;
+  margin-right: auto;
 }
 
 .pricingCard {
@@ -985,6 +988,28 @@
 
 .checkmark {
   color: var(--accent);
+}
+
+.crossmark {
+  color: var(--text-secondary);
+  opacity: 0.4;
+}
+
+.planFeatureItemExcluded {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  color: var(--text-secondary);
+  font-size: 14px;
+  line-height: 1.6;
+  opacity: 0.4;
+  text-decoration: line-through;
+}
+
+.planPriceNote {
+  margin: 4px 0 0;
+  font-size: 13px;
+  color: var(--text-secondary);
 }
 
 .pricingCta {

@@ -36,11 +36,11 @@ function PasswordStrength({ password }: { password: string }) {
       {checks.map((check) => (
         <div key={check.label} className="flex items-center gap-2 text-xs">
           {check.met ? (
-            <Check className="h-3 w-3 text-emerald-400" />
+            <Check className="h-3 w-3 text-[#28C840]" />
           ) : (
-            <X className="h-3 w-3 text-white/30" />
+            <X className="h-3 w-3 text-[#333333]" />
           )}
-          <span className={check.met ? "text-emerald-400" : "text-white/30"}>
+          <span className={check.met ? "text-[#28C840]" : "text-[#333333]">
             {check.label}
           </span>
         </div>
@@ -90,12 +90,12 @@ export default function RegisterPage() {
   }
 
   return (
-    <Card className="relative z-10 w-full max-w-md border-white/10 bg-white/5 backdrop-blur-2xl">
+    <Card className="relative z-10 w-full max-w-md border-[#1A1A1A] bg-[#111111]">
       <CardHeader className="text-center">
-        <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-xl bg-blue-600 shadow-lg shadow-blue-600/30">
-          <Zap className="h-6 w-6 text-white" />
+        <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-xl bg-[#00E5FF]/10 border border-[#00E5FF]/20">
+          <Zap className="h-6 w-6 text-[#00E5FF]" />
         </div>
-        <CardTitle className="text-2xl">Create your account</CardTitle>
+        <CardTitle className="text-2xl tracking-tight">Create your account</CardTitle>
         <CardDescription>
           Start automating your LinkedIn presence
         </CardDescription>
@@ -111,7 +111,7 @@ export default function RegisterPage() {
               {...register("name")}
             />
             {errors.name && (
-              <p className="text-xs text-red-400">{errors.name.message}</p>
+              <p className="text-xs text-[#FF5F57]">{errors.name.message}</p>
             )}
           </div>
           <div className="space-y-2">
@@ -124,7 +124,7 @@ export default function RegisterPage() {
               {...register("email")}
             />
             {errors.email && (
-              <p className="text-xs text-red-400">{errors.email.message}</p>
+              <p className="text-xs text-[#FF5F57]">{errors.email.message}</p>
             )}
           </div>
           <div className="space-y-2">
@@ -137,7 +137,7 @@ export default function RegisterPage() {
               {...register("password")}
             />
             {errors.password && (
-              <p className="text-xs text-red-400">{errors.password.message}</p>
+              <p className="text-xs text-[#FF5F57]">{errors.password.message}</p>
             )}
             <PasswordStrength password={password} />
           </div>
@@ -151,7 +151,7 @@ export default function RegisterPage() {
               {...register("confirmPassword")}
             />
             {errors.confirmPassword && (
-              <p className="text-xs text-red-400">
+              <p className="text-xs text-[#FF5F57]">
                 {errors.confirmPassword.message}
               </p>
             )}
@@ -166,11 +166,11 @@ export default function RegisterPage() {
         </form>
       </CardContent>
       <CardFooter className="justify-center">
-        <p className="text-sm text-white/40">
+        <p className="text-sm text-[#444444]">
           Already have an account?{" "}
           <Link
             href="/login"
-            className="text-blue-400 hover:underline font-medium"
+            className="text-[#00E5FF] hover:underline font-medium"
           >
             Sign in
           </Link>

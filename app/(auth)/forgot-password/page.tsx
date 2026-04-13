@@ -3,7 +3,7 @@ import ForgotPasswordPage from "./forgot-password-client";
 
 export const metadata: Metadata = {
   title: "Forgot Password",
-  description: "Reset your LinkedBoost password.",
+  description: "Reset your InPilot password.",
   alternates: { canonical: "/forgot-password" },
 };
 

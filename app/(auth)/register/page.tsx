@@ -3,7 +3,7 @@ import RegisterPage from "./register-client";
 
 export const metadata: Metadata = {
   title: "Create Account",
-  description: "Create your free LinkedBoost account.",
+  description: "Create your free InPilot account.",
   alternates: { canonical: "/register" },
 };
 

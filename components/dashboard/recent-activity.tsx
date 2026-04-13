@@ -1,6 +1,5 @@
 "use client";
 
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Clock } from "lucide-react";
 import { useDashboardData } from "./dashboard-data-provider";
@@ -9,49 +8,51 @@ export function RecentActivity() {
   const { recentActivity: activities } = useDashboardData();
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="flex items-center gap-2">
-          <Clock className="h-5 w-5 text-white/50" />
-          Recent Activity
-        </CardTitle>
-      </CardHeader>
-      <CardContent>
+    <div className="dashboard-card rounded-xl">
+      <div className="p-6 pb-4">
+        <div className="flex items-center gap-2">
+          <Clock className="h-4 w-4 text-[#444444]" />
+          <p className="text-xs font-semibold uppercase tracking-wider text-[#444444]">
+            Recent Activity
+          </p>
+        </div>
+      </div>
+      <div className="px-6 pb-6">
         {activities.length === 0 ? (
-          <div className="flex flex-col items-center justify-center py-8 text-center">
-            <div className="h-16 w-16 rounded-full bg-white/5 flex items-center justify-center mb-4">
-              <Clock className="h-8 w-8 text-white/20" />
+          <div className="flex flex-col items-center justify-center py-12 text-center">
+            <div className="h-16 w-16 rounded-xl bg-[#0A0A0A] border border-[#222222] flex items-center justify-center mb-4">
+              <Clock className="h-8 w-8 text-[#333333]" />
             </div>
-            <p className="text-white/40 text-sm">No activity yet</p>
-            <p className="text-white/25 text-xs mt-1">
+            <p className="text-[#555555] text-sm font-medium">No activity yet</p>
+            <p className="text-[#333333] text-xs mt-1">
               Your automation activity will appear here
             </p>
           </div>
         ) : (
-          <div className="space-y-3">
+          <div className="space-y-2">
             {activities.map((activity) => (
               <div
                 key={activity._id}
-                className="flex items-center justify-between rounded-lg bg-white/5 px-4 py-3"
+                className="flex items-center justify-between rounded-lg bg-[#0A0A0A] border border-[#1A1A1A] px-4 py-3 hover:border-[#333333] transition-colors"
               >
                 <div className="flex items-center gap-3">
                   <Badge variant={activity.status === "success" ? "success" : "error"}>
                     {activity.status}
                   </Badge>
                   <div>
-                    <span className="text-sm text-white">{activity.action}</span>
-                    <span className="text-xs text-white/30 ml-2">{activity.module}</span>
+                    <span className="text-sm text-white font-medium">{activity.action}</span>
+                    <span className="text-xs text-[#444444] ml-2 font-mono">{activity.module}</span>
                   </div>
                 </div>
-                <span className="text-xs text-white/40">
+                <span className="text-xs text-[#444444] font-mono">
                   {formatTimestamp(activity.timestamp)}
                 </span>
               </div>
             ))}
           </div>
         )}
-      </CardContent>
-    </Card>
+      </div>
+    </div>
   );
 }
 

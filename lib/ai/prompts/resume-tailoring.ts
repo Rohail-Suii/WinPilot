@@ -7,8 +7,13 @@ export function buildResumeTailoringPrompt(
     skills: string[];
     education: { school: string; degree: string; field: string }[];
   },
-  jobDescription: string
+  jobDescription: string,
+  customPrompt?: string
 ): AIMessage[] {
+  const customInstructions = customPrompt?.trim()
+    ? `\n\nAdditional user instructions (follow these closely):\n${customPrompt.trim()}`
+    : "";
+
   return [
     {
       role: "system",
@@ -22,7 +27,7 @@ Rules:
 - Use strong action verbs and maintain a professional tone.
 - Return plain text values only. Do not use Markdown formatting, headings, or emphasis markers such as **, __, #, or bullet syntax markers in field values.
 - Only return values that fit the JSON schema below.
-- Calculate a match score (0-100) with brief explanation.
+- Calculate a match score (0-100) with brief explanation.${customInstructions}
 
 Respond with valid JSON only. Schema:
 {

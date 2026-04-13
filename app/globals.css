@@ -1,13 +1,19 @@
 @import "tailwindcss";
 
 :root {
-  --background: #0A0F1C;
+  --background: #0A0A0A;
   --foreground: #F8FAFC;
-  --primary: #3B82F6;
-  --primary-hover: #60A5FA;
-  --card: rgba(255, 255, 255, 0.05);
-  --card-border: rgba(255, 255, 255, 0.1);
-  --muted: rgba(255, 255, 255, 0.5);
+  --surface: #111111;
+  --surface-raised: #1A1A1A;
+  --primary: #00E5FF;
+  --primary-hover: #53EDFF;
+  --card: #111111;
+  --card-border: #1A1A1A;
+  --card-border-hover: #333333;
+  --border: #222222;
+  --border-bright: #333333;
+  --muted: #888888;
+  --text-muted: #444444;
   --sidebar-width: 280px;
   --sidebar-collapsed-width: 72px;
   --topbar-height: 64px;
@@ -16,11 +22,17 @@
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
+  --color-surface: var(--surface);
+  --color-surface-raised: var(--surface-raised);
   --color-primary: var(--primary);
   --color-primary-hover: var(--primary-hover);
   --color-card: var(--card);
   --color-card-border: var(--card-border);
+  --color-card-border-hover: var(--card-border-hover);
+  --color-border: var(--border);
+  --color-border-bright: var(--border-bright);
   --color-muted: var(--muted);
+  --color-text-muted: var(--text-muted);
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
 }
@@ -56,9 +68,9 @@ body {
 
 /* Glassmorphism utility */
 .glass {
-  background: rgba(255, 255, 255, 0.05);
+  background: var(--surface);
   backdrop-filter: blur(24px);
-  border: 1px solid rgba(255, 255, 255, 0.1);
+  border: 1px solid var(--surface-raised);
 }
 
 /* Smooth transitions for layout changes */
@@ -69,11 +81,44 @@ body {
 
 /* Gradient backgrounds */
 .gradient-primary {
-  background: linear-gradient(135deg, #3B82F6 0%, #8B5CF6 100%);
+  background: linear-gradient(135deg, #00E5FF 0%, #00B4D8 100%);
 }
 
 .gradient-card {
-  background: linear-gradient(135deg, rgba(59, 130, 246, 0.1) 0%, rgba(139, 92, 246, 0.05) 100%);
+  background: linear-gradient(135deg, rgba(0, 229, 255, 0.06) 0%, rgba(0, 180, 216, 0.03) 100%);
+}
+
+/* Dashboard spotlight card hover effect */
+.dashboard-card {
+  position: relative;
+  overflow: hidden;
+  background: var(--surface);
+  border: 1px solid var(--surface-raised);
+  border-radius: 12px;
+  transition: border-color 200ms ease, background-color 200ms ease;
+}
+
+.dashboard-card:hover {
+  border-color: var(--border-bright);
+  background: #131313;
+}
+
+.dashboard-card::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(
+    400px circle at var(--mouse-x, 50%) var(--mouse-y, 50%),
+    rgba(0, 229, 255, 0.04),
+    transparent 40%
+  );
+  opacity: 0;
+  transition: opacity 0.4s;
+  pointer-events: none;
+}
+
+.dashboard-card:hover::before {
+  opacity: 1;
 }
 
 /* ═══════════════════════════════════════════════════════════

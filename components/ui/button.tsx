@@ -4,20 +4,20 @@ import { cva, type VariantProps } from "class-variance-authority";
 import { cn } from "@/lib/utils";
 
 const buttonVariants = cva(
-  "inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-lg text-sm font-medium transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 focus-visible:ring-offset-[#0A0F1C] disabled:pointer-events-none disabled:opacity-50 cursor-pointer",
+  "inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-lg text-sm font-medium transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00E5FF] focus-visible:ring-offset-2 focus-visible:ring-offset-[#0A0A0A] disabled:pointer-events-none disabled:opacity-50 cursor-pointer",
   {
     variants: {
       variant: {
         default:
-          "bg-blue-600 text-white shadow-lg shadow-blue-600/20 hover:bg-blue-500 hover:shadow-blue-500/30 hover:scale-[1.02] active:scale-[0.98]",
+          "bg-[#00E5FF] text-black font-semibold shadow-lg shadow-[#00E5FF]/10 hover:bg-[#53EDFF] hover:shadow-[#00E5FF]/20 hover:scale-[1.02] active:scale-[0.98]",
         destructive:
-          "bg-red-600 text-white shadow-lg shadow-red-600/20 hover:bg-red-500 hover:scale-[1.02] active:scale-[0.98]",
+          "bg-[#FF5F57] text-white shadow-lg shadow-[#FF5F57]/20 hover:bg-[#FF5F57]/90 hover:scale-[1.02] active:scale-[0.98]",
         outline:
-          "border border-white/10 bg-white/5 text-white hover:bg-white/10 hover:border-white/20",
+          "border border-[#222222] bg-[#111111] text-white hover:bg-[#1A1A1A] hover:border-[#333333]",
         secondary:
-          "bg-white/10 text-white hover:bg-white/15 hover:scale-[1.02] active:scale-[0.98]",
-        ghost: "text-white/70 hover:bg-white/5 hover:text-white",
-        link: "text-blue-400 underline-offset-4 hover:underline",
+          "bg-[#1A1A1A] text-white border border-[#222222] hover:bg-[#222222] hover:scale-[1.02] active:scale-[0.98]",
+        ghost: "text-[#888888] hover:bg-[#1A1A1A] hover:text-white",
+        link: "text-[#00E5FF] underline-offset-4 hover:underline",
       },
       size: {
         default: "h-10 px-4 py-2",

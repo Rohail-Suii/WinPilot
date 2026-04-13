@@ -73,14 +73,14 @@ function LoginForm() {
   }
 
   return (
-    <Card className="relative z-10 w-full max-w-md border-white/10 bg-white/5 backdrop-blur-2xl">
+    <Card className="relative z-10 w-full max-w-md border-[#1A1A1A] bg-[#111111]">
       <CardHeader className="text-center">
-        <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-xl bg-blue-600 shadow-lg shadow-blue-600/30">
-          <Zap className="h-6 w-6 text-white" />
+        <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-xl bg-[#00E5FF]/10 border border-[#00E5FF]/20">
+          <Zap className="h-6 w-6 text-[#00E5FF]" />
         </div>
-        <CardTitle className="text-2xl">Welcome back</CardTitle>
+        <CardTitle className="text-2xl tracking-tight">Welcome back</CardTitle>
         <CardDescription>
-          Sign in to your LinkedBoost account
+          Sign in to your InPilot account
         </CardDescription>
       </CardHeader>
       <CardContent>
@@ -95,7 +95,7 @@ function LoginForm() {
               {...register("email")}
             />
             {errors.email && (
-              <p className="text-xs text-red-400">{errors.email.message}</p>
+              <p className="text-xs text-[#FF5F57]">{errors.email.message}</p>
             )}
           </div>
           <div className="space-y-2">
@@ -103,7 +103,7 @@ function LoginForm() {
               <Label htmlFor="password">Password</Label>
               <Link
                 href="/forgot-password"
-                className="text-xs text-blue-400 hover:underline"
+                className="text-xs text-[#00E5FF] hover:underline"
               >
                 Forgot password?
               </Link>
@@ -116,7 +116,7 @@ function LoginForm() {
               {...register("password")}
             />
             {errors.password && (
-              <p className="text-xs text-red-400">{errors.password.message}</p>
+              <p className="text-xs text-[#FF5F57]">{errors.password.message}</p>
             )}
           </div>
           <Button type="submit" className="w-full" disabled={isLoading}>
@@ -133,10 +133,10 @@ function LoginForm() {
           <>
             <div className="relative my-6">
               <div className="absolute inset-0 flex items-center">
-                <span className="w-full border-t border-white/10" />
+                <span className="w-full border-t border-[#1A1A1A]" />
               </div>
               <div className="relative flex justify-center text-xs uppercase">
-                <span className="bg-[#0A0F1C] px-2 text-white/40">
+                <span className="bg-[#111111] px-2 text-[#444444]">
                   Or continue with
                 </span>
               </div>
@@ -180,11 +180,11 @@ function LoginForm() {
         )}
       </CardContent>
       <CardFooter className="justify-center">
-        <p className="text-sm text-white/40">
+        <p className="text-sm text-[#444444]">
           Don&apos;t have an account?{" "}
           <Link
             href="/register"
-            className="text-blue-400 hover:underline font-medium"
+            className="text-[#00E5FF] hover:underline font-medium"
           >
             Sign up
           </Link>

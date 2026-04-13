@@ -56,12 +56,12 @@ export default function ForgotPasswordPage() {
 
   if (emailSent) {
     return (
-      <Card className="relative z-10 w-full max-w-md border-white/10 bg-white/5 backdrop-blur-2xl">
+      <Card className="relative z-10 w-full max-w-md border-[#1A1A1A] bg-[#111111]">
         <CardHeader className="text-center">
-          <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-xl bg-emerald-600 shadow-lg shadow-emerald-600/30">
-            <MailCheck className="h-6 w-6 text-white" />
+          <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-xl bg-[#28C840]/10 border border-[#28C840]/20">
+            <MailCheck className="h-6 w-6 text-[#28C840]" />
           </div>
-          <CardTitle className="text-2xl">Check your email</CardTitle>
+          <CardTitle className="text-2xl tracking-tight">Check your email</CardTitle>
           <CardDescription>
             If an account exists with that email, we&apos;ve sent a password reset link. Check your inbox and spam folder.
           </CardDescription>
@@ -69,7 +69,7 @@ export default function ForgotPasswordPage() {
         <CardFooter className="justify-center">
           <Link
             href="/login"
-            className="flex items-center gap-1 text-sm text-blue-400 hover:underline"
+            className="flex items-center gap-1 text-sm text-[#00E5FF] hover:underline"
           >
             <ArrowLeft className="h-3 w-3" />
             Back to sign in
@@ -80,12 +80,12 @@ export default function ForgotPasswordPage() {
   }
 
   return (
-    <Card className="relative z-10 w-full max-w-md border-white/10 bg-white/5 backdrop-blur-2xl">
+    <Card className="relative z-10 w-full max-w-md border-[#1A1A1A] bg-[#111111]">
       <CardHeader className="text-center">
-        <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-xl bg-blue-600 shadow-lg shadow-blue-600/30">
-          <KeyRound className="h-6 w-6 text-white" />
+        <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-xl bg-[#00E5FF]/10 border border-[#00E5FF]/20">
+          <KeyRound className="h-6 w-6 text-[#00E5FF]" />
         </div>
-        <CardTitle className="text-2xl">Forgot password?</CardTitle>
+        <CardTitle className="text-2xl tracking-tight">Forgot password?</CardTitle>
         <CardDescription>
           Enter your email and we&apos;ll send you a link to reset your password.
         </CardDescription>
@@ -102,7 +102,7 @@ export default function ForgotPasswordPage() {
               {...register("email")}
             />
             {errors.email && (
-              <p className="text-xs text-red-400">{errors.email.message}</p>
+              <p className="text-xs text-[#FF5F57]">{errors.email.message}</p>
             )}
           </div>
           <Button type="submit" className="w-full" disabled={isLoading}>
@@ -117,7 +117,7 @@ export default function ForgotPasswordPage() {
       <CardFooter className="justify-center">
         <Link
           href="/login"
-          className="flex items-center gap-1 text-sm text-white/40 hover:text-white/60"
+          className="flex items-center gap-1 text-sm text-[#444444] hover:text-[#888888]"
         >
           <ArrowLeft className="h-3 w-3" />
           Back to sign in

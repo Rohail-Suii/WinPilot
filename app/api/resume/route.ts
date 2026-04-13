@@ -65,17 +65,36 @@ export async function POST(req: Request) {
 
       try {
         const parsed = await parseResumeWithAI(session.user.id, sanitizedRawText);
-        const resume = await saveResume(
-          session.user.id,
-          name || "My Resume",
-          parsed,
-          rawText,
-          true
-        );
-        return NextResponse.json({ resume, parsed }, { status: 201 });
+        return NextResponse.json({ parsed, rawText, name: name || "My Resume" }, { status: 200 });
       } catch (error) {
         console.error("[Resume] Failed to parse resume:", error);
         const message = error instanceof Error ? error.message : "Failed to parse resume";
+        return NextResponse.json({ error: message }, { status: 500 });
+      }
+    }
+
+    if (action === "save-parsed") {
+      // Save reviewed/edited parsed data
+      const { name, parsed, rawText: originalText } = await req.json();
+      if (!parsed || !name) {
+        return NextResponse.json(
+          { error: "Parsed data and name are required" },
+          { status: 400 }
+        );
+      }
+
+      try {
+        const resume = await saveResume(
+          session.user.id,
+          name,
+          parsed,
+          originalText || "",
+          true
+        );
+        return NextResponse.json({ resume }, { status: 201 });
+      } catch (error) {
+        console.error("[Resume] Failed to save resume:", error);
+        const message = error instanceof Error ? error.message : "Failed to save resume";
         return NextResponse.json({ error: message }, { status: 500 });
       }
     }
@@ -126,7 +145,7 @@ export async function PATCH(req: Request) {
     }
 
     const body = await req.json();
-    const ALLOWED_FIELDS = ["name", "contactInfo", "summary", "experience", "education", "skills", "certifications", "projects", "isDefault"];
+    const ALLOWED_FIELDS = ["name", "contactInfo", "summary", "experience", "education", "skills", "certifications", "projects", "isDefault", "customTailoringPrompt"];
     const updates: Record<string, unknown> = {};
     for (const key of ALLOWED_FIELDS) {
       if (key in body) {

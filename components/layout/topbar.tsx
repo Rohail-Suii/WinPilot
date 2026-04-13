@@ -28,7 +28,7 @@ export function Topbar() {
     )?.[1] || "Dashboard";
 
   return (
-    <header className="sticky top-0 z-30 flex h-16 items-center justify-between border-b border-white/10 bg-[#0A0F1C]/80 backdrop-blur-xl px-4 lg:px-6">
+    <header className="sticky top-0 z-30 flex h-16 items-center justify-between border-b border-[#1A1A1A] bg-[#0A0A0A]/85 backdrop-blur-xl px-4 lg:px-8">
       {/* Left: Mobile menu + title */}
       <div className="flex items-center gap-3">
         <Button
@@ -40,7 +40,7 @@ export function Topbar() {
         >
           <Menu className="h-5 w-5" />
         </Button>
-        <h1 className="text-lg font-semibold text-white">{title}</h1>
+        <h1 className="text-lg font-semibold text-white tracking-tight">{title}</h1>
       </div>
 
       {/* Right: Actions */}
@@ -48,10 +48,10 @@ export function Topbar() {
         {/* Extension Status */}
         <div
           className={cn(
-            "flex items-center gap-2 rounded-lg px-3 py-1.5 text-xs font-medium",
+            "flex items-center gap-2 rounded-lg px-3 py-1.5 text-xs font-medium border",
             isConnected
-              ? "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20"
-              : "bg-white/5 text-white/40 border border-white/10"
+              ? "bg-[#00E5FF]/5 text-[#00E5FF] border-[#00E5FF]/20"
+              : "bg-[#111111] text-[#444444] border-[#1A1A1A]"
           )}
         >
           {isConnected ? (

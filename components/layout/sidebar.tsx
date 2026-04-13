@@ -102,7 +102,7 @@ export function Sidebar() {
       {/* Sidebar */}
       <aside
         className={cn(
-          "fixed top-0 left-0 z-50 flex h-screen flex-col border-r border-white/10 bg-[#0A0F1C]/95 backdrop-blur-xl sidebar-transition",
+          "fixed top-0 left-0 z-50 flex h-screen flex-col border-r border-[#1A1A1A] bg-[#0A0A0A] backdrop-blur-xl sidebar-transition",
           isCollapsed ? "w-18" : "w-70",
           "lg:relative",
           isMobileOpen
@@ -111,9 +111,9 @@ export function Sidebar() {
         )}
       >
         {/* Logo */}
-        <div className="flex h-16 items-center gap-3 border-b border-white/10 px-4">
-          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-blue-600 shadow-lg shadow-blue-600/20">
-            <Zap className="h-5 w-5 text-white" />
+        <div className="flex h-16 items-center gap-3 border-b border-[#1A1A1A] px-4">
+          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-[#00E5FF]/10 border border-[#00E5FF]/20">
+            <Zap className="h-5 w-5 text-[#00E5FF]" />
           </div>
           <AnimatePresence>
             {!isCollapsed && (
@@ -121,9 +121,9 @@ export function Sidebar() {
                 initial={{ opacity: 0, width: 0 }}
                 animate={{ opacity: 1, width: "auto" }}
                 exit={{ opacity: 0, width: 0 }}
-                className="text-lg font-bold text-white whitespace-nowrap overflow-hidden"
+                className="text-lg font-bold text-white whitespace-nowrap overflow-hidden tracking-tight"
               >
-                LinkedBoost
+                InPilot
               </motion.span>
             )}
           </AnimatePresence>
@@ -146,13 +146,13 @@ export function Sidebar() {
                       "group relative flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-all duration-200",
                       isActive
                         ? "text-white"
-                        : "text-white/50 hover:text-white hover:bg-white/5"
+                        : "text-[#888888] hover:text-white hover:bg-[#1A1A1A]"
                     )}
                   >
                     {isActive && (
                       <motion.div
                         layoutId="sidebar-active"
-                        className="absolute inset-0 rounded-lg bg-white/10 border border-white/10"
+                        className="absolute inset-0 rounded-lg bg-[#1A1A1A] border border-[#333333]"
                         transition={{
                           type: "spring",
                           stiffness: 350,
@@ -163,7 +163,7 @@ export function Sidebar() {
                     <item.icon
                       className={cn(
                         "relative h-5 w-5 shrink-0 transition-colors",
-                        isActive ? "text-blue-400" : "text-white/40 group-hover:text-white/70"
+                        isActive ? "text-[#00E5FF]" : "text-[#444444] group-hover:text-[#888888]"
                       )}
                     />
                     <AnimatePresence>
@@ -186,7 +186,7 @@ export function Sidebar() {
         </nav>
 
         {/* Collapse button */}
-        <div className="hidden lg:block border-t border-white/10 p-3">
+        <div className="hidden lg:block border-t border-[#1A1A1A] p-3">
           <Button
             variant="ghost"
             size="sm"
@@ -203,9 +203,9 @@ export function Sidebar() {
         </div>
 
         {/* User profile */}
-        <div className="border-t border-white/10 p-3">
+        <div className="border-t border-[#1A1A1A] p-3">
           <div className="flex items-center gap-3 rounded-lg px-2 py-2">
-            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-white/10">
+            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[#1A1A1A] border border-[#222222]">
               {session?.user?.image ? (
                 // eslint-disable-next-line @next/next/no-img-element
                 <img
@@ -214,7 +214,7 @@ export function Sidebar() {
                   className="h-8 w-8 rounded-full"
                 />
               ) : (
-                <User className="h-4 w-4 text-white/50" />
+                <User className="h-4 w-4 text-[#888888]" />
               )}
             </div>
             <AnimatePresence>
@@ -228,7 +228,7 @@ export function Sidebar() {
                   <p className="truncate text-sm font-medium text-white">
                     {session?.user?.name || "User"}
                   </p>
-                  <p className="truncate text-xs text-white/40">
+                  <p className="truncate text-xs text-[#444444]">
                     {session?.user?.email}
                   </p>
                 </motion.div>
@@ -242,7 +242,7 @@ export function Sidebar() {
                 className="shrink-0"
                 aria-label="Sign out"
               >
-                <LogOut className="h-4 w-4 text-white/40" />
+                <LogOut className="h-4 w-4 text-[#444444]" />
               </Button>
             )}
           </div>

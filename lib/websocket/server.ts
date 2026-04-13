@@ -26,7 +26,8 @@ export type ExtensionEvent =
   | "scraper:complete"
   | "limit:warning"
   | "limit:reached"
-  | "safety:alert";
+  | "safety:alert"
+  | "automation:log";
 
 export interface WSMessage {
   event: ExtensionEvent;

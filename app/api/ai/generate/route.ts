@@ -99,11 +99,11 @@ export async function POST(req: Request) {
       }
 
       case "resume-tailor": {
-        const { resumeData, jobDescription } = body;
+        const { resumeData, jobDescription, customPrompt } = body;
         if (!resumeData || !jobDescription) {
           return NextResponse.json({ error: "Resume data and job description are required" }, { status: 400 });
         }
-        const messages = buildResumeTailoringPrompt(resumeData, jobDescription);
+        const messages = buildResumeTailoringPrompt(resumeData, jobDescription, customPrompt);
         const result = await ai.generateJSON(messages);
         return NextResponse.json({ content: result });
       }

@@ -194,7 +194,9 @@ function ensureLinkedInTab() {
 
 function sendToContentScript(tabId, message) {
   return new Promise((resolve, reject) => {
-    console.log(`[LinkedBoost] -> Content script (tab ${tabId}):`, message.command || message.type);
+    const cmd = message.command || message.type;
+    console.log(`[LinkedBoost] -> Content script (tab ${tabId}):`, cmd);
+    emitLog("info", "content-script", `-> ${cmd}`, `tab ${tabId}`);
     chrome.tabs.sendMessage(tabId, message, (response) => {
       if (chrome.runtime.lastError) {
         const errMessage = chrome.runtime.lastError.message || "Unknown runtime error";
@@ -209,6 +211,7 @@ function sendToContentScript(tabId, message) {
           console.warn(
             `[LinkedBoost] <- Content script channel closed during ${message.command}; treating as navigation success`
           );
+          emitLog("warn", "content-script", `<- Channel closed during ${message.command}; treating as navigation success`);
 
           if (message.command === "CLICK_NEXT_OR_SUBMIT") {
             resolve({
@@ -236,9 +239,11 @@ function sendToContentScript(tabId, message) {
         }
 
         console.error(`[LinkedBoost] <- Content script error (tab ${tabId}):`, errMessage);
+        emitLog("error", "content-script", `<- Error (tab ${tabId}): ${errMessage}`);
         reject(new Error(errMessage));
       } else {
         console.log(`[LinkedBoost] <- Content script (tab ${tabId}): status=${response?.status}`);
+        emitLog("info", "content-script", `<- status=${response?.status}`, `tab ${tabId}, cmd=${cmd}`);
         resolve(response);
       }
     });
@@ -270,7 +275,7 @@ function sendToServer(message) {
   if (socket && socket.connected) {
     if (message.type === "REPORT_STATUS") {
       socket.emit("REPORT_STATUS", {
-        event: "task:progress",
+        event: message.event || "task:progress",
         payload: message,
       });
       return;
@@ -288,6 +293,7 @@ function sendToServer(message) {
 async function apiCall(endpoint, body) {
   const url = `${apiUrl}${endpoint}`;
   console.log(`[LinkedBoost API] >> ${url}`, { authToken: authToken ? `${authToken.substring(0, 8)}...` : "NONE", body });
+  emitLog("info", "api", `>> ${endpoint}`);
 
   let res;
   try {
@@ -302,10 +308,12 @@ async function apiCall(endpoint, body) {
   } catch (fetchErr) {
     console.error(`[LinkedBoost API] Network error calling ${url}:`, fetchErr.message);
     console.error(`[LinkedBoost API] Check: Is the server running at ${apiUrl}? Is the extension authorized for this host?`);
+    emitLog("error", "api", `Network error: ${fetchErr.message}`, url);
     throw new Error(`Network error: ${fetchErr.message} (URL: ${url})`);
   }
 
   console.log(`[LinkedBoost API] << ${url} status=${res.status}`);
+  emitLog("info", "api", `<< ${endpoint} status=${res.status}`);
 
   if (!res.ok) {
     const err = await res.json().catch(() => ({ error: res.statusText }));
@@ -710,6 +718,26 @@ function reportProgress(event, data) {
   }).catch(() => {});
 }
 
+/**
+ * Send a detailed log line to the dashboard via WebSocket.
+ * Also prints to the service-worker console for dev-tools debugging.
+ *
+ * @param {"info"|"warn"|"error"|"success"} level
+ * @param {"extension"|"api"|"content-script"|"system"} source
+ * @param {string} message  – human-readable log text
+ * @param {string} [details] – optional extra detail (e.g. JSON snippet)
+ */
+function emitLog(level, source, message, details) {
+  sendToServer({
+    type: "REPORT_STATUS",
+    event: "automation:log",
+    level,
+    source,
+    message,
+    details: details || undefined,
+  });
+}
+
 async function startAutomation(searchId, options = {}) {
   if (automationRunning) {
     reportProgress("task:error", { message: "Automation already running" });
@@ -726,6 +754,7 @@ async function startAutomation(searchId, options = {}) {
   console.log(`[LinkedBoost] authToken: ${authToken ? `${authToken.substring(0, 8)}...` : "NOT SET"}`);
   console.log(`[LinkedBoost] wsUrl: ${wsUrl}`);
   console.log(`[LinkedBoost] useAI: ${useAI}`);
+  emitLog("info", "system", "====== STARTING AUTOMATION ======", `searchId=${searchId}, useAI=${useAI}`);
 
   automationRunning = true;
   automationAborted = false;
@@ -745,6 +774,7 @@ async function startAutomation(searchId, options = {}) {
     reportProgress("task:progress", { message: "Fetching search configuration..." });
     const startData = await apiCall(`/api/jobs/automate?step=start`, { searchId });
     console.log(`[LinkedBoost] Step 1 result:`, JSON.stringify(startData).substring(0, 300));
+    emitLog("info", "extension", "Search configuration received", `URL: ${startData.url || "none"}, remaining: ${startData.remaining || "?"}`);
 
     if (!startData.url) {
       throw new Error("No search URL returned");
@@ -766,416 +796,547 @@ async function startAutomation(searchId, options = {}) {
 
     if (automationAborted) return cleanup("Automation stopped by user");
 
-    // Step 2: Scrape job listings
-    console.log(`[LinkedBoost] Step 2: Scraping job listings...`);
-    reportProgress("task:progress", { message: "Scraping job listings..." });
-    await randomDelay(1500, 2500);
-
-    const scrapeResult = await sendToContentScript(tab.id, {
-      type: "EXECUTE_ACTION",
-      command: "SCRAPE_JOB_LISTINGS",
-      actionId: "scrape-listings",
-    });
-
-    const scrapedJobs = scrapeResult?.data?.jobs || [];
-    console.log(`[LinkedBoost] Step 2 result: ${scrapedJobs.length} jobs found`);
-    if (scrapedJobs.length > 0) {
-      console.log(`[LinkedBoost] First job:`, JSON.stringify(scrapedJobs[0]));
-    }
-    if (scrapedJobs.length === 0) {
-      console.error(`[LinkedBoost] Step 2 FAILED: scrapeResult =`, JSON.stringify(scrapeResult));
-      throw new Error("No jobs found on the search results page");
-    }
-
-    const eligibleJobs = scrapedJobs.filter(
-      (job) => job?.url && !job.applied && job.easyApply !== false
-    );
-    const dedupedEligibleJobs = [];
-    const seenJobKeys = new Set();
-    for (const job of eligibleJobs) {
-      const key = (job.jobId || job.url || "").trim();
-      if (!key || seenJobKeys.has(key)) continue;
-      seenJobKeys.add(key);
-      dedupedEligibleJobs.push(job);
-    }
-    const skippedAppliedCount = scrapedJobs.filter((job) => job?.applied).length;
-    const easyApplyDetectedCount = scrapedJobs.filter((job) => job?.easyApply !== false).length;
-
-    console.log(
-      `[LinkedBoost] Eligibility summary: total=${scrapedJobs.length}, easyApplyDetected=${easyApplyDetectedCount}, alreadyApplied=${skippedAppliedCount}, eligible=${dedupedEligibleJobs.length}`
-    );
-
-    if (dedupedEligibleJobs.length === 0) {
-      console.warn("[LinkedBoost] No eligible jobs after filtering. Example cards:", JSON.stringify(scrapedJobs.slice(0, 3)));
-      reportProgress("task:complete", {
-        message:
-          skippedAppliedCount > 0
-            ? `No eligible Easy Apply jobs found. Skipped ${skippedAppliedCount} already-applied job(s).`
-            : "No eligible Easy Apply jobs found in the current results.",
-      });
-      return cleanup();
-    }
-
-    reportProgress("job:found", {
-      message: `Found ${scrapedJobs.length} jobs (${skippedAppliedCount} already applied skipped). Processing up to ${dedupedEligibleJobs.length} eligible Easy Apply jobs.`,
-      count: scrapedJobs.length,
-    });
-
-    const storedRules = await getStoredFormRules();
-    const MAX_JOBS_TO_PROCESS = Math.min(dedupedEligibleJobs.length, 10);
-    let appliedCount = 0;
-    let failedCount = 0;
-    let skippedQualificationCount = 0;
-
-    for (let jobIndex = 0; jobIndex < MAX_JOBS_TO_PROCESS; jobIndex++) {
-      const candidateJob = dedupedEligibleJobs[jobIndex];
-      targetApp = null;
-
-      if (automationAborted) return cleanup("Automation stopped by user");
-
+    // Helper: build a search URL for a specific page number
+    function getSearchUrlForPage(baseUrl, pageNum) {
       try {
-        console.log(`[LinkedBoost] Processing job ${jobIndex + 1}/${MAX_JOBS_TO_PROCESS}: ${candidateJob.title}`);
-        await navigateAndWait(tab.id, startData.url);
-        await randomDelay(900, 1500);
-
-        const selectResult = await sendToContentScript(tab.id, {
-          type: "EXECUTE_ACTION",
-          command: "SELECT_JOB_FROM_LIST",
-          actionId: `select-${jobIndex}`,
-          jobId: candidateJob.jobId,
-          jobUrl: candidateJob.url,
-        });
-
-        if (!selectResult?.data?.selected) {
-          failedCount++;
-          reportProgress("task:progress", {
-            message: `Skipping ${candidateJob.title}: could not select job card in results list (${selectResult?.data?.error || "unknown"}).`,
-            jobTitle: candidateJob.title,
-          });
-          continue;
+        const url = new URL(baseUrl);
+        if (pageNum > 1) {
+          url.searchParams.set("start", String((pageNum - 1) * 25));
+        } else {
+          url.searchParams.delete("start");
         }
-
-        const qualResult = await sendToContentScript(tab.id, {
-          type: "EXECUTE_ACTION",
-          command: "CHECK_JOB_QUALIFICATION",
-          actionId: `qual-${jobIndex}`,
-          maxAttempts: 12,
-          delayMs: 350,
-        });
-        const qualification = qualResult?.data?.qualification || {
-          status: "unknown",
-          matched: false,
-          text: "",
-        };
-        const qualificationMatched = qualification.matched === true;
-        const qualificationLabel =
-          qualification.text ||
-          String(qualification.status || "unknown").replace(/_/g, " ");
-
-        console.log(
-          `[LinkedBoost] Qualification check: status="${qualification.status}", matched=${qualificationMatched}, text="${qualification.text || ""}"`
-        );
-
-        if (!qualificationMatched) {
-          skippedQualificationCount++;
-          failedCount++;
-          reportProgress("task:progress", {
-            message: `Skipping ${candidateJob.title}: LinkedIn qualification signal is "${qualificationLabel}".`,
-            jobTitle: candidateJob.title,
-          });
-          continue;
-        }
-
-        console.log(`[LinkedBoost] Qualification matched on results page. Scraping job detail for ${candidateJob.title}...`);
-
-        let detail = null;
-        for (let attempt = 0; attempt < 3; attempt++) {
-          const detailResult = await sendToContentScript(tab.id, {
-            type: "EXECUTE_ACTION",
-            command: "SCRAPE_JOB_DETAIL",
-            actionId: `detail-${jobIndex}-${attempt}`,
-          });
-          detail = detailResult?.data?.detail;
-          if (detail?.description) break;
-          await randomDelay(1000, 1800);
-        }
-
-        if (!detail?.description) {
-          throw new Error("Could not extract job description");
-        }
-
-        const jobWithDetail = {
-          ...candidateJob,
-          title: detail.title || candidateJob.title,
-          company: detail.company || candidateJob.company,
-          description: detail.description,
-        };
-
-        let prepData = null;
-
-        const registerResult = await apiCall(`/api/jobs/automate?step=register-job`, {
-          searchId,
-          job: {
-            title: jobWithDetail.title,
-            company: jobWithDetail.company,
-            location: jobWithDetail.location || "",
-            url: jobWithDetail.url,
-            description: jobWithDetail.description || "",
-          },
-        });
-
-        targetApp = registerResult?.application || {
-          _id: null,
-          jobTitle: jobWithDetail.title,
-          company: jobWithDetail.company,
-          jobUrl: jobWithDetail.url,
-        };
-
-        if (!targetApp?._id) {
-          throw new Error("Could not register application record for job");
-        }
-
-        reportProgress("job:applying", {
-          message: useAI
-            ? `Applying to ${targetApp.jobTitle || jobWithDetail.title} at ${targetApp.company || jobWithDetail.company}...`
-            : `Applying (AI OFF) to ${targetApp.jobTitle || jobWithDetail.title} at ${targetApp.company || jobWithDetail.company}...`,
-          jobTitle: targetApp.jobTitle || jobWithDetail.title,
-          company: targetApp.company || jobWithDetail.company,
-        });
-
-        if (useAI) {
-          try {
-            prepData = await apiCall(`/api/jobs/automate?step=prepare-apply`, {
-              applicationId: targetApp._id,
-            });
-          } catch (prepErr) {
-            const prepMessage = prepErr?.message || "";
-            if (isGeminiQuotaErrorMessage(prepMessage)) {
-              useAI = false;
-              reportProgress("task:error", {
-                message: `${prepMessage} Switched to AI Mode OFF for remaining jobs.`,
-              });
-              reportProgress("task:progress", {
-                message: "AI Mode OFF active: continuing with existing LinkedIn resume (no AI calls).",
-              });
-            } else {
-              throw prepErr;
-            }
-          }
-
-          if (useAI && !prepData?.resumePdf) {
-            throw new Error("Tailored resume PDF was not generated");
-          }
-        }
-
-        await navigateAndWait(tab.id, targetApp.jobUrl);
-        await randomDelay(1000, 1600);
-
-        const easyApplyResult = await sendToContentScript(tab.id, {
-          type: "EXECUTE_ACTION",
-          command: "CLICK_EASY_APPLY",
-          actionId: `apply-${targetApp._id}`,
-        });
-        if (!easyApplyResult?.data?.clicked) {
-          throw new Error(`Easy Apply button not found: ${easyApplyResult?.data?.error || "unknown"}`);
-        }
-
-        if (easyApplyResult?.data?.sdui) {
-          await waitForTabLoad(tab.id);
-          await randomDelay(1400, 2200);
-          await ensureContentScriptReady(tab.id);
-        }
-
-        const MAX_FORM_STEPS = 15;
-        let uploaded = false;
-        let submitted = false;
-        let lastFieldsSignature = "";
-        let repeatedSignatureCount = 0;
-
-        for (let step = 0; step < MAX_FORM_STEPS; step++) {
-          if (automationAborted) return cleanup("Automation stopped by user");
-
-          const fieldsResult = await sendToContentScript(tab.id, {
-            type: "EXECUTE_ACTION",
-            command: "GET_FORM_FIELDS",
-            actionId: `fields-${targetApp._id}-${step}`,
-          });
-          const fields = fieldsResult?.data?.fields || [];
-
-          const fieldsSignature = fields
-            .filter((f) => f.required)
-            .map((f) => `${f.type}:${(f.label || "").toLowerCase().trim()}:${String(f.value || "").toLowerCase().trim()}`)
-            .sort()
-            .join("|");
-
-          if (fieldsSignature && fieldsSignature === lastFieldsSignature) {
-            repeatedSignatureCount++;
-          } else {
-            repeatedSignatureCount = 0;
-            lastFieldsSignature = fieldsSignature;
-          }
-
-          if (repeatedSignatureCount >= 4) {
-            await recordUnknownAutomationSituation(
-              "form-stuck-no-progress",
-              {
-                label: "No progress detected across repeated form steps",
-                source: "GET_FORM_FIELDS",
-                step: step + 1,
-                repeatedSignatureCount,
-                fieldsSignature,
-              },
-              targetApp.jobTitle
-            );
-            throw new Error("No form progress detected; skipping this job");
-          }
-
-          if (useAI && !uploaded && fields.some((f) => f.type === "file")) {
-            const uploadResult = await sendToContentScript(tab.id, {
-              type: "EXECUTE_ACTION",
-              command: "UPLOAD_RESUME",
-              actionId: `upload-${targetApp._id}-${step}`,
-              fileData: prepData.resumePdf,
-              fileName: prepData.resumeFileName || "tailored-resume.pdf",
-            });
-            if (!uploadResult?.data?.uploaded) {
-              throw new Error(`Resume upload failed: ${uploadResult?.data?.error || "unknown"}`);
-            }
-            uploaded = true;
-            await randomDelay(1000, 1600);
-          }
-
-          const requiredMissing = fields.filter((f) => f.required && isMissingFieldValue(f));
-          for (let i = 0; i < requiredMissing.length; i++) {
-            const field = requiredMissing[i];
-            const raw = getRuleBasedAnswer(field, storedRules);
-            const chosen = normalizeAnswerForField(field, raw) || fallbackAnswerForField(field);
-
-            if (!chosen) {
-              await recordUnknownFieldSituation(field, targetApp.jobTitle);
-              continue;
-            }
-
-            await sendToContentScript(tab.id, {
-              type: "EXECUTE_ACTION",
-              command: "FILL_FORM_FIELD",
-              actionId: `fill-${targetApp._id}-${step}-${i}`,
-              fieldIndex: i,
-              selector: field.selector,
-              value: chosen,
-              fieldType: field.type,
-            });
-            await randomDelay(250, 700);
-          }
-
-          const dropdownResult = await sendToContentScript(tab.id, {
-            type: "EXECUTE_ACTION",
-            command: "AUTO_SELECT_DROPDOWNS",
-            actionId: `auto-dropdown-${targetApp._id}-${step}`,
-          });
-          if ((dropdownResult?.data?.selectedCount || 0) > 0) {
-            await randomDelay(300, 700);
-          }
-
-          const navResult = await sendToContentScript(tab.id, {
-            type: "EXECUTE_ACTION",
-            command: "CLICK_NEXT_OR_SUBMIT",
-            actionId: `nav-${targetApp._id}-${step}`,
-          });
-
-          const navAction = navResult?.data?.action;
-          if (navAction === "submitted") {
-            submitted = true;
-            break;
-          }
-
-          if (navAction === "next" || navAction === "review") {
-            await randomDelay(1000, 1600);
-            continue;
-          }
-
-          if (navAction === "continue_applying") {
-            await recordUnknownAutomationSituation(
-              "linkedin-continue-applying-interstitial",
-              {
-                label: "LinkedIn safety interstitial after Easy Apply",
-                source: "CLICK_NEXT_OR_SUBMIT",
-                href: navResult?.data?.href || "",
-                safety: !!navResult?.data?.safety,
-              },
-              targetApp.jobTitle
-            );
-            await waitForTabLoad(tab.id);
-            await randomDelay(1400, 2200);
-            await ensureContentScriptReady(tab.id);
-            continue;
-          }
-
-          if (navAction === "blocked") {
-            const stillMissing = requiredMissing.filter((f) => isMissingFieldValue(f));
-            if (stillMissing.length > 0) {
-              for (const field of stillMissing) {
-                await recordUnknownFieldSituation(field, targetApp.jobTitle);
-              }
-            }
-            throw new Error(`Navigation blocked: ${navResult?.data?.error || "required fields unresolved"}`);
-          }
-
-          await recordUnknownAutomationSituation(
-            "form-navigation-unknown-action",
-            {
-              label: "Unknown form navigation action",
-              source: "CLICK_NEXT_OR_SUBMIT",
-              action: navAction || "none",
-              error: navResult?.data?.error || "",
-              step: step + 1,
-            },
-            targetApp.jobTitle
-          );
-
-          throw new Error(`Form navigation blocked on step ${step + 1} (action=${navAction || "none"})`);
-        }
-
-        if (!submitted) {
-          throw new Error("Application was not submitted within the allowed form steps");
-        }
-
-        if (targetApp?._id) {
-          await apiCall(`/api/jobs/automate?step=complete`, {
-            applicationId: targetApp._id,
-            success: true,
-            notes: "Auto-applied via LinkedBoost",
-          });
-        }
-
-        appliedCount++;
-        reportProgress("job:applied", {
-          message: `Applied to ${targetApp.jobTitle} at ${targetApp.company}`,
-          jobTitle: targetApp.jobTitle,
-          company: targetApp.company,
-          appliedCount,
-        });
-      } catch (jobErr) {
-        failedCount++;
-        if (targetApp?._id) {
-          await apiCall(`/api/jobs/automate?step=complete`, {
-            applicationId: targetApp._id,
-            success: false,
-            notes: `Auto-apply failed: ${jobErr.message}`,
-          }).catch(() => {});
-        }
-        reportProgress("task:error", {
-          message: `Skipped ${candidateJob.title}: ${jobErr.message}`,
-          jobTitle: candidateJob.title,
-        });
+        return url.toString();
+      } catch {
+        return baseUrl;
       }
     }
 
+    // Configuration for multi-page processing
+    const MAX_PAGES = 5;
+    const MAX_JOBS_PER_RUN = 50;
+    let totalAppliedCount = 0;
+    let totalFailedCount = 0;
+    let totalSkippedQualificationCount = 0;
+    let currentPage = 1;
+    const processedJobIds = new Set();
+
+    // Multi-page loop
+    pageLoop: for (let pageNum = 1; pageNum <= MAX_PAGES; pageNum++) {
+      if (automationAborted) return cleanup("Automation stopped by user");
+
+      currentPage = pageNum;
+      const currentPageUrl = getSearchUrlForPage(startData.url, pageNum);
+
+      // Navigate to the correct page (only if pageNum > 1 or first time)
+      if (pageNum > 1) {
+        console.log(`[LinkedBoost] Navigating to page ${pageNum}: ${currentPageUrl}`);
+        await navigateAndWait(tab.id, currentPageUrl);
+        await randomDelay(2000, 3000);
+      }
+
+      console.log(`[LinkedBoost] ====== Processing Page ${pageNum}/${MAX_PAGES} ======`);
+      reportProgress("task:progress", { message: `Processing page ${pageNum}...` });
+
+      // Step 2: Scrape job listings for current page
+      console.log(`[LinkedBoost] Step 2: Scraping job listings on page ${pageNum}...`);
+      reportProgress("task:progress", { message: `Scraping job listings on page ${pageNum}...` });
+      await randomDelay(1500, 2500);
+
+      const scrapeResult = await sendToContentScript(tab.id, {
+        type: "EXECUTE_ACTION",
+        command: "SCRAPE_JOB_LISTINGS",
+        actionId: `scrape-listings-p${pageNum}`,
+      });
+
+      const scrapedJobs = scrapeResult?.data?.jobs || [];
+      console.log(`[LinkedBoost] Page ${pageNum}: ${scrapedJobs.length} jobs found`);
+      emitLog("info", "extension", `Page ${pageNum}: ${scrapedJobs.length} jobs found`);
+      if (scrapedJobs.length > 0) {
+        console.log(`[LinkedBoost] First job:`, JSON.stringify(scrapedJobs[0]));
+      }
+
+      if (scrapedJobs.length === 0) {
+        if (pageNum === 1) {
+          console.error(`[LinkedBoost] Step 2 FAILED: scrapeResult =`, JSON.stringify(scrapeResult));
+          throw new Error("No jobs found on the search results page");
+        } else {
+          console.log(`[LinkedBoost] No more jobs found on page ${pageNum}, finishing pagination`);
+          break pageLoop;
+        }
+      }
+
+      // Filter eligible jobs, excluding already processed ones
+      const eligibleJobs = scrapedJobs.filter(
+        (job) => job?.url && !job.applied && job.easyApply !== false && !processedJobIds.has(job.jobId || job.url)
+      );
+      const dedupedEligibleJobs = [];
+      const seenJobKeys = new Set();
+      for (const job of eligibleJobs) {
+        const key = (job.jobId || job.url || "").trim();
+        if (!key || seenJobKeys.has(key) || processedJobIds.has(key)) continue;
+        seenJobKeys.add(key);
+        dedupedEligibleJobs.push(job);
+      }
+      const skippedAppliedCount = scrapedJobs.filter((job) => job?.applied).length;
+      const easyApplyDetectedCount = scrapedJobs.filter((job) => job?.easyApply !== false).length;
+
+      console.log(
+        `[LinkedBoost] Page ${pageNum} eligibility: total=${scrapedJobs.length}, easyApply=${easyApplyDetectedCount}, alreadyApplied=${skippedAppliedCount}, eligible=${dedupedEligibleJobs.length}`
+      );
+      emitLog("info", "extension", `Page ${pageNum} eligibility: total=${scrapedJobs.length}, easyApply=${easyApplyDetectedCount}, alreadyApplied=${skippedAppliedCount}, eligible=${dedupedEligibleJobs.length}`);
+
+      if (dedupedEligibleJobs.length === 0) {
+        console.log(`[LinkedBoost] No new eligible jobs on page ${pageNum}, trying next page...`);
+        continue;
+      }
+
+      reportProgress("job:found", {
+        message: `Page ${pageNum}: Found ${scrapedJobs.length} jobs (${skippedAppliedCount} already applied). Processing ${dedupedEligibleJobs.length} eligible jobs.`,
+        count: scrapedJobs.length,
+        page: pageNum,
+      });
+
+      const storedRules = await getStoredFormRules();
+      const remainingQuota = MAX_JOBS_PER_RUN - totalAppliedCount - totalFailedCount;
+      const jobsToProcessOnThisPage = Math.min(dedupedEligibleJobs.length, remainingQuota, 25);
+
+      if (jobsToProcessOnThisPage <= 0) {
+        console.log(`[LinkedBoost] Reached max jobs limit (${MAX_JOBS_PER_RUN}), stopping`);
+        break pageLoop;
+      }
+
+      let pageAppliedCount = 0;
+      let pageFailedCount = 0;
+      let pageSkippedQualificationCount = 0;
+      let needsReturnToSearchPage = false;
+
+      for (let jobIndex = 0; jobIndex < jobsToProcessOnThisPage; jobIndex++) {
+        const candidateJob = dedupedEligibleJobs[jobIndex];
+        targetApp = null;
+
+        // Mark as processed to avoid reprocessing
+        processedJobIds.add(candidateJob.jobId || candidateJob.url);
+
+        if (automationAborted) return cleanup("Automation stopped by user");
+
+        try {
+          console.log(`[LinkedBoost] Processing job ${jobIndex + 1}/${jobsToProcessOnThisPage} (page ${pageNum}): ${candidateJob.title}`);
+          emitLog("info", "extension", `Processing job ${jobIndex + 1}/${jobsToProcessOnThisPage} (page ${pageNum}): ${candidateJob.title}`);
+
+          // Navigate back to the CORRECT page if we navigated away (e.g., after applying)
+          if (needsReturnToSearchPage) {
+            console.log(`[LinkedBoost] Returning to search results page ${pageNum}...`);
+            await navigateAndWait(tab.id, currentPageUrl);
+            await randomDelay(900, 1500);
+            needsReturnToSearchPage = false;
+          }
+
+          // Verify we're on the right page before selecting
+          const pageInfoCheck = await sendToContentScript(tab.id, {
+            type: "EXECUTE_ACTION",
+            command: "GET_PAGE_INFO",
+            actionId: `pagecheck-${pageNum}-${jobIndex}`,
+          });
+          const currentTabUrl = pageInfoCheck?.data?.url || "";
+          if (!currentTabUrl.includes("/jobs/search") && !currentTabUrl.includes("/jobs/collection")) {
+            console.log(`[LinkedBoost] Not on search results page (url=${currentTabUrl}), navigating back...`);
+            await navigateAndWait(tab.id, currentPageUrl);
+            await randomDelay(900, 1500);
+          }
+
+          const selectResult = await sendToContentScript(tab.id, {
+            type: "EXECUTE_ACTION",
+            command: "SELECT_JOB_FROM_LIST",
+            actionId: `select-p${pageNum}-${jobIndex}`,
+            jobId: candidateJob.jobId,
+            jobUrl: candidateJob.url,
+          });
+
+          if (!selectResult?.data?.selected) {
+            pageFailedCount++;
+            totalFailedCount++;
+            reportProgress("task:progress", {
+              message: `Skipping ${candidateJob.title}: could not select job card in results list (${selectResult?.data?.error || "unknown"}).`,
+              jobTitle: candidateJob.title,
+            });
+            continue;
+          }
+
+          await randomDelay(800, 1200);
+
+          const qualResult = await sendToContentScript(tab.id, {
+            type: "EXECUTE_ACTION",
+            command: "CHECK_JOB_QUALIFICATION",
+            actionId: `qual-p${pageNum}-${jobIndex}`,
+            maxAttempts: 12,
+            delayMs: 350,
+          });
+          const qualification = qualResult?.data?.qualification || {
+            status: "unknown",
+            matched: false,
+            text: "",
+          };
+
+          // Proceed if matched OR if status is unknown (LinkedIn didn't show qualification info)
+          const shouldSkipJob =
+            qualification.status === "missing_required" ||
+            qualification.status === "no_match" ||
+            (qualification.matched === false && qualification.status !== "unknown");
+          const qualificationLabel =
+            qualification.text ||
+            String(qualification.status || "unknown").replace(/_/g, " ");
+
+          console.log(`[LinkedBoost] Qualification check: status="${qualification.status}", matched=${qualification.matched}, shouldSkip=${shouldSkipJob}, text="${qualification.text || ""}"`);
+          emitLog("info", "extension", `Qualification check: status="${qualification.status}", matched=${qualification.matched}, shouldSkip=${shouldSkipJob}`, qualification.text || "");
+
+          if (shouldSkipJob) {
+            pageSkippedQualificationCount++;
+            pageFailedCount++;
+            totalFailedCount++;
+            reportProgress("task:progress", {
+              message: `Skipping ${candidateJob.title}: LinkedIn qualification signal is "${qualificationLabel}".`,
+              jobTitle: candidateJob.title,
+            });
+            continue;
+          }
+
+          console.log(`[LinkedBoost] Proceeding with application for ${candidateJob.title}...`);
+          emitLog("info", "extension", `Proceeding with application for ${candidateJob.title}`);
+
+          let detail = null;
+          for (let attempt = 0; attempt < 3; attempt++) {
+            const detailResult = await sendToContentScript(tab.id, {
+              type: "EXECUTE_ACTION",
+              command: "SCRAPE_JOB_DETAIL",
+              actionId: `detail-p${pageNum}-${jobIndex}-${attempt}`,
+            });
+            detail = detailResult?.data?.detail;
+            if (detail?.description) break;
+            await randomDelay(1000, 1800);
+          }
+
+          if (!detail?.description) {
+            throw new Error("Could not extract job description");
+          }
+
+          const jobWithDetail = {
+            ...candidateJob,
+            title: detail.title || candidateJob.title,
+            company: detail.company || candidateJob.company,
+            description: detail.description,
+          };
+
+          let prepData = null;
+
+          const registerResult = await apiCall(`/api/jobs/automate?step=register-job`, {
+            searchId,
+            job: {
+              title: jobWithDetail.title,
+              company: jobWithDetail.company,
+              location: jobWithDetail.location || "",
+              url: jobWithDetail.url,
+              description: jobWithDetail.description || "",
+            },
+          });
+
+          targetApp = registerResult?.application || {
+            _id: null,
+            jobTitle: jobWithDetail.title,
+            company: jobWithDetail.company,
+            jobUrl: jobWithDetail.url,
+          };
+
+          if (!targetApp?._id) {
+            throw new Error("Could not register application record for job");
+          }
+
+          reportProgress("job:applying", {
+            message: useAI
+              ? `Applying to ${targetApp.jobTitle || jobWithDetail.title} at ${targetApp.company || jobWithDetail.company}...`
+              : `Applying (AI OFF) to ${targetApp.jobTitle || jobWithDetail.title} at ${targetApp.company || jobWithDetail.company}...`,
+            jobTitle: targetApp.jobTitle || jobWithDetail.title,
+            company: targetApp.company || jobWithDetail.company,
+          });
+
+          if (useAI) {
+            try {
+              prepData = await apiCall(`/api/jobs/automate?step=prepare-apply`, {
+                applicationId: targetApp._id,
+              });
+            } catch (prepErr) {
+              const prepMessage = prepErr?.message || "";
+              if (isGeminiQuotaErrorMessage(prepMessage)) {
+                useAI = false;
+                reportProgress("task:error", {
+                  message: `${prepMessage} Switched to AI Mode OFF for remaining jobs.`,
+                });
+                reportProgress("task:progress", {
+                  message: "AI Mode OFF active: continuing with existing LinkedIn resume (no AI calls).",
+                });
+              } else {
+                throw prepErr;
+              }
+            }
+
+            if (useAI && !prepData?.resumePdf) {
+              throw new Error("Tailored resume PDF was not generated");
+            }
+          }
+
+          // Try clicking Easy Apply from the search results side panel first
+          // (avoids navigating away from the search page)
+          let easyApplyResult = await sendToContentScript(tab.id, {
+            type: "EXECUTE_ACTION",
+            command: "CLICK_EASY_APPLY",
+            actionId: `apply-${targetApp._id}`,
+          });
+
+          if (!easyApplyResult?.data?.clicked) {
+            // If Easy Apply button wasn't found on side panel, navigate to the job page
+            console.log(`[LinkedBoost] Easy Apply not found on side panel, navigating to job page...`);
+            await navigateAndWait(tab.id, targetApp.jobUrl);
+            needsReturnToSearchPage = true;
+            await randomDelay(1000, 1600);
+
+            easyApplyResult = await sendToContentScript(tab.id, {
+              type: "EXECUTE_ACTION",
+              command: "CLICK_EASY_APPLY",
+              actionId: `apply-${targetApp._id}-retry`,
+            });
+            if (!easyApplyResult?.data?.clicked) {
+              throw new Error(`Easy Apply button not found: ${easyApplyResult?.data?.error || "unknown"}`);
+            }
+          }
+
+          if (easyApplyResult?.data?.sdui) {
+            needsReturnToSearchPage = true;
+            await waitForTabLoad(tab.id);
+            await randomDelay(1400, 2200);
+            await ensureContentScriptReady(tab.id);
+          }
+
+          const MAX_FORM_STEPS = 15;
+          let uploaded = false;
+          let submitted = false;
+          let lastFieldsSignature = "";
+          let repeatedSignatureCount = 0;
+
+          for (let step = 0; step < MAX_FORM_STEPS; step++) {
+            if (automationAborted) return cleanup("Automation stopped by user");
+
+            const fieldsResult = await sendToContentScript(tab.id, {
+              type: "EXECUTE_ACTION",
+              command: "GET_FORM_FIELDS",
+              actionId: `fields-${targetApp._id}-${step}`,
+            });
+            const fields = fieldsResult?.data?.fields || [];
+
+            const fieldsSignature = fields
+              .filter((f) => f.required)
+              .map((f) => `${f.type}:${(f.label || "").toLowerCase().trim()}:${String(f.value || "").toLowerCase().trim()}`)
+              .sort()
+              .join("|");
+
+            if (fieldsSignature && fieldsSignature === lastFieldsSignature) {
+              repeatedSignatureCount++;
+            } else {
+              repeatedSignatureCount = 0;
+              lastFieldsSignature = fieldsSignature;
+            }
+
+            if (repeatedSignatureCount >= 4) {
+              await recordUnknownAutomationSituation(
+                "form-stuck-no-progress",
+                {
+                  label: "No progress detected across repeated form steps",
+                  source: "GET_FORM_FIELDS",
+                  step: step + 1,
+                  repeatedSignatureCount,
+                  fieldsSignature,
+                },
+                targetApp.jobTitle
+              );
+              throw new Error("No form progress detected; skipping this job");
+            }
+
+            if (useAI && !uploaded && fields.some((f) => f.type === "file")) {
+              const uploadResult = await sendToContentScript(tab.id, {
+                type: "EXECUTE_ACTION",
+                command: "UPLOAD_RESUME",
+                actionId: `upload-${targetApp._id}-${step}`,
+                fileData: prepData.resumePdf,
+                fileName: prepData.resumeFileName || "tailored-resume.pdf",
+              });
+              if (!uploadResult?.data?.uploaded) {
+                throw new Error(`Resume upload failed: ${uploadResult?.data?.error || "unknown"}`);
+              }
+              uploaded = true;
+              await randomDelay(1000, 1600);
+            }
+
+            const requiredMissing = fields.filter((f) => f.required && isMissingFieldValue(f));
+            for (let i = 0; i < requiredMissing.length; i++) {
+              const field = requiredMissing[i];
+              const raw = getRuleBasedAnswer(field, storedRules);
+              const chosen = normalizeAnswerForField(field, raw) || fallbackAnswerForField(field);
+
+              if (!chosen) {
+                await recordUnknownFieldSituation(field, targetApp.jobTitle);
+                continue;
+              }
+
+              await sendToContentScript(tab.id, {
+                type: "EXECUTE_ACTION",
+                command: "FILL_FORM_FIELD",
+                actionId: `fill-${targetApp._id}-${step}-${i}`,
+                fieldIndex: i,
+                selector: field.selector,
+                value: chosen,
+                fieldType: field.type,
+              });
+              await randomDelay(250, 700);
+            }
+
+            const dropdownResult = await sendToContentScript(tab.id, {
+              type: "EXECUTE_ACTION",
+              command: "AUTO_SELECT_DROPDOWNS",
+              actionId: `auto-dropdown-${targetApp._id}-${step}`,
+            });
+            if ((dropdownResult?.data?.selectedCount || 0) > 0) {
+              await randomDelay(300, 700);
+            }
+
+            const navResult = await sendToContentScript(tab.id, {
+              type: "EXECUTE_ACTION",
+              command: "CLICK_NEXT_OR_SUBMIT",
+              actionId: `nav-${targetApp._id}-${step}`,
+            });
+
+            const navAction = navResult?.data?.action;
+            if (navAction === "submitted") {
+              submitted = true;
+              // After submission, dismiss the confirmation dialog if present
+              await randomDelay(1000, 1500);
+              try {
+                await sendToContentScript(tab.id, {
+                  type: "EXECUTE_ACTION",
+                  command: "GET_PAGE_INFO",
+                  actionId: `post-submit-check-${targetApp._id}`,
+                });
+              } catch { /* ignore - page may have navigated */ }
+              break;
+            }
+
+            if (navAction === "next" || navAction === "review") {
+              await randomDelay(1000, 1600);
+              continue;
+            }
+
+            if (navAction === "continue_applying") {
+              await recordUnknownAutomationSituation(
+                "linkedin-continue-applying-interstitial",
+                {
+                  label: "LinkedIn safety interstitial after Easy Apply",
+                  source: "CLICK_NEXT_OR_SUBMIT",
+                  href: navResult?.data?.href || "",
+                  safety: !!navResult?.data?.safety,
+                },
+                targetApp.jobTitle
+              );
+              needsReturnToSearchPage = true;
+              await waitForTabLoad(tab.id);
+              await randomDelay(1400, 2200);
+              await ensureContentScriptReady(tab.id);
+              continue;
+            }
+
+            if (navAction === "blocked") {
+              const stillMissing = requiredMissing.filter((f) => isMissingFieldValue(f));
+              if (stillMissing.length > 0) {
+                for (const field of stillMissing) {
+                  await recordUnknownFieldSituation(field, targetApp.jobTitle);
+                }
+              }
+              throw new Error(`Navigation blocked: ${navResult?.data?.error || "required fields unresolved"}`);
+            }
+
+            await recordUnknownAutomationSituation(
+              "form-navigation-unknown-action",
+              {
+                label: "Unknown form navigation action",
+                source: "CLICK_NEXT_OR_SUBMIT",
+                action: navAction || "none",
+                error: navResult?.data?.error || "",
+                step: step + 1,
+              },
+              targetApp.jobTitle
+            );
+
+            throw new Error(`Form navigation blocked on step ${step + 1} (action=${navAction || "none"})`);
+          }
+
+          if (!submitted) {
+            throw new Error("Application was not submitted within the allowed form steps");
+          }
+
+          // Mark that we need to return to search results for the next job
+          needsReturnToSearchPage = true;
+
+          if (targetApp?._id) {
+            await apiCall(`/api/jobs/automate?step=complete`, {
+              applicationId: targetApp._id,
+              success: true,
+              notes: "Auto-applied via LinkedBoost",
+            });
+          }
+
+          pageAppliedCount++;
+          totalAppliedCount++;
+          reportProgress("job:applied", {
+            message: `Applied to ${targetApp.jobTitle} at ${targetApp.company}`,
+            jobTitle: targetApp.jobTitle,
+            company: targetApp.company,
+            appliedCount: totalAppliedCount,
+            page: currentPage,
+          });
+        } catch (jobErr) {
+          pageFailedCount++;
+          totalFailedCount++;
+          if (targetApp?._id) {
+            await apiCall(`/api/jobs/automate?step=complete`, {
+              applicationId: targetApp._id,
+              success: false,
+              notes: `Auto-apply failed: ${jobErr.message}`,
+            }).catch(() => {});
+          }
+          reportProgress("task:error", {
+            message: `Skipped ${candidateJob.title}: ${jobErr.message}`,
+            jobTitle: candidateJob.title,
+          });
+          // If the error might have caused navigation, flag for return
+          needsReturnToSearchPage = true;
+        }
+      }
+
+      // Update total skipped count
+      totalSkippedQualificationCount += pageSkippedQualificationCount;
+
+      console.log(`[LinkedBoost] Page ${pageNum} complete: Applied=${pageAppliedCount}, Failed=${pageFailedCount}, Skipped=${pageSkippedQualificationCount}`);
+      emitLog("info", "extension", `Page ${pageNum} complete: Applied=${pageAppliedCount}, Failed=${pageFailedCount}, Skipped=${pageSkippedQualificationCount}`);
+
+      // Check if we should continue to the next page
+      if (totalAppliedCount + totalFailedCount >= MAX_JOBS_PER_RUN) {
+        console.log(`[LinkedBoost] Reached max jobs limit (${MAX_JOBS_PER_RUN}), stopping pagination`);
+        break pageLoop;
+      }
+    } // End of pageLoop
+
     reportProgress("task:complete", {
-      message: `Automation complete. Applied: ${appliedCount}, Failed/Skipped: ${failedCount} (${skippedQualificationCount} skipped by LinkedIn qualification signal).`,
-      appliedCount,
-      failedCount,
-      skippedQualificationCount,
+      message: `Automation complete. Pages processed: ${currentPage}. Applied: ${totalAppliedCount}, Failed/Skipped: ${totalFailedCount} (${totalSkippedQualificationCount} skipped by LinkedIn qualification signal).`,
+      appliedCount: totalAppliedCount,
+      failedCount: totalFailedCount,
+      skippedQualificationCount: totalSkippedQualificationCount,
+      pagesProcessed: currentPage,
     });
     return cleanup();
   } catch (err) {
@@ -1183,6 +1344,7 @@ async function startAutomation(searchId, options = {}) {
     console.error("[LinkedBoost] Error:", err.message);
     console.error("[LinkedBoost] Stack:", err.stack);
     console.error("[LinkedBoost] apiUrl:", apiUrl, "authToken:", authToken ? `${authToken.substring(0, 8)}...` : "NOT SET");
+    emitLog("error", "system", `AUTOMATION FAILED: ${err.message}`);
     reportProgress("task:error", {
       message: `Automation failed: ${err.message}`,
     });

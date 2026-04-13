@@ -2,6 +2,8 @@ import type { AIProvider, AIProviderName } from "./provider";
 import { GeminiProvider } from "./providers/gemini";
 import { GroqProvider } from "./providers/groq";
 import { OpenAIProvider } from "./providers/openai";
+import { AnthropicProvider } from "./providers/anthropic";
+import { OpenRouterProvider } from "./providers/openrouter";
 import { encrypt, decrypt } from "@/lib/utils/encryption";
 import connectDB from "@/lib/db/connection";
 import User from "@/lib/db/models/user";
@@ -15,7 +17,9 @@ export function createAIProvider(provider: AIProviderName, apiKey: string): AIPr
     case "openai":
       return new OpenAIProvider(apiKey);
     case "anthropic":
-      return null; // Not yet implemented
+      return new AnthropicProvider(apiKey);
+    case "openrouter":
+      return new OpenRouterProvider(apiKey);
     default:
       return null;
   }
@@ -54,26 +58,55 @@ export async function removeApiKey(userId: string, provider: AIProviderName) {
   await User.updateOne({ _id: userId }, { $pull: { aiApiKeys: { provider } } });
 }
 
+export async function revalidateApiKey(userId: string, provider: AIProviderName) {
+  await connectDB();
+  const user = await User.findById(userId).lean();
+  const keyEntry = user?.aiApiKeys?.find((k) => k.provider === provider);
+  if (!keyEntry) return { error: "Key not found" };
+
+  const apiKey = decrypt(keyEntry.encryptedKey);
+  const ai = createAIProvider(provider, apiKey);
+  if (!ai) return { error: "Provider not supported" };
+
+  const isValid = await ai.validateKey();
+  await User.updateOne(
+    { _id: userId, "aiApiKeys.provider": provider },
+    { $set: { "aiApiKeys.$.isValid": isValid } }
+  );
+  return { isValid };
+}
+
 export async function getUserAIProvider(userId: string): Promise<AIProvider | null> {
   await connectDB();
   const user = await User.findById(userId).lean();
   if (!user?.aiApiKeys?.length) return null;
 
-  const validKey = user.aiApiKeys.find((k) => k.isValid);
-  if (!validKey) return null;
+  // Respect user's preferred provider if set
+  const preferred = (user as unknown as { preferredAIProvider?: string }).preferredAIProvider;
+  let keyEntry = preferred
+    ? user.aiApiKeys.find((k) => k.provider === preferred && k.isValid)
+    : null;
 
-  const decryptedKey = decrypt(validKey.encryptedKey);
-  const provider = createAIProvider(validKey.provider as AIProviderName, decryptedKey);
+  // Fallback to any valid key
+  if (!keyEntry) {
+    keyEntry = user.aiApiKeys.find((k) => k.isValid) ?? null;
+  }
+  if (!keyEntry) return null;
+
+  const decryptedKey = decrypt(keyEntry.encryptedKey);
+  const provider = createAIProvider(keyEntry.provider as AIProviderName, decryptedKey);
   return provider;
 }
 
 export async function getUserApiKeys(userId: string) {
   await connectDB();
   const user = await User.findById(userId).lean();
-  return (user?.aiApiKeys ?? []).map((k) => ({
-    provider: k.provider,
-    isValid: k.isValid,
-    // Never return the actual key
-    maskedKey: "••••" + decrypt(k.encryptedKey).slice(-4),
-  }));
+  return (user?.aiApiKeys ?? []).map((k) => {
+    const decrypted = decrypt(k.encryptedKey);
+    return {
+      provider: k.provider,
+      isValid: k.isValid,
+      maskedKey: decrypted.slice(0, 6) + "••••" + decrypted.slice(-4),
+    };
+  });
 }

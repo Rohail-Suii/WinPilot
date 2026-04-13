@@ -18,7 +18,7 @@ export function Spinner({ size = "md", className, ...props }: SpinnerProps) {
       className={cn("flex items-center justify-center", className)}
       {...props}
     >
-      <Loader2 className={cn("animate-spin text-blue-500", sizeClasses[size])} />
+      <Loader2 className={cn("animate-spin text-[#00E5FF]", sizeClasses[size])} />
     </div>
   );
 }
@@ -36,7 +36,7 @@ export function LoadingSkeleton({ className }: { className?: string }) {
 
 export function CardSkeleton() {
   return (
-    <div className="rounded-xl border border-white/10 bg-white/5 p-6 space-y-4">
+    <div className="rounded-xl border border-[#1A1A1A] bg-[#111111] p-6 space-y-4">
       <LoadingSkeleton className="h-4 w-1/3" />
       <LoadingSkeleton className="h-8 w-1/2" />
       <LoadingSkeleton className="h-3 w-2/3" />

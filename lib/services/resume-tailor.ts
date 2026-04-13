@@ -118,7 +118,8 @@ export async function tailorResumeForJob(
     })),
   };
 
-  const messages = buildResumeTailoringPrompt(resumeData, sanitizedDescription);
+  const customPrompt = (resume as unknown as { customTailoringPrompt?: string }).customTailoringPrompt;
+  const messages = buildResumeTailoringPrompt(resumeData, sanitizedDescription, customPrompt);
   const result = await ai.generateJSON<unknown>(messages);
 
   return normalizeTailoredResumeResult(result);

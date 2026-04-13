@@ -3,7 +3,7 @@ import ResetPasswordPage from "./reset-password-client";
 
 export const metadata: Metadata = {
   title: "Reset Password",
-  description: "Set a new password for your LinkedBoost account.",
+  description: "Set a new password for your InPilot account.",
 };
 
 export default function Page() {

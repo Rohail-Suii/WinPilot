@@ -16,10 +16,21 @@ export const useSidebarStore = create<SidebarStore>((set) => ({
   setMobileOpen: (open) => set({ isMobileOpen: open }),
 }));
 
+export interface AutomationLogEntry {
+  id: string;
+  timestamp: string;
+  level: "info" | "warn" | "error" | "success";
+  source: "extension" | "api" | "content-script" | "system";
+  message: string;
+  details?: string;
+}
+
 interface ExtensionStore {
   isConnected: boolean;
   currentTask: string | null;
   lastTaskError: string | null;
+  automationRunning: boolean;
+  automationLogs: AutomationLogEntry[];
   aiQuotaStatus: {
     provider?: string;
     model?: string;
@@ -30,6 +41,7 @@ interface ExtensionStore {
   setConnected: (connected: boolean) => void;
   setCurrentTask: (task: string | null) => void;
   setLastTaskError: (error: string | null) => void;
+  setAutomationRunning: (running: boolean) => void;
   setAiQuotaStatus: (status: {
     provider?: string;
     model?: string;
@@ -37,17 +49,32 @@ interface ExtensionStore {
     dailyLimit?: number;
     retryAfterSeconds?: number;
   } | null) => void;
+  addLog: (log: AutomationLogEntry) => void;
+  clearLogs: () => void;
 }
+
+const MAX_LOGS = 500;
 
 export const useExtensionStore = create<ExtensionStore>((set) => ({
   isConnected: false,
   currentTask: null,
   lastTaskError: null,
+  automationRunning: false,
+  automationLogs: [],
   aiQuotaStatus: null,
   setConnected: (connected) => set({ isConnected: connected }),
   setCurrentTask: (task) => set({ currentTask: task }),
   setLastTaskError: (error) => set({ lastTaskError: error }),
+  setAutomationRunning: (running) => set({ automationRunning: running }),
   setAiQuotaStatus: (status) => set({ aiQuotaStatus: status }),
+  addLog: (log) =>
+    set((state) => ({
+      automationLogs:
+        state.automationLogs.length >= MAX_LOGS
+          ? [...state.automationLogs.slice(-MAX_LOGS + 1), log]
+          : [...state.automationLogs, log],
+    })),
+  clearLogs: () => set({ automationLogs: [] }),
 }));
 
 interface NotificationItem {

@@ -14,10 +14,11 @@ export interface IUser extends Document {
     profilePicUrl?: string;
   };
   aiApiKeys: {
-    provider: "gemini" | "openai" | "anthropic" | "groq";
+    provider: "gemini" | "openai" | "anthropic" | "groq" | "openrouter";
     encryptedKey: string;
     isValid: boolean;
   }[];
+  preferredAIProvider?: string;
   settings: {
     timezone: string;
     language: string;
@@ -57,13 +58,14 @@ const UserSchema = new Schema<IUser>(
       {
         provider: {
           type: String,
-          enum: ["gemini", "openai", "anthropic", "groq"],
+          enum: ["gemini", "openai", "anthropic", "groq", "openrouter"],
           required: true,
         },
         encryptedKey: { type: String, required: true },
         isValid: { type: Boolean, default: true },
       },
     ],
+    preferredAIProvider: { type: String, default: "" },
     settings: {
       timezone: { type: String, default: "UTC" },
       language: { type: String, default: "en" },

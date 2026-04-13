@@ -51,7 +51,7 @@ export const verifyEmailSchema = z.object({
 });
 
 export const aiApiKeySchema = z.object({
-  provider: z.enum(["gemini", "openai", "anthropic", "groq"]),
+  provider: z.enum(["gemini", "openai", "anthropic", "groq", "openrouter"]),
   apiKey: z.string().min(10, "API key is too short"),
 });
 
