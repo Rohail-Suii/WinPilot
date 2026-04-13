@@ -1,25 +1,11 @@
 "use client";
 
 import Link from "next/link";
-import { useRouter } from "next/navigation";
-import { useEffect, useMemo, useRef, useState } from "react";
-import styles from "./page.module.css";
+import { useEffect, useRef, useState } from "react";
 
-type IconProps = {
-  className?: string;
-};
-
-type Capability = {
-  label: string;
-  title: string;
-  body: string;
-  icon: (props: IconProps) => React.JSX.Element;
-  snippet?: string;
-  chips?: string[];
-  wide?: boolean;
-  full?: boolean;
-  chart?: boolean;
-};
+/* ═══════════════════════════════════════════════════════════
+   DATA
+   ═══════════════════════════════════════════════════════════ */
 
 const NAV_LINKS = [
   { label: "Features", href: "#capabilities" },
@@ -28,68 +14,57 @@ const NAV_LINKS = [
   { label: "Changelog", href: "#footer" },
 ];
 
-const TRUSTED_COMPANIES = ["GitHub", "Stripe", "Vercel", "Linear", "Raycast", "Supabase"];
-
-const CAPABILITIES: Capability[] = [
-  {
-    label: "AUTOMATION",
-    title: "Job Application Engine",
-    body: "Apply to 100+ jobs per day. AI-matched filters, auto-filled forms, personalized cover letters.",
-    icon: CursorIcon,
-    snippet: "inpilot apply --limit 100 --match-score 0.8",
-    wide: true,
-  },
-  {
-    label: "SCRAPING",
-    title: "LinkedIn Scraper",
-    body: "Extract profiles, emails, company data. Export to JSON, CSV, or pipe directly into your workflow.",
-    icon: SearchIcon,
-  },
-  {
-    label: "CONTENT",
-    title: "Post Scheduler",
-    body: "Schedule posts with a cron-like syntax. Supports carousels, polls, and text posts.",
-    icon: CalendarIcon,
-  },
-  {
-    label: "INTEGRATION",
-    title: "API & Webhooks",
-    body: "REST API + webhooks. Integrate into your stack in minutes. Full OpenAPI spec included.",
-    icon: PlugIcon,
-    chips: ["POST /v1/apply", "GET /v1/scrape"],
-    wide: true,
-  },
-  {
-    label: "INSIGHTS",
-    title: "Analytics Dashboard",
-    body: "Track application success rates, profile view spikes, post engagement, and scraping quotas in real time.",
-    icon: ChartIcon,
-    full: true,
-    chart: true,
-  },
+const TRUSTED_COMPANIES = [
+  "GitHub",
+  "Stripe",
+  "Vercel",
+  "Linear",
+  "Raycast",
+  "Supabase",
 ];
 
-const QUICKSTART_STEPS = [
+const TESTIMONIALS = [
   {
-    number: "01",
-    title: "Install",
-    body: "Install the CLI globally and get immediate access to automation commands.",
-    command: "npm install -g inpilot",
-    icon: InstallIcon,
+    quote:
+      "Finally stopped manually applying. InPilot handles 100 apps while I sleep.",
+    name: "@jsdevmike",
+    role: "Senior Eng at Stripe",
+    initials: "JM",
   },
   {
-    number: "02",
-    title: "Authenticate",
-    body: "Connect your account once and keep automation secured behind your token.",
-    command: "inpilot auth --token YOUR_LINKEDIN_TOKEN",
-    icon: AuthIcon,
+    quote:
+      "The scraper API is insane. I piped LinkedIn data straight into my CRM in an afternoon.",
+    name: "@buildwithpriya",
+    role: "Indie hacker",
+    initials: "BP",
   },
   {
-    number: "03",
-    title: "Automate",
-    body: "Launch automated applications and let InPilot execute the repetitive workflow.",
-    command: "inpilot apply --jobs 50 --auto",
-    icon: BoltIcon,
+    quote:
+      "Scheduled 3 months of LinkedIn content in one afternoon. Game changer.",
+    name: "@aaronxyz_",
+    role: "DevRel at Vercel",
+    initials: "AX",
+  },
+  {
+    quote:
+      "Went from 0 to 200 applications in a weekend. The CLI feels like magic.",
+    name: "@k_liao_dev",
+    role: "Founding Eng at Linear",
+    initials: "KL",
+  },
+  {
+    quote:
+      "We built our entire outbound pipeline on InPilot\u2019s API. Saved us hiring a VA.",
+    name: "@marcusbuilds",
+    role: "CTO at Launchpad",
+    initials: "MB",
+  },
+  {
+    quote:
+      "The webhook integration is *chef\u2019s kiss*. Real-time scrape data flowing into Slack.",
+    name: "@devshreya",
+    role: "Growth Eng at Raycast",
+    initials: "DS",
   },
 ];
 
@@ -97,809 +72,1175 @@ const PRICING_PLANS = [
   {
     name: "Hobby",
     price: "$0",
-    cadence: "/ month",
-    features: ["50 job apps/mo", "500 scrapes/mo", "5 scheduled posts"],
+    period: "/ month",
+    features: [
+      "50 job apps / mo",
+      "500 scrapes / mo",
+      "5 scheduled posts",
+      "Community support",
+    ],
     cta: "Start free",
     highlighted: false,
   },
   {
     name: "Pro",
     price: "$29",
-    cadence: "/ month",
-    features: ["2,000 apps/mo", "50,000 scrapes", "Unlimited posts", "API access"],
-    cta: "Get Pro →",
+    period: "/ mo",
+    badge: "RECOMMENDED",
+    features: [
+      "2,000 apps / mo",
+      "50,000 scrapes",
+      "Unlimited posts",
+      "API access",
+      "Priority email support",
+    ],
+    cta: "Get Pro \u2192",
     highlighted: true,
   },
   {
     name: "Team",
     price: "$99",
-    cadence: "/ month",
-    features: ["Unlimited everything", "Team seats", "Priority support", "SLA"],
+    period: "/ mo",
+    features: [
+      "Unlimited everything",
+      "Team seats",
+      "Priority support",
+      "SLA guarantee",
+      "Dedicated account manager",
+    ],
     cta: "Contact us",
     highlighted: false,
   },
 ];
 
-const TESTIMONIALS = [
+const STEPS = [
   {
-    quote: "Finally stopped manually applying. InPilot handles 100 apps while I sleep.",
-    author: "@jsdevmike",
-    role: "Senior Eng at Stripe",
-    initials: "JM",
+    num: "01",
+    title: "Install",
+    body: "One command. Global install. You\u2019re ready.",
+    code: "npm install -g inpilot",
   },
   {
-    quote: "The scraper API is insane. I piped LinkedIn data straight into my CRM in an afternoon.",
-    author: "@buildwithpriya",
-    role: "Indie hacker",
-    initials: "BP",
+    num: "02",
+    title: "Authenticate",
+    body: "Connect your LinkedIn account securely via token.",
+    code: "inpilot auth --token YOUR_LINKEDIN_TOKEN",
   },
   {
-    quote: "Scheduled 3 months of LinkedIn content in one afternoon. Game changer.",
-    author: "@aaronxyz_",
-    role: "DevRel at Vercel",
-    initials: "AX",
-  },
-  {
-    quote: "Our growth team replaced manual prospecting with scheduled scrapes and webhooks in two days.",
-    author: "@nadiadev",
-    role: "Growth Engineer",
-    initials: "ND",
-  },
-  {
-    quote: "I plugged InPilot into my internal tooling and now LinkedIn outreach is just another cron job.",
-    author: "@opswithleo",
-    role: "Platform Engineer",
-    initials: "OL",
-  },
-  {
-    quote: "The command-first workflow feels built for devs. No dashboard maze, just automation that works.",
-    author: "@samcodesfast",
-    role: "Technical Founder",
-    initials: "SC",
+    num: "03",
+    title: "Automate",
+    body: "Start applying, scraping, or scheduling immediately.",
+    code: "inpilot apply --jobs 50 --auto",
   },
 ];
 
-const FOOTER_COLUMNS = [
-  {
-    title: "Product",
-    links: ["Features", "Pricing", "Changelog", "Roadmap"],
-  },
-  {
-    title: "Developers",
-    links: ["Docs", "API Reference", "SDKs", "Status"],
-  },
-  {
-    title: "Company",
-    links: ["About", "Blog", "Careers", "Privacy"],
-  },
-];
+/* ═══════════════════════════════════════════════════════════
+   SVG ICONS (inline, stroke-style, 20px)
+   ═══════════════════════════════════════════════════════════ */
 
-const PALETTE_COMMANDS = [
-  { label: "Jump to Features", hint: "#capabilities", href: "#capabilities" },
-  { label: "Open Quickstart", hint: "#quickstart", href: "#quickstart" },
-  { label: "View Pricing", hint: "#pricing", href: "#pricing" },
-  { label: "Start Free", hint: "/register", href: "/register" },
-];
-
-const AVATARS = ["RK", "AL", "SM", "TP", "DN"];
-
-const CHART_BARS = [48, 72, 58, 84, 66, 92, 74];
-
-function renderBar(filledBlocks: number): string {
-  const boundedBlocks = Math.max(0, Math.min(12, filledBlocks));
-  return `${"█".repeat(boundedBlocks)}${"░".repeat(12 - boundedBlocks)}`;
+function CursorIcon({ className }: { className?: string }) {
+  return (
+    <svg className={className} width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M3 3l7.07 16.97 2.51-7.39 7.39-2.51L3 3z" />
+      <path d="M13 13l6 6" />
+    </svg>
+  );
 }
 
-function buildTerminalText(progress: number[]): string {
-  return `$ inpilot apply --jobs 50 --filter "remote AND senior"
-
-✓ Scraping LinkedIn jobs...     [${renderBar(progress[0])}] 412 found
-✓ Filtering by criteria...      [${renderBar(progress[1])}] 50 matched
-✓ Generating cover letters...   [${renderBar(progress[2])}] 50 done
-→ Submitting applications...    [${renderBar(progress[3])}] 38/50
-
-Applied to 38 jobs in 4m 12s.
-
-$ inpilot post --schedule "Mon,Wed,Fri 9am" --content ./posts/
-✓ Scheduled 12 posts across 3 weeks.
-
-$ `;
+function SearchIcon({ className }: { className?: string }) {
+  return (
+    <svg className={className} width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="11" cy="11" r="8" />
+      <line x1="21" y1="21" x2="16.65" y2="16.65" />
+    </svg>
+  );
 }
 
-export default function Home() {
-  const router = useRouter();
-  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
-  const [paletteOpen, setPaletteOpen] = useState(false);
-  const [navHidden, setNavHidden] = useState(false);
-  const [typedLength, setTypedLength] = useState(0);
-  const [typingDone, setTypingDone] = useState(false);
-  const [progressBars, setProgressBars] = useState<number[]>([0, 0, 0, 0]);
-  const [visibleCards, setVisibleCards] = useState<Record<number, boolean>>({});
+function CalendarIcon({ className }: { className?: string }) {
+  return (
+    <svg className={className} width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="3" y="4" width="18" height="18" rx="2" ry="2" />
+      <line x1="16" y1="2" x2="16" y2="6" />
+      <line x1="8" y1="2" x2="8" y2="6" />
+      <line x1="3" y1="10" x2="21" y2="10" />
+    </svg>
+  );
+}
 
-  const cardRefs = useRef<(HTMLDivElement | null)[]>([]);
-  const previousScrollY = useRef(0);
+function PlugIcon({ className }: { className?: string }) {
+  return (
+    <svg className={className} width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M12 22c5.523 0 10-4.477 10-10S17.523 2 12 2 2 6.477 2 12s4.477 10 10 10z" />
+      <path d="M2 12h20" />
+      <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" />
+    </svg>
+  );
+}
 
-  const initialTerminalText = useMemo(() => buildTerminalText([0, 0, 0, 0]), []);
+function ChartIcon({ className }: { className?: string }) {
+  return (
+    <svg className={className} width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <line x1="18" y1="20" x2="18" y2="10" />
+      <line x1="12" y1="20" x2="12" y2="4" />
+      <line x1="6" y1="20" x2="6" y2="14" />
+    </svg>
+  );
+}
+
+function MenuIcon({ className }: { className?: string }) {
+  return (
+    <svg className={className} width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <line x1="3" y1="6" x2="21" y2="6" />
+      <line x1="3" y1="12" x2="21" y2="12" />
+      <line x1="3" y1="18" x2="21" y2="18" />
+    </svg>
+  );
+}
+
+function XIcon({ className }: { className?: string }) {
+  return (
+    <svg className={className} width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <line x1="18" y1="6" x2="6" y2="18" />
+      <line x1="6" y1="6" x2="18" y2="18" />
+    </svg>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════
+   HOOKS
+   ═══════════════════════════════════════════════════════════ */
+
+function useScrollReveal() {
+  const ref = useRef<HTMLDivElement>(null);
+  const [visible, setVisible] = useState(false);
+
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (entry.isIntersecting) {
+          setVisible(true);
+          observer.unobserve(el);
+        }
+      },
+      { threshold: 0.1 }
+    );
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
+
+  return { ref, visible };
+}
+
+/* ═══════════════════════════════════════════════════════════
+   NAVIGATION
+   ═══════════════════════════════════════════════════════════ */
+
+function Navigation() {
+  const [mobileOpen, setMobileOpen] = useState(false);
+  const [hidden, setHidden] = useState(false);
+  const lastScroll = useRef(0);
 
   useEffect(() => {
     const onScroll = () => {
-      const currentScrollY = window.scrollY;
-
-      if (currentScrollY > previousScrollY.current + 10 && currentScrollY > 90) {
-        setNavHidden(true);
-      } else if (currentScrollY < previousScrollY.current - 10) {
-        setNavHidden(false);
-      }
-
-      previousScrollY.current = currentScrollY;
+      const curr = window.scrollY;
+      setHidden(curr > 100 && curr > lastScroll.current);
+      lastScroll.current = curr;
     };
-
     window.addEventListener("scroll", onScroll, { passive: true });
     return () => window.removeEventListener("scroll", onScroll);
   }, []);
 
-  useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => {
-      const isCommandPaletteShortcut = (event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k";
-
-      if (isCommandPaletteShortcut) {
-        event.preventDefault();
-        setPaletteOpen((current) => !current);
-      }
-
-      if (event.key === "Escape") {
-        setMobileMenuOpen(false);
-        setPaletteOpen(false);
-      }
-    };
-
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, []);
-
-  useEffect(() => {
-    const terminal = buildTerminalText([0, 0, 0, 0]);
-    const typingInterval = window.setInterval(() => {
-      setTypedLength((currentLength) => {
-        const nextLength = Math.min(currentLength + 1, terminal.length);
-
-        if (nextLength >= terminal.length) {
-          window.clearInterval(typingInterval);
-          setTypingDone(true);
-        }
-
-        return nextLength;
-      });
-    }, 12);
-
-    return () => window.clearInterval(typingInterval);
-  }, []);
-
-  useEffect(() => {
-    if (!typingDone) {
-      return;
-    }
-
-    const targetBars = [12, 12, 12, 8];
-    const duration = 1500;
-    let animationFrameId = 0;
-    const start = performance.now();
-
-    const animateBars = (currentTime: number) => {
-      const progress = Math.min(1, (currentTime - start) / duration);
-      const nextBars = targetBars.map((target) => Math.round(target * progress));
-      setProgressBars(nextBars);
-
-      if (progress < 1) {
-        animationFrameId = window.requestAnimationFrame(animateBars);
-      }
-    };
-
-    animationFrameId = window.requestAnimationFrame(animateBars);
-    return () => window.cancelAnimationFrame(animationFrameId);
-  }, [typingDone]);
-
-  useEffect(() => {
-    const timeoutIds: number[] = [];
-
-    const observer = new IntersectionObserver(
-      (entries) => {
-        entries.forEach((entry) => {
-          if (!entry.isIntersecting) {
-            return;
-          }
-
-          const target = entry.target as HTMLDivElement;
-          const cardIndex = Number(target.dataset.cardIndex ?? "0");
-          const timeoutId = window.setTimeout(() => {
-            setVisibleCards((current) => ({ ...current, [cardIndex]: true }));
-          }, cardIndex * 80);
-
-          timeoutIds.push(timeoutId);
-          observer.unobserve(target);
-        });
-      },
-      { threshold: 0.25 },
-    );
-
-    cardRefs.current.forEach((card) => {
-      if (card) {
-        observer.observe(card);
-      }
-    });
-
-    return () => {
-      observer.disconnect();
-      timeoutIds.forEach((timeoutId) => window.clearTimeout(timeoutId));
-    };
-  }, []);
-
-  useEffect(() => {
-    if (mobileMenuOpen || paletteOpen) {
-      document.body.style.overflow = "hidden";
-      return;
-    }
-
-    document.body.style.overflow = "";
-  }, [mobileMenuOpen, paletteOpen]);
-
-  const typedText = typingDone ? buildTerminalText(progressBars) : initialTerminalText.slice(0, typedLength);
-
-  const handleCommandClick = (href: string) => {
-    setPaletteOpen(false);
-    setMobileMenuOpen(false);
-
-    if (href.startsWith("#")) {
-      const section = document.querySelector(href);
-      if (section) {
-        section.scrollIntoView({ behavior: "smooth", block: "start" });
-      }
-      return;
-    }
-
-    router.push(href);
-  };
-
   return (
-    <div className={styles.page}>
-      <nav className={`${styles.navbar} ${navHidden ? styles.navbarHidden : ""}`}>
-        <div className={styles.container}>
-          <div className={styles.navInner}>
-            <Link href="/" className={styles.logo}>
-              <span className={styles.logoSquare} aria-hidden="true">
-                ■
-              </span>
-              <span className={styles.logoWordmark}>InPilot</span>
-            </Link>
+    <>
+      <nav
+        className="fixed top-0 left-0 right-0 z-50 transition-transform duration-300"
+        style={{
+          transform: hidden ? "translateY(-100%)" : "translateY(0)",
+          background: "rgba(10,10,10,0.85)",
+          backdropFilter: "blur(12px)",
+          WebkitBackdropFilter: "blur(12px)",
+          borderBottom: "1px solid #1A1A1A",
+          height: 56,
+        }}
+      >
+        <div className="max-w-[1200px] mx-auto px-5 md:px-10 h-full flex items-center justify-between">
+          {/* Logo */}
+          <Link href="/" className="flex items-center gap-2 shrink-0">
+            <span className="text-[#00E5FF] text-xs">&#9632;</span>
+            <span className="text-white font-bold text-lg tracking-tight">
+              InPilot
+            </span>
+          </Link>
 
-            <div className={styles.navLinks}>
-              {NAV_LINKS.map((link) => (
-                <a key={link.label} href={link.href} className={styles.navLink}>
-                  {link.label}
-                </a>
-              ))}
-            </div>
-
-            <div className={styles.navActions}>
-              <Link href="/login" className={styles.signInLink}>
-                Sign in
-              </Link>
-              <Link href="/register" className={styles.navPrimaryCta}>
-                Get started free
-              </Link>
-              <button
-                type="button"
-                className={styles.commandButton}
-                aria-label="Open command palette"
-                onClick={() => setPaletteOpen(true)}
-              >
-                ⌘
-              </button>
-              <button
-                type="button"
-                className={styles.mobileMenuButton}
-                onClick={() => setMobileMenuOpen(true)}
-                aria-label="Open menu"
-              >
-                ☰
-              </button>
-            </div>
-          </div>
-        </div>
-      </nav>
-
-      {mobileMenuOpen && (
-        <div className={styles.mobileMenuOverlay}>
-          <div className={styles.mobileMenuHeader}>
-            <span className={styles.mobileMenuBrand}>■ InPilot</span>
-            <button
-              type="button"
-              className={styles.mobileCloseButton}
-              onClick={() => setMobileMenuOpen(false)}
-              aria-label="Close menu"
-            >
-              ✕
-            </button>
-          </div>
-
-          <div className={styles.mobileMenuLinks}>
-            {NAV_LINKS.map((link) => (
+          {/* Center links — desktop */}
+          <div className="hidden md:flex items-center gap-8">
+            {NAV_LINKS.map((l) => (
               <a
-                key={link.label}
-                href={link.href}
-                className={styles.mobileMenuLink}
-                onClick={() => setMobileMenuOpen(false)}
+                key={l.label}
+                href={l.href}
+                className="text-sm text-[#888] hover:text-white transition-colors"
               >
-                {link.label}
+                {l.label}
               </a>
             ))}
           </div>
 
-          <div className={styles.mobileMenuActions}>
-            <Link href="/login" className={styles.mobileSecondaryCta} onClick={() => setMobileMenuOpen(false)}>
+          {/* Right side — desktop */}
+          <div className="hidden md:flex items-center gap-4">
+            <Link
+              href="/auth/signin"
+              className="text-sm text-[#888] hover:text-white transition-colors"
+            >
               Sign in
             </Link>
-            <Link href="/register" className={styles.mobilePrimaryCta} onClick={() => setMobileMenuOpen(false)}>
+            <Link
+              href="/auth/signup"
+              className="text-sm font-semibold bg-white text-black rounded-md px-4 py-2 hover:bg-[#00E5FF] transition-colors cta-hover"
+            >
               Get started free
             </Link>
           </div>
-        </div>
-      )}
 
-      {paletteOpen && (
-        <div className={styles.paletteOverlay} onClick={() => setPaletteOpen(false)}>
-          <div
-            className={styles.paletteDialog}
-            onClick={(event) => event.stopPropagation()}
-            role="dialog"
-            aria-modal="true"
-            aria-label="Command palette"
+          {/* Mobile hamburger */}
+          <button
+            aria-label={mobileOpen ? "Close menu" : "Open menu"}
+            className="md:hidden text-[#888] hover:text-white"
+            onClick={() => setMobileOpen(!mobileOpen)}
           >
-            <div className={styles.paletteHeader}>⌘ Command Palette</div>
-            <input className={styles.paletteInput} readOnly value="Type a command..." aria-label="Command input" />
-            <div className={styles.paletteCommandList}>
-              {PALETTE_COMMANDS.map((command) => (
-                <button
-                  key={command.label}
-                  type="button"
-                  className={styles.paletteCommand}
-                  onClick={() => handleCommandClick(command.href)}
-                >
-                  <span>{command.label}</span>
-                  <span className={styles.paletteHint}>{command.hint}</span>
-                </button>
-              ))}
-            </div>
-          </div>
+            {mobileOpen ? <XIcon /> : <MenuIcon />}
+          </button>
+        </div>
+      </nav>
+
+      {/* Mobile overlay */}
+      {mobileOpen && (
+        <div
+          className="fixed inset-0 z-40 flex flex-col items-center justify-center gap-8"
+          style={{ background: "rgba(10,10,10,0.97)" }}
+        >
+          {NAV_LINKS.map((l) => (
+            <a
+              key={l.label}
+              href={l.href}
+              className="text-2xl text-[#888] hover:text-white transition-colors"
+              onClick={() => setMobileOpen(false)}
+            >
+              {l.label}
+            </a>
+          ))}
+          <Link
+            href="/auth/signin"
+            className="text-lg text-[#888] hover:text-white"
+            onClick={() => setMobileOpen(false)}
+          >
+            Sign in
+          </Link>
+          <Link
+            href="/auth/signup"
+            className="text-lg font-semibold bg-white text-black rounded-md px-6 py-3 hover:bg-[#00E5FF] transition-colors"
+            onClick={() => setMobileOpen(false)}
+          >
+            Get started free
+          </Link>
         </div>
       )}
+    </>
+  );
+}
 
-      <main>
-        <section className={styles.heroSection}>
-          <div className={styles.container}>
-            <div className={styles.heroGrid}>
-              <div className={styles.heroCopy}>
-                <div className={styles.betaBadge}>
-                  <span className={styles.betaDot} aria-hidden="true" />
-                  <span>■ NOW IN BETA</span>
-                </div>
+/* ═══════════════════════════════════════════════════════════
+   TERMINAL VISUAL
+   ═══════════════════════════════════════════════════════════ */
 
-                <h1 className={styles.heroHeadline}>
-                  <span className={`${styles.heroLine} ${styles.heroLineOne}`}>AUTOMATE</span>
-                  <span className={`${styles.heroLine} ${styles.heroLineTwo}`}>LINKEDIN.</span>
-                  <span className={`${styles.heroLine} ${styles.heroLineThree}`}>SHIP FASTER.</span>
-                </h1>
+const TERMINAL_LINES = [
+  { type: "cmd" as const, text: "$ inpilot apply --jobs 50 --filter \"remote AND senior\"" },
+  { type: "blank" as const, text: "" },
+  { type: "ok" as const, text: "\u2713 Scraping LinkedIn jobs...     [\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588] 412 found" },
+  { type: "ok" as const, text: "\u2713 Filtering by criteria...      [\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588] 50 matched" },
+  { type: "ok" as const, text: "\u2713 Generating cover letters...   [\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588] 50 done" },
+  { type: "progress" as const, text: "\u2192 Submitting applications...    [\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2591\u2591\u2591\u2591] 38/50" },
+  { type: "blank" as const, text: "" },
+  { type: "result" as const, text: "Applied to 38 jobs in 4m 12s." },
+  { type: "blank" as const, text: "" },
+  { type: "cmd" as const, text: "$ inpilot post --schedule \"Mon,Wed,Fri 9am\" --content ./posts/" },
+  { type: "ok" as const, text: "\u2713 Scheduled 12 posts across 3 weeks." },
+  { type: "blank" as const, text: "" },
+  { type: "cursor" as const, text: "$ " },
+];
 
-                <p className={styles.heroSubheadline}>
-                  InPilot handles job applications, scraping, and posting so you can focus on building, not clicking.
-                </p>
+function TerminalBlock() {
+  const [visibleLines, setVisibleLines] = useState(0);
+  const termRef = useRef<HTMLDivElement>(null);
+  const started = useRef(false);
 
-                <div className={styles.heroCtas}>
-                  <Link href="/register" className={`${styles.ctaButton} ${styles.ctaPrimary}`}>
-                    Start automating →
-                  </Link>
-                  <a href="#quickstart" className={`${styles.ctaButton} ${styles.ctaGhost}`}>
-                    View docs
-                  </a>
-                </div>
+  useEffect(() => {
+    if (started.current) return;
+    started.current = true;
+    let i = 0;
+    const interval = setInterval(() => {
+      i++;
+      setVisibleLines(i);
+      if (i >= TERMINAL_LINES.length) clearInterval(interval);
+    }, 120);
+    return () => clearInterval(interval);
+  }, []);
 
-                <div className={styles.socialProof}>
-                  <div className={styles.avatarStack}>
-                    {AVATARS.map((initials) => (
-                      <span key={initials} className={styles.avatarBubble}>
-                        {initials}
-                      </span>
-                    ))}
-                  </div>
-                  <span className={styles.socialProofText}>Used by 2,400+ developers</span>
-                </div>
-              </div>
+  return (
+    <div
+      ref={termRef}
+      className="rounded-xl overflow-hidden"
+      style={{
+        border: "1px solid #222",
+        boxShadow: "0 0 60px rgba(0,229,255,0.06)",
+      }}
+    >
+      {/* Chrome bar */}
+      <div
+        className="flex items-center gap-2 px-4 py-3"
+        style={{ background: "#1A1A1A" }}
+      >
+        <span className="w-3 h-3 rounded-full bg-[#FF5F57]" />
+        <span className="w-3 h-3 rounded-full bg-[#FFBD2E]" />
+        <span className="w-3 h-3 rounded-full bg-[#28C840]" />
+        <span className="ml-4 text-xs text-[#555] font-mono">
+          inpilot &mdash; bash &mdash; 80&times;24
+        </span>
+      </div>
 
-              <div className={styles.heroVisual}>
-                <div className={styles.terminalCard}>
-                  <div className={styles.terminalChrome}>
-                    <div className={styles.chromeDots}>
-                      <span className={styles.dotRed} />
-                      <span className={styles.dotYellow} />
-                      <span className={styles.dotGreen} />
-                    </div>
-                    <span className={styles.terminalTitle}>inpilot — bash — 80×24</span>
-                  </div>
-
-                  <div className={styles.terminalBody}>
-                    {!typingDone && (
-                      <pre className={styles.terminalTypingText}>
-                        {typedText}
-                        <span className={styles.cursor}>_</span>
-                      </pre>
-                    )}
-
-                    {typingDone && (
-                      <div className={styles.terminalRendered}>
-                        <div className={styles.terminalCommandLine}>{'$ inpilot apply --jobs 50 --filter "remote AND senior"'}</div>
-                        <div className={styles.terminalSpacer} />
-
-                        <div className={styles.terminalProgressLine}>
-                          <span className={styles.terminalSymbol}>✓</span>
-                          <span className={styles.terminalLabel}>Scraping LinkedIn jobs...</span>
-                          <span className={styles.terminalBar}>[{renderBar(progressBars[0])}]</span>
-                          <span className={styles.terminalMeta}>412 found</span>
-                        </div>
-
-                        <div className={styles.terminalProgressLine}>
-                          <span className={styles.terminalSymbol}>✓</span>
-                          <span className={styles.terminalLabel}>Filtering by criteria...</span>
-                          <span className={styles.terminalBar}>[{renderBar(progressBars[1])}]</span>
-                          <span className={styles.terminalMeta}>50 matched</span>
-                        </div>
-
-                        <div className={styles.terminalProgressLine}>
-                          <span className={styles.terminalSymbol}>✓</span>
-                          <span className={styles.terminalLabel}>Generating cover letters...</span>
-                          <span className={styles.terminalBar}>[{renderBar(progressBars[2])}]</span>
-                          <span className={styles.terminalMeta}>50 done</span>
-                        </div>
-
-                        <div className={styles.terminalProgressLine}>
-                          <span className={styles.terminalArrow}>→</span>
-                          <span className={styles.terminalLabel}>Submitting applications...</span>
-                          <span className={styles.terminalBar}>[{renderBar(progressBars[3])}]</span>
-                          <span className={styles.terminalMeta}>38/50</span>
-                        </div>
-
-                        <div className={styles.terminalSpacer} />
-                        <div className={styles.terminalSummary}>Applied to 38 jobs in 4m 12s.</div>
-                        <div className={styles.terminalSpacer} />
-                        <div className={styles.terminalCommandLine}>{'$ inpilot post --schedule "Mon,Wed,Fri 9am" --content ./posts/'}</div>
-                        <div className={styles.terminalProgressLine}>
-                          <span className={styles.terminalSymbol}>✓</span>
-                          <span className={styles.terminalLabel}>Scheduled 12 posts across 3 weeks.</span>
-                        </div>
-                        <div className={styles.terminalSpacer} />
-                        <div className={styles.terminalPrompt}>
-                          $ <span className={styles.cursor}>_</span>
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                </div>
-              </div>
-            </div>
+      {/* Terminal body */}
+      <div
+        className="p-6 font-mono text-sm leading-relaxed overflow-x-auto"
+        style={{ background: "#0D0D0D", minHeight: 320 }}
+      >
+        {TERMINAL_LINES.slice(0, visibleLines).map((line, i) => (
+          <div key={i} className="whitespace-pre">
+            {line.type === "cmd" && (
+              <span className="text-white">{line.text}</span>
+            )}
+            {line.type === "ok" && (
+              <span className="text-[#00E5FF]">{line.text}</span>
+            )}
+            {line.type === "progress" && (
+              <span className="text-[#888]">{line.text}</span>
+            )}
+            {line.type === "result" && (
+              <span className="text-white font-semibold">{line.text}</span>
+            )}
+            {line.type === "cursor" && (
+              <span className="text-white">
+                {line.text}
+                <span className="animate-blink inline-block w-2 h-4 bg-[#00E5FF] align-middle" />
+              </span>
+            )}
+            {line.type === "blank" && <>&nbsp;</>}
           </div>
-        </section>
-
-        <section className={styles.trustedStrip}>
-          <div className={styles.container}>
-            <p className={styles.trustedLabel}>TRUSTED BY ENGINEERS AT</p>
-            <div className={styles.marqueeMask}>
-              <div className={styles.marqueeTrack}>
-                {[...TRUSTED_COMPANIES, ...TRUSTED_COMPANIES].map((company, index) => (
-                  <span key={`${company}-${index}`} className={styles.companyWordmark}>
-                    {company}
-                  </span>
-                ))}
-              </div>
-            </div>
-          </div>
-        </section>
-
-        <section id="capabilities" className={styles.featuresSection}>
-          <div className={styles.container}>
-            <div className={styles.sectionHeader}>
-              <p className={styles.sectionEyebrow}>CAPABILITIES</p>
-              <h2 className={styles.sectionTitle}>Everything LinkedIn. Automated.</h2>
-              <p className={styles.sectionSubtitle}>One SDK. Full control over your LinkedIn presence.</p>
-            </div>
-
-            <div className={styles.bentoGrid}>
-              {CAPABILITIES.map((card, index) => (
-                <div
-                  key={card.title}
-                  ref={(node) => {
-                    cardRefs.current[index] = node;
-                  }}
-                  data-card-index={index}
-                  className={`${styles.bentoCard} ${card.wide ? styles.bentoWide : ""} ${card.full ? styles.bentoFull : ""} ${visibleCards[index] ? styles.bentoVisible : ""}`}
-                >
-                  {card.chart ? (
-                    <div className={styles.analyticsCardLayout}>
-                      <div>
-                        <card.icon className={styles.cardIcon} />
-                        <p className={styles.cardLabel}>{card.label}</p>
-                        <h3 className={styles.cardTitle}>{card.title}</h3>
-                        <p className={styles.cardBody}>{card.body}</p>
-                      </div>
-                      <div className={styles.inlineChart}>
-                        {CHART_BARS.map((height, barIndex) => (
-                          <span
-                            key={`bar-${height}-${barIndex}`}
-                            className={styles.chartBar}
-                            style={{ height: `${height}%` }}
-                            aria-hidden="true"
-                          />
-                        ))}
-                      </div>
-                    </div>
-                  ) : (
-                    <>
-                      <card.icon className={styles.cardIcon} />
-                      <p className={styles.cardLabel}>{card.label}</p>
-                      <h3 className={styles.cardTitle}>{card.title}</h3>
-                      <p className={styles.cardBody}>{card.body}</p>
-
-                      {card.snippet && <code className={styles.cardSnippet}>{card.snippet}</code>}
-
-                      {card.chips && (
-                        <div className={styles.endpointChips}>
-                          {card.chips.map((chip) => (
-                            <span key={chip} className={styles.endpointChip}>
-                              {chip}
-                            </span>
-                          ))}
-                        </div>
-                      )}
-                    </>
-                  )}
-                </div>
-              ))}
-            </div>
-          </div>
-        </section>
-
-        <section id="quickstart" className={styles.quickstartSection}>
-          <div className={styles.container}>
-            <div className={styles.sectionHeader}>
-              <p className={styles.sectionEyebrow}>QUICKSTART</p>
-              <h2 className={styles.sectionTitle}>Up and running in 3 minutes.</h2>
-            </div>
-
-            <div className={styles.stepper}>
-              {QUICKSTART_STEPS.map((step) => (
-                <article key={step.number} className={styles.stepCard}>
-                  <span className={styles.stepBackdropNumber}>{step.number}</span>
-                  <div className={styles.stepContent}>
-                    <step.icon className={styles.stepIcon} />
-                    <h3 className={styles.stepTitle}>{step.title}</h3>
-                    <p className={styles.stepBody}>{step.body}</p>
-                    <code className={styles.stepCode}>{step.command}</code>
-                  </div>
-                </article>
-              ))}
-            </div>
-
-            <div className={styles.quickstartCtaWrap}>
-              <a href="/features" className={`${styles.ctaButton} ${styles.ctaOutlineCyan}`}>
-                Read the full docs →
-              </a>
-            </div>
-          </div>
-        </section>
-
-        <section id="pricing" className={styles.pricingSection}>
-          <div className={styles.container}>
-            <div className={styles.sectionHeader}>
-              <h2 className={styles.sectionTitle}>Simple, usage-based pricing.</h2>
-              <p className={styles.sectionSubtitle}>Pay for what you automate. No seat fees.</p>
-            </div>
-
-            <div className={styles.pricingGrid}>
-              {PRICING_PLANS.map((plan) => (
-                <article
-                  key={plan.name}
-                  className={`${styles.pricingCard} ${plan.highlighted ? styles.pricingCardHighlighted : ""}`}
-                >
-                  <div className={styles.pricingTopRow}>
-                    <h3 className={styles.planName}>{plan.name}</h3>
-                    {plan.highlighted && <span className={styles.recommendedBadge}>RECOMMENDED</span>}
-                  </div>
-
-                  <p className={styles.planPrice}>
-                    {plan.price}
-                    <span className={styles.planCadence}> {plan.cadence}</span>
-                  </p>
-
-                  <ul className={styles.planFeatureList}>
-                    {plan.features.map((feature) => (
-                      <li key={feature} className={styles.planFeatureItem}>
-                        <span className={styles.checkmark}>✓</span>
-                        <span>{feature}</span>
-                      </li>
-                    ))}
-                  </ul>
-
-                  <a
-                    href={plan.name === "Team" ? "/about" : "/register"}
-                    className={`${styles.pricingCta} ${plan.highlighted ? styles.pricingCtaPrimary : styles.pricingCtaGhost}`}
-                  >
-                    {plan.cta}
-                  </a>
-                </article>
-              ))}
-            </div>
-          </div>
-        </section>
-
-        <section id="testimonials" className={styles.testimonialsSection}>
-          <div className={styles.container}>
-            <div className={styles.sectionHeader}>
-              <h2 className={styles.sectionTitle}>What developers say.</h2>
-            </div>
-
-            <div className={styles.masonryColumns}>
-              {TESTIMONIALS.map((item) => (
-                <article key={item.author} className={styles.testimonialCard}>
-                  <p className={styles.testimonialQuote}>“{item.quote}”</p>
-                  <div className={styles.testimonialAuthorRow}>
-                    <span className={styles.testimonialAvatar}>{item.initials}</span>
-                    <div>
-                      <p className={styles.testimonialAuthor}>{item.author}</p>
-                      <p className={styles.testimonialRole}>{item.role}</p>
-                    </div>
-                  </div>
-                </article>
-              ))}
-            </div>
-          </div>
-        </section>
-
-        <section className={styles.finalCtaSection}>
-          <div className={styles.finalCtaGrid} aria-hidden="true" />
-          <div className={`${styles.container} ${styles.finalCtaContent}`}>
-            <p className={styles.sectionEyebrow}>START TODAY</p>
-            <h2 className={styles.finalCtaHeadline}>Stop clicking. Start automating.</h2>
-            <p className={styles.finalCtaSubtext}>
-              Join 2,400+ developers using InPilot to run LinkedIn on autopilot.
-            </p>
-
-            <div className={styles.finalCtaButtons}>
-              <Link href="/register" className={`${styles.ctaButton} ${styles.ctaPrimary}`}>
-                Get started free →
-              </Link>
-              <a href="/about" className={`${styles.ctaButton} ${styles.ctaGhost}`}>
-                Talk to a founder
-              </a>
-            </div>
-
-            <p className={styles.finalCtaMeta}>No credit card required · Cancel anytime · Open API</p>
-          </div>
-        </section>
-      </main>
-
-      <footer id="footer" className={styles.footer}>
-        <div className={styles.container}>
-          <div className={styles.footerGrid}>
-            <div>
-              <div className={styles.footerBrand}>■ InPilot</div>
-              <p className={styles.footerTagline}>LinkedIn, automated.</p>
-              <div className={styles.footerSocials}>
-                <a href="https://github.com" className={styles.footerLink}>
-                  GitHub
-                </a>
-                <a href="https://x.com" className={styles.footerLink}>
-                  X
-                </a>
-              </div>
-            </div>
-
-            {FOOTER_COLUMNS.map((column) => (
-              <div key={column.title}>
-                <h3 className={styles.footerColumnTitle}>{column.title}</h3>
-                <div className={styles.footerColumnLinks}>
-                  {column.links.map((item) => (
-                    <a key={item} href="#" className={styles.footerLink}>
-                      {item}
-                    </a>
-                  ))}
-                </div>
-              </div>
-            ))}
-          </div>
-
-          <div className={styles.footerBottomBar}>
-            <span>© 2025 InPilot. Built for developers, by developers.</span>
-            <div className={styles.footerBottomLinks}>
-              <a href="/terms" className={styles.footerLink}>
-                Terms
-              </a>
-              <a href="/privacy" className={styles.footerLink}>
-                Privacy
-              </a>
-              <a href="#" className={styles.footerLink}>
-                Status
-              </a>
-            </div>
-          </div>
-        </div>
-      </footer>
+        ))}
+      </div>
     </div>
   );
 }
 
-function CursorIcon({ className }: IconProps) {
+/* ═══════════════════════════════════════════════════════════
+   HERO SECTION
+   ═══════════════════════════════════════════════════════════ */
+
+function HeroSection() {
   return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className={className}>
-      <path d="M5 3l13 7-6 2 2 6-3 1-2-6-4 4z" />
-    </svg>
+    <section
+      className="min-h-screen flex items-center pt-14"
+      style={{ background: "#0A0A0A" }}
+    >
+      <div className="max-w-[1200px] mx-auto px-5 md:px-10 w-full grid grid-cols-1 lg:grid-cols-[55%_45%] gap-12 lg:gap-8 items-center py-16 lg:py-0">
+        {/* Left column */}
+        <div>
+          {/* Beta badge */}
+          <div
+            className="inline-flex items-center gap-2 px-3 py-1 rounded mb-8 animate-fade-in-up"
+            style={{
+              border: "1px solid #222",
+              background: "#111",
+            }}
+          >
+            <span
+              className="inline-block w-2 h-2 rounded-sm bg-[#00E5FF] animate-pulse-dot"
+            />
+            <span
+              className="text-[11px] font-semibold tracking-[0.1em] text-[#00E5FF] uppercase"
+            >
+              NOW IN BETA
+            </span>
+          </div>
+
+          {/* Headline */}
+          <h1 className="mb-8">
+            <span
+              className="block text-white animate-fade-in-up"
+              style={{
+                fontSize: "clamp(48px, 6vw, 80px)",
+                fontWeight: 800,
+                lineHeight: 0.95,
+                letterSpacing: "-0.04em",
+              }}
+            >
+              AUTOMATE
+            </span>
+            <span
+              className="block text-[#00E5FF] animate-fade-in-up animation-delay-200"
+              style={{
+                fontSize: "clamp(48px, 6vw, 80px)",
+                fontWeight: 800,
+                lineHeight: 0.95,
+                letterSpacing: "-0.04em",
+              }}
+            >
+              LINKEDIN.
+            </span>
+            <span
+              className="block text-white animate-fade-in-up animation-delay-400"
+              style={{
+                fontSize: "clamp(48px, 6vw, 80px)",
+                fontWeight: 800,
+                lineHeight: 0.95,
+                letterSpacing: "-0.04em",
+              }}
+            >
+              SHIP FASTER.
+            </span>
+          </h1>
+
+          {/* Subheadline */}
+          <p
+            className="text-[#888] text-lg leading-relaxed max-w-[460px] mb-8 animate-fade-in-up animation-delay-400"
+          >
+            InPilot handles job applications, scraping, and posting &mdash; so
+            you can focus on building, not clicking.
+          </p>
+
+          {/* CTA row */}
+          <div className="flex flex-wrap gap-4 mb-8 animate-fade-in-up animation-delay-500">
+            <Link
+              href="/auth/signup"
+              className="inline-flex items-center bg-[#00E5FF] text-black font-bold rounded-md px-6 py-3 text-base cta-hover"
+            >
+              Start automating &rarr;
+            </Link>
+            <a
+              href="#quickstart"
+              className="inline-flex items-center rounded-md px-6 py-3 text-base text-[#888] cta-hover"
+              style={{ border: "1px solid #333" }}
+            >
+              View docs
+            </a>
+          </div>
+
+          {/* Social proof */}
+          <div className="flex items-center gap-3 animate-fade-in-up animation-delay-600">
+            <div className="flex -space-x-2">
+              {["RK", "SL", "AT", "MJ", "DP"].map((initials, i) => (
+                <div
+                  key={i}
+                  className="w-8 h-8 rounded-full flex items-center justify-center text-[10px] font-semibold text-[#888] shrink-0"
+                  style={{
+                    background: "#1A1A1A",
+                    border: "2px solid #0A0A0A",
+                  }}
+                >
+                  {initials}
+                </div>
+              ))}
+            </div>
+            <span className="text-[#555] text-sm">
+              Used by 2,400+ developers
+            </span>
+          </div>
+        </div>
+
+        {/* Right column — Terminal */}
+        <div className="animate-fade-in-up animation-delay-300">
+          <TerminalBlock />
+        </div>
+      </div>
+    </section>
   );
 }
 
-function SearchIcon({ className }: IconProps) {
+/* ═══════════════════════════════════════════════════════════
+   SOCIAL PROOF BAR
+   ═══════════════════════════════════════════════════════════ */
+
+function SocialProofBar() {
   return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className={className}>
-      <circle cx="11" cy="11" r="6" />
-      <path d="m16 16 5 5" />
-    </svg>
+    <section
+      className="overflow-hidden"
+      style={{
+        background: "#111111",
+        borderTop: "1px solid #1A1A1A",
+        borderBottom: "1px solid #1A1A1A",
+        padding: "24px 0",
+      }}
+    >
+      <p className="text-center text-[11px] font-semibold tracking-[0.1em] text-[#444] uppercase mb-4">
+        TRUSTED BY ENGINEERS AT
+      </p>
+      <div className="relative">
+        <div className="flex animate-marquee whitespace-nowrap">
+          {[...TRUSTED_COMPANIES, ...TRUSTED_COMPANIES].map((name, i) => (
+            <span
+              key={i}
+              className="mx-10 text-[15px] font-semibold text-[#333] hover:text-[#888] transition-colors cursor-default select-none"
+            >
+              {name}
+            </span>
+          ))}
+          {[...TRUSTED_COMPANIES, ...TRUSTED_COMPANIES].map((name, i) => (
+            <span
+              key={`dup-${i}`}
+              className="mx-10 text-[15px] font-semibold text-[#333] hover:text-[#888] transition-colors cursor-default select-none"
+            >
+              {name}
+            </span>
+          ))}
+        </div>
+      </div>
+    </section>
   );
 }
 
-function CalendarIcon({ className }: IconProps) {
+/* ═══════════════════════════════════════════════════════════
+   FEATURES / BENTO GRID
+   ═══════════════════════════════════════════════════════════ */
+
+type CardDef = {
+  label: string;
+  title: string;
+  body: string;
+  icon: (props: { className?: string }) => React.JSX.Element;
+  snippet?: string;
+  chips?: string[];
+  chart?: boolean;
+  gridArea: string;
+};
+
+const CARDS: CardDef[] = [
+  {
+    label: "AUTOMATION",
+    title: "Job Application Engine",
+    body: "Apply to 100+ jobs per day. AI-matched filters, auto-filled forms, personalized cover letters.",
+    icon: CursorIcon,
+    snippet: "inpilot apply --limit 100 --match-score 0.8",
+    gridArea: "a",
+  },
+  {
+    label: "SCRAPING",
+    title: "LinkedIn Scraper",
+    body: "Extract profiles, emails, company data. Export to JSON, CSV, or pipe directly into your workflow.",
+    icon: SearchIcon,
+    gridArea: "b",
+  },
+  {
+    label: "CONTENT",
+    title: "Post Scheduler",
+    body: "Schedule posts with a cron-like syntax. Supports carousels, polls, and text posts.",
+    icon: CalendarIcon,
+    gridArea: "c",
+  },
+  {
+    label: "INTEGRATIONS",
+    title: "API & Webhooks",
+    body: "REST API + webhooks. Integrate into your stack in minutes. Full OpenAPI spec included.",
+    icon: PlugIcon,
+    chips: ["POST /v1/apply", "GET /v1/scrape"],
+    gridArea: "d",
+  },
+  {
+    label: "INSIGHTS",
+    title: "Analytics Dashboard",
+    body: "Track application success rates, profile view spikes, post engagement, and scraping quotas in real time.",
+    icon: ChartIcon,
+    chart: true,
+    gridArea: "e",
+  },
+];
+
+function MiniBarChart() {
+  const heights = [40, 65, 50, 80, 60, 90, 75];
   return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className={className}>
-      <rect x="3" y="5" width="18" height="16" rx="2" />
-      <path d="M8 3v4M16 3v4M3 10h18" />
-    </svg>
+    <div className="flex items-end gap-1.5 h-16">
+      {heights.map((h, i) => (
+        <div
+          key={i}
+          className="w-3 rounded-sm"
+          style={{
+            height: `${h}%`,
+            background: "#00E5FF",
+            opacity: 0.6 + i * 0.05,
+          }}
+        />
+      ))}
+    </div>
   );
 }
 
-function PlugIcon({ className }: IconProps) {
+function BentoCard({ card, delay }: { card: CardDef; delay: number }) {
+  const { ref, visible } = useScrollReveal();
+  const Icon = card.icon;
+
   return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className={className}>
-      <path d="M9 3v6M15 3v6M7 9h10v2a5 5 0 0 1-5 5 5 5 0 0 1-5-5z" />
-      <path d="M12 16v5" />
-    </svg>
+    <div
+      ref={ref}
+      className={`p-8 rounded-xl transition-all duration-200 ${
+        visible ? "animate-fade-in-up" : "opacity-0"
+      }`}
+      style={{
+        gridArea: card.gridArea,
+        background: "#111111",
+        border: "1px solid #1A1A1A",
+        animationDelay: `${delay}ms`,
+      }}
+      onMouseEnter={(e) => {
+        e.currentTarget.style.borderColor = "#333";
+        e.currentTarget.style.background = "#131313";
+      }}
+      onMouseLeave={(e) => {
+        e.currentTarget.style.borderColor = "#1A1A1A";
+        e.currentTarget.style.background = "#111111";
+      }}
+    >
+      <div className={`flex ${card.chart ? "justify-between" : "flex-col"}`}>
+        <div className={card.chart ? "flex-1" : ""}>
+          <Icon className="text-[#00E5FF] mb-4" />
+          <span className="block text-[11px] font-semibold tracking-[0.1em] text-[#00E5FF] uppercase mb-2">
+            {card.label}
+          </span>
+          <h3 className="text-xl font-semibold text-white mb-2">
+            {card.title}
+          </h3>
+          <p className="text-sm text-[#666] leading-relaxed">{card.body}</p>
+
+          {card.snippet && (
+            <div className="mt-4 font-mono text-sm text-[#00E5FF] bg-[#0D0D0D] rounded-md px-3 py-2 inline-block">
+              {card.snippet}
+            </div>
+          )}
+          {card.chips && (
+            <div className="mt-4 flex flex-wrap gap-2">
+              {card.chips.map((chip) => (
+                <span
+                  key={chip}
+                  className="font-mono text-xs text-[#00E5FF] bg-[#0D0D0D] rounded px-2 py-1"
+                  style={{ border: "1px solid #222" }}
+                >
+                  {chip}
+                </span>
+              ))}
+            </div>
+          )}
+        </div>
+        {card.chart && (
+          <div className="flex items-end ml-6">
+            <MiniBarChart />
+          </div>
+        )}
+      </div>
+    </div>
   );
 }
 
-function ChartIcon({ className }: IconProps) {
+function FeaturesSection() {
   return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className={className}>
-      <path d="M4 20V10M10 20V6M16 20v-8M22 20H2" />
-    </svg>
+    <section
+      id="capabilities"
+      className="py-[120px]"
+      style={{ background: "#0A0A0A" }}
+    >
+      <div className="max-w-[1200px] mx-auto px-5 md:px-10">
+        <p className="text-[11px] font-semibold tracking-[0.1em] text-[#00E5FF] uppercase mb-4">
+          CAPABILITIES
+        </p>
+        <h2
+          className="text-4xl md:text-[48px] font-bold tracking-tight mb-4"
+          style={{ letterSpacing: "-0.03em" }}
+        >
+          Everything LinkedIn. Automated.
+        </h2>
+        <p className="text-lg text-[#888] mb-16 max-w-xl">
+          One SDK. Full control over your LinkedIn presence.
+        </p>
+
+        {/* Bento grid */}
+        <div
+          className="grid gap-4"
+          style={{
+            gridTemplateColumns: "repeat(3, 1fr)",
+            gridTemplateAreas: `
+              "a a b"
+              "c d d"
+              "e e e"
+            `,
+          }}
+        >
+          {CARDS.map((card, i) => (
+            <BentoCard key={card.gridArea} card={card} delay={i * 80} />
+          ))}
+        </div>
+      </div>
+    </section>
   );
 }
 
-function InstallIcon({ className }: IconProps) {
+/* ═══════════════════════════════════════════════════════════
+   HOW IT WORKS — QUICKSTART
+   ═══════════════════════════════════════════════════════════ */
+
+function QuickstartSection() {
+  const { ref, visible } = useScrollReveal();
+
   return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className={className}>
-      <path d="M12 4v10M8 10l4 4 4-4" />
-      <rect x="4" y="17" width="16" height="3" rx="1" />
-    </svg>
+    <section
+      id="quickstart"
+      className="py-[120px]"
+      style={{ background: "#111111" }}
+    >
+      <div className="max-w-[1200px] mx-auto px-5 md:px-10" ref={ref}>
+        <p className="text-[11px] font-semibold tracking-[0.1em] text-[#00E5FF] uppercase mb-4">
+          QUICKSTART
+        </p>
+        <h2
+          className="text-4xl md:text-[48px] font-bold tracking-tight mb-16"
+          style={{ letterSpacing: "-0.03em" }}
+        >
+          Up and running in 3 minutes.
+        </h2>
+
+        {/* Stepper */}
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-8 relative">
+          {/* Dashed connector — desktop only */}
+          <div
+            className="hidden md:block absolute top-12 left-[16.6%] right-[16.6%] border-t border-dashed"
+            style={{ borderColor: "#333" }}
+          />
+
+          {STEPS.map((step, i) => (
+            <div
+              key={step.num}
+              className={`relative ${
+                visible ? "animate-fade-in-up" : "opacity-0"
+              }`}
+              style={{ animationDelay: `${i * 150}ms` }}
+            >
+              {/* Background number */}
+              <span
+                className="block text-[96px] font-extrabold leading-none select-none"
+                style={{ color: "#1A1A1A" }}
+              >
+                {step.num}
+              </span>
+              <h3 className="text-lg font-semibold text-white mt-2 mb-2">
+                {step.title}
+              </h3>
+              <p className="text-sm text-[#666] leading-relaxed mb-4">
+                {step.body}
+              </p>
+              <div
+                className="font-mono text-sm text-[#00E5FF] rounded-md px-3 py-2 inline-block"
+                style={{ background: "#0D0D0D", border: "1px solid #222" }}
+              >
+                {step.code}
+              </div>
+            </div>
+          ))}
+        </div>
+
+        <div className="mt-16 text-center">
+          <a
+            href="#quickstart"
+            className="inline-flex items-center text-[#00E5FF] font-semibold rounded-md px-6 py-3 cta-hover transition-colors"
+            style={{ border: "1px solid #333" }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.background = "#00E5FF";
+              e.currentTarget.style.color = "#000";
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.background = "transparent";
+              e.currentTarget.style.color = "#00E5FF";
+            }}
+          >
+            Read the full docs &rarr;
+          </a>
+        </div>
+      </div>
+    </section>
   );
 }
 
-function AuthIcon({ className }: IconProps) {
+/* ═══════════════════════════════════════════════════════════
+   PRICING
+   ═══════════════════════════════════════════════════════════ */
+
+function PricingSection() {
+  const { ref, visible } = useScrollReveal();
+
   return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className={className}>
-      <rect x="4" y="11" width="16" height="10" rx="2" />
-      <path d="M8 11V8a4 4 0 1 1 8 0v3" />
-    </svg>
+    <section
+      id="pricing"
+      className="py-[120px]"
+      style={{ background: "#0A0A0A" }}
+    >
+      <div className="max-w-[1200px] mx-auto px-5 md:px-10" ref={ref}>
+        <h2
+          className="text-4xl md:text-[48px] font-bold tracking-tight text-center mb-4"
+          style={{ letterSpacing: "-0.03em" }}
+        >
+          Simple, usage-based pricing.
+        </h2>
+        <p className="text-lg text-[#888] text-center mb-16">
+          Pay for what you automate. No seat fees.
+        </p>
+
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+          {PRICING_PLANS.map((plan, i) => (
+            <div
+              key={plan.name}
+              className={`rounded-xl p-10 flex flex-col ${
+                visible ? "animate-fade-in-up" : "opacity-0"
+              }`}
+              style={{
+                background: "#111111",
+                border: plan.highlighted
+                  ? "1px solid #00E5FF"
+                  : "1px solid #1A1A1A",
+                boxShadow: plan.highlighted
+                  ? "0 0 40px rgba(0,229,255,0.08)"
+                  : "none",
+                animationDelay: `${i * 100}ms`,
+              }}
+            >
+              <div className="flex items-center gap-3 mb-6">
+                <h3 className="text-xl font-semibold text-white">
+                  {plan.name}
+                </h3>
+                {plan.badge && (
+                  <span className="text-[11px] font-semibold tracking-[0.1em] text-[#00E5FF] uppercase bg-[rgba(0,229,255,0.09)] px-2 py-0.5 rounded">
+                    {plan.badge}
+                  </span>
+                )}
+              </div>
+
+              <div className="mb-8">
+                <span className="text-4xl font-bold text-white">
+                  {plan.price}
+                </span>
+                <span className="text-[#888] ml-1">{plan.period}</span>
+              </div>
+
+              <ul className="flex-1 space-y-3 mb-8">
+                {plan.features.map((f) => (
+                  <li key={f} className="flex items-start gap-2 text-sm">
+                    <span className="text-[#00E5FF] mt-0.5">&check;</span>
+                    <span className="text-[#888]">{f}</span>
+                  </li>
+                ))}
+              </ul>
+
+              <button
+                className={`w-full py-3 rounded-md font-semibold text-sm cta-hover transition-colors ${
+                  plan.highlighted
+                    ? "bg-[#00E5FF] text-black hover:opacity-90"
+                    : "text-[#888] hover:text-white hover:border-white"
+                }`}
+                style={
+                  plan.highlighted
+                    ? undefined
+                    : { border: "1px solid #333", background: "transparent" }
+                }
+              >
+                {plan.cta}
+              </button>
+            </div>
+          ))}
+        </div>
+      </div>
+    </section>
   );
 }
 
-function BoltIcon({ className }: IconProps) {
+/* ═══════════════════════════════════════════════════════════
+   TESTIMONIALS
+   ═══════════════════════════════════════════════════════════ */
+
+function TestimonialsSection() {
+  const { ref, visible } = useScrollReveal();
+
+  const columns = [
+    TESTIMONIALS.filter((_, i) => i % 3 === 0),
+    TESTIMONIALS.filter((_, i) => i % 3 === 1),
+    TESTIMONIALS.filter((_, i) => i % 3 === 2),
+  ];
+
   return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className={className}>
-      <path d="M13 2 4 14h6l-1 8 9-12h-6z" />
-    </svg>
+    <section className="py-[100px]" style={{ background: "#111111" }}>
+      <div className="max-w-[1200px] mx-auto px-5 md:px-10" ref={ref}>
+        <h2
+          className="text-4xl md:text-[48px] font-bold tracking-tight mb-16"
+          style={{ letterSpacing: "-0.03em" }}
+        >
+          What developers say.
+        </h2>
+
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          {columns.map((col, ci) => (
+            <div key={ci} className="flex flex-col gap-4">
+              {col.map((t, ti) => (
+                <div
+                  key={ti}
+                  className={`rounded-xl p-6 ${
+                    visible ? "animate-fade-in-up" : "opacity-0"
+                  }`}
+                  style={{
+                    background: "#0A0A0A",
+                    border: "1px solid #1A1A1A",
+                    animationDelay: `${(ci * 2 + ti) * 80}ms`,
+                  }}
+                >
+                  <p className="text-[15px] text-[#888] leading-relaxed mb-4">
+                    &ldquo;{t.quote}&rdquo;
+                  </p>
+                  <div className="flex items-center gap-3">
+                    <div
+                      className="w-9 h-9 rounded-full flex items-center justify-center text-xs font-semibold text-[#888] shrink-0"
+                      style={{ background: "#1A1A1A" }}
+                    >
+                      {t.initials}
+                    </div>
+                    <div>
+                      <p className="text-sm font-semibold text-white">
+                        {t.name}
+                      </p>
+                      <p className="text-xs text-[#555]">{t.role}</p>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ))}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════
+   FINAL CTA
+   ═══════════════════════════════════════════════════════════ */
+
+function FinalCTASection() {
+  return (
+    <section
+      className="py-[160px] text-center relative"
+      style={{
+        background: "#0A0A0A",
+        backgroundImage:
+          "linear-gradient(rgba(255,255,255,0.03) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.03) 1px, transparent 1px)",
+        backgroundSize: "40px 40px",
+      }}
+    >
+      <div className="max-w-[1200px] mx-auto px-5 md:px-10 relative z-10">
+        <p className="text-[11px] font-semibold tracking-[0.1em] text-[#00E5FF] uppercase mb-6">
+          START TODAY
+        </p>
+        <h2
+          className="text-4xl md:text-[64px] font-extrabold tracking-tight mb-6"
+          style={{ letterSpacing: "-0.03em" }}
+        >
+          Stop clicking. Start automating.
+        </h2>
+        <p className="text-lg text-[#888] mb-10 max-w-xl mx-auto">
+          Join 2,400+ developers using InPilot to run LinkedIn on autopilot.
+        </p>
+
+        <div className="flex flex-wrap justify-center gap-4 mb-8">
+          <Link
+            href="/auth/signup"
+            className="inline-flex items-center bg-[#00E5FF] text-black font-bold rounded-md px-6 py-3 text-base cta-hover"
+          >
+            Get started free &rarr;
+          </Link>
+          <a
+            href="mailto:founders@inpilot.app"
+            className="inline-flex items-center rounded-md px-6 py-3 text-base text-[#888] cta-hover"
+            style={{ border: "1px solid #333" }}
+          >
+            Talk to a founder
+          </a>
+        </div>
+
+        <p className="text-[13px] text-[#444]">
+          No credit card required &middot; Cancel anytime &middot; Open API
+        </p>
+      </div>
+    </section>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════
+   FOOTER
+   ═══════════════════════════════════════════════════════════ */
+
+const FOOTER_COLS = [
+  {
+    title: "Product",
+    links: [
+      { label: "Features", href: "#capabilities" },
+      { label: "Pricing", href: "#pricing" },
+      { label: "Changelog", href: "#" },
+      { label: "Roadmap", href: "#" },
+    ],
+  },
+  {
+    title: "Developers",
+    links: [
+      { label: "Docs", href: "#quickstart" },
+      { label: "API Reference", href: "#" },
+      { label: "SDKs", href: "#" },
+      { label: "Status", href: "#" },
+    ],
+  },
+  {
+    title: "Company",
+    links: [
+      { label: "About", href: "/about" },
+      { label: "Blog", href: "#" },
+      { label: "Careers", href: "#" },
+      { label: "Privacy", href: "/privacy" },
+    ],
+  },
+];
+
+function Footer() {
+  return (
+    <footer
+      id="footer"
+      style={{
+        background: "#0A0A0A",
+        borderTop: "1px solid #1A1A1A",
+      }}
+    >
+      <div className="max-w-[1200px] mx-auto px-5 md:px-10 pt-[60px] pb-10">
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-10 mb-12">
+          {/* Col 1 — Logo */}
+          <div className="col-span-2 md:col-span-1">
+            <div className="flex items-center gap-2 mb-3">
+              <span className="text-[#00E5FF] text-xs">&#9632;</span>
+              <span className="text-white font-bold text-lg">InPilot</span>
+            </div>
+            <p className="text-sm text-[#444] mb-4">LinkedIn, automated.</p>
+            <div className="flex gap-4">
+              {/* GitHub */}
+              <a
+                href="https://github.com"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-[#444] hover:text-[#888] transition-colors"
+                aria-label="GitHub"
+              >
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
+                  <path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z" />
+                </svg>
+              </a>
+              {/* X / Twitter */}
+              <a
+                href="https://x.com"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-[#444] hover:text-[#888] transition-colors"
+                aria-label="X"
+              >
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
+                  <path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z" />
+                </svg>
+              </a>
+            </div>
+          </div>
+
+          {/* Other columns */}
+          {FOOTER_COLS.map((col) => (
+            <div key={col.title}>
+              <h4 className="text-sm font-semibold text-white mb-4">
+                {col.title}
+              </h4>
+              <ul className="space-y-2">
+                {col.links.map((link) => (
+                  <li key={link.label}>
+                    <a
+                      href={link.href}
+                      className="text-sm text-[#444] hover:text-[#888] transition-colors"
+                    >
+                      {link.label}
+                    </a>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ))}
+        </div>
+
+        {/* Bottom bar */}
+        <div
+          className="flex flex-col md:flex-row justify-between items-center pt-6 gap-4"
+          style={{ borderTop: "1px solid #1A1A1A" }}
+        >
+          <p className="text-xs text-[#444]">
+            &copy; 2025 InPilot. Built for developers, by developers.
+          </p>
+          <div className="flex gap-4">
+            <Link
+              href="/terms"
+              className="text-xs text-[#444] hover:text-[#888] transition-colors"
+            >
+              Terms
+            </Link>
+            <Link
+              href="/privacy"
+              className="text-xs text-[#444] hover:text-[#888] transition-colors"
+            >
+              Privacy
+            </Link>
+            <a
+              href="#"
+              className="text-xs text-[#444] hover:text-[#888] transition-colors"
+            >
+              Status
+            </a>
+          </div>
+        </div>
+      </div>
+    </footer>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════
+   PAGE
+   ═══════════════════════════════════════════════════════════ */
+
+export default function LandingPage() {
+  return (
+    <>
+      <a href="#main" className="skip-to-content">
+        Skip to content
+      </a>
+      <Navigation />
+      <main id="main">
+        <HeroSection />
+        <SocialProofBar />
+        <FeaturesSection />
+        <QuickstartSection />
+        <PricingSection />
+        <TestimonialsSection />
+        <FinalCTASection />
+      </main>
+      <Footer />
+    </>
   );
 }
