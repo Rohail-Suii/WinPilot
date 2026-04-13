@@ -40,7 +40,7 @@ function PasswordStrength({ password }: { password: string }) {
           ) : (
             <X className="h-3 w-3 text-[#333333]" />
           )}
-          <span className={check.met ? "text-[#28C840]" : "text-[#333333]">
+          <span className={check.met ? "text-[#28C840]" : "text-[#333333]"}>
             {check.label}
           </span>
         </div>
