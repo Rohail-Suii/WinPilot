@@ -131,7 +131,18 @@ export async function tailorResumeForJob(
 export async function getJobMatchScore(
   userId: string,
   jobDescription: string
-): Promise<{ score: number; summary: string }> {
+): Promise<{
+  score: number;
+  summary: string;
+  skillsMatch?: number;
+  experienceMatch?: number;
+  educationMatch?: number;
+  matchingSkills?: string[];
+  missingSkills?: string[];
+  strengths?: string[];
+  concerns?: string[];
+  recommendation?: string;
+}> {
   const ai = await getUserAIProvider(userId);
   if (!ai) {
     return { score: 0, summary: "No AI key configured" };
@@ -150,7 +161,26 @@ export async function getJobMatchScore(
   const result = await ai.generateJSON<{
     overallScore: number;
     summary: string;
+    skillsMatch?: number;
+    experienceMatch?: number;
+    educationMatch?: number;
+    matchingSkills?: string[];
+    missingSkills?: string[];
+    strengths?: string[];
+    concerns?: string[];
+    recommendation?: string;
   }>(messages);
 
-  return { score: result.overallScore, summary: result.summary };
+  return {
+    score: result.overallScore,
+    summary: result.summary,
+    skillsMatch: result.skillsMatch,
+    experienceMatch: result.experienceMatch,
+    educationMatch: result.educationMatch,
+    matchingSkills: result.matchingSkills,
+    missingSkills: result.missingSkills,
+    strengths: result.strengths,
+    concerns: result.concerns,
+    recommendation: result.recommendation,
+  };
 }

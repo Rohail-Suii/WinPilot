@@ -1,41 +1,26 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-import { useSession } from "next-auth/react";
-import { signOut } from "next-auth/react";
-import { useSearchParams } from "next/navigation";
 import { useForm } from "react-hook-form";
 import { toast } from "sonner";
 import {
-  User,
   Key,
   Sliders,
-  Shield,
   Plus,
   Trash2,
   CheckCircle2,
   XCircle,
   Loader2,
-  Eye,
-  EyeOff,
   FileText,
   Upload,
   Star,
   Sparkles,
-  Puzzle,
-  Download,
-  Bug,
-  Wifi,
-  WifiOff,
-  AlertTriangle,
   Clock,
   Activity,
-  Lock,
   RefreshCw,
   Zap,
   TrendingDown,
 } from "lucide-react";
-import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import {
   Card,
   CardContent,
@@ -60,261 +45,40 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
-import { useExtensionStore } from "@/lib/hooks/use-stores";
-import type {
-  ProviderCreditsResult,
-  ApiKeyInfo,
-  AutomationSettings,
-} from "@/components/shared/ai-settings-tabs";
 
 // ─── Types ──────────────────────────────────────
 
-interface ActivityLogItem {
-  action: string;
-  module: string;
-  status: string;
-  timestamp: string;
+export interface ProviderCreditsResult {
+  provider: string;
+  type: "credits" | "rate-limit" | "free-tier" | "error";
+  totalGranted?: number;
+  totalUsed?: number;
+  available?: number;
+  remainingRequests?: number | null;
+  totalRequests?: number | null;
+  remainingTokens?: number | null;
+  totalTokens?: number | null;
+  resetIn?: string | null;
+  note?: string;
+  error?: string;
 }
 
-// ─── Main Component ─────────────────────────────
-
-const VALID_TABS = ["profile", "extension", "security"];
-
-export function SettingsClient() {
-  const { data: session, update: updateSession } = useSession();
-  const searchParams = useSearchParams();
-  const initialTab = VALID_TABS.includes(searchParams.get("tab") ?? "") ? (searchParams.get("tab") as string) : "profile";
-  const [activeTab, setActiveTab] = useState(initialTab);
-
-  return (
-    <div className="space-y-6">
-      <div>
-        <h2 className="text-2xl font-bold text-white">Settings</h2>
-        <p className="text-white/50 mt-1">
-          Manage your account and preferences
-        </p>
-      </div>
-
-      <Tabs value={activeTab} onValueChange={setActiveTab}>
-        <TabsList className="flex flex-wrap gap-1">
-          <TabsTrigger value="profile">
-            <User className="h-4 w-4 mr-2" />
-            <span className="hidden sm:inline">Profile</span>
-          </TabsTrigger>
-          <TabsTrigger value="extension">
-            <Puzzle className="h-4 w-4 mr-2" />
-            <span className="hidden sm:inline">Extension</span>
-          </TabsTrigger>
-          <TabsTrigger value="security">
-            <Shield className="h-4 w-4 mr-2" />
-            <span className="hidden sm:inline">Security</span>
-          </TabsTrigger>
-        </TabsList>
-
-        <TabsContent value="profile">
-          <ProfileTab session={session} updateSession={updateSession} />
-        </TabsContent>
-        <TabsContent value="extension">
-          <ExtensionTab />
-        </TabsContent>
-        <TabsContent value="security">
-          <SecurityTab />
-        </TabsContent>
-      </Tabs>
-    </div>
-  );
+export interface ApiKeyInfo {
+  provider: string;
+  isValid: boolean;
+  maskedKey: string;
 }
 
-// ─── Profile Tab ────────────────────────────────
-
-function ProfileTab({
-  session,
-  updateSession,
-}: {
-  session: ReturnType<typeof useSession>["data"];
-  updateSession: ReturnType<typeof useSession>["update"];
-}) {
-  const {
-    register,
-    handleSubmit,
-    formState: { isSubmitting },
-  } = useForm({
-    defaultValues: { name: session?.user?.name || "" },
-  });
-
-  const onSubmit = async (data: { name: string }) => {
-    try {
-      const res = await fetch("/api/settings/profile", {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: data.name }),
-      });
-      if (res.ok) {
-        toast.success("Profile updated");
-        updateSession({ name: data.name });
-      } else {
-        const err = await res.json();
-        toast.error(err.error || "Failed to update");
-      }
-    } catch {
-      toast.error("Network error. Please try again.");
-    }
-  };
-
-  return (
-    <div className="space-y-6">
-      <Card>
-        <CardHeader>
-          <CardTitle>Profile Information</CardTitle>
-          <CardDescription>
-            Update your name and profile details
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <form
-            onSubmit={handleSubmit(onSubmit)}
-            className="space-y-4 max-w-md"
-          >
-            <div className="space-y-2">
-              <Label>Email</Label>
-              <Input value={session?.user?.email || ""} disabled />
-              <p className="text-xs text-white/30">Email cannot be changed</p>
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="name">Name</Label>
-              <Input id="name" {...register("name")} />
-            </div>
-            <Button type="submit" disabled={isSubmitting}>
-              {isSubmitting ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : (
-                "Save Changes"
-              )}
-            </Button>
-          </form>
-        </CardContent>
-      </Card>
-      <PasswordChangeCard />
-    </div>
-  );
+export interface AutomationSettings {
+  timezone: string;
+  language: string;
+  notificationPrefs: { email: boolean; inApp: boolean; extension: boolean };
+  dailyLimits: { applies: number; posts: number; scrapes: number };
 }
 
-function PasswordChangeCard() {
-  const [showPwd, setShowPwd] = useState(false);
-  const [passwordError, setPasswordError] = useState<string | null>(null);
-  const {
-    register,
-    handleSubmit,
-    reset,
-    formState: { isSubmitting },
-  } = useForm({
-    defaultValues: { currentPassword: "", newPassword: "" },
-  });
+// ─── Constants ──────────────────────────────────
 
-  const onSubmit = async (data: {
-    currentPassword: string;
-    newPassword: string;
-  }) => {
-    setPasswordError(null);
-
-    if (!data.currentPassword) {
-      setPasswordError("Current password is required");
-      return;
-    }
-    if (data.newPassword.length < 8) {
-      setPasswordError("New password must be at least 8 characters");
-      return;
-    }
-    if (data.newPassword.length > 128) {
-      setPasswordError("New password must be at most 128 characters");
-      return;
-    }
-    if (!/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)/.test(data.newPassword)) {
-      setPasswordError("Password must contain uppercase, lowercase, and a number");
-      return;
-    }
-
-    try {
-      const res = await fetch("/api/settings/profile", {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(data),
-      });
-      if (res.ok) {
-        toast.success("Password updated");
-        reset();
-      } else {
-        const err = await res.json();
-        toast.error(err.error || "Failed to update password");
-      }
-    } catch {
-      toast.error("Network error. Please try again.");
-    }
-  };
-
-  return (
-    <Card>
-      <CardHeader>
-        <CardTitle>Change Password</CardTitle>
-        <CardDescription>Update your account password</CardDescription>
-      </CardHeader>
-      <CardContent>
-        <form
-          onSubmit={handleSubmit(onSubmit)}
-          className="space-y-4 max-w-md"
-        >
-          <div className="space-y-2">
-            <Label htmlFor="currentPassword">Current Password</Label>
-            <div className="relative">
-              <Input
-                id="currentPassword"
-                type={showPwd ? "text" : "password"}
-                {...register("currentPassword")}
-              />
-              <button
-                type="button"
-                onClick={() => setShowPwd(!showPwd)}
-                className="absolute right-3 top-1/2 -translate-y-1/2 text-white/40 hover:text-white/60"
-                aria-label={showPwd ? "Hide password" : "Show password"}
-              >
-                {showPwd ? (
-                  <EyeOff className="h-4 w-4" />
-                ) : (
-                  <Eye className="h-4 w-4" />
-                )}
-              </button>
-            </div>
-          </div>
-          <div className="space-y-2">
-            <Label htmlFor="newPassword">New Password</Label>
-            <Input
-              id="newPassword"
-              type={showPwd ? "text" : "password"}
-              {...register("newPassword")}
-            />
-            <p className="text-xs text-white/40">
-              Min 8 chars, must include uppercase, lowercase, and a number
-            </p>
-          </div>
-          {passwordError && (
-            <p className="text-sm text-red-400">{passwordError}</p>
-          )}
-          <Button type="submit" disabled={isSubmitting}>
-            {isSubmitting ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
-            ) : (
-              "Update Password"
-            )}
-          </Button>
-        </form>
-      </CardContent>
-    </Card>
-  );
-}
-
-// ─── Extension Tab ──────────────────────────────
-
-const providers = [
+export const providers = [
   {
     value: "gemini",
     label: "Google Gemini",
@@ -369,7 +133,7 @@ const providers = [
 
 // ─── Credits Display ─────────────────────────────
 
-function CreditsDisplay({ credits }: { credits: ProviderCreditsResult | undefined }) {
+export function CreditsDisplay({ credits }: { credits: ProviderCreditsResult | undefined }) {
   if (!credits) return null;
 
   if (credits.type === "error") {
@@ -478,7 +242,9 @@ function CreditsDisplay({ credits }: { credits: ProviderCreditsResult | undefine
   );
 }
 
-function AIKeysTab({
+// ─── AI Keys Tab ────────────────────────────────
+
+export function AIKeysTab({
   apiKeys,
   loading,
   addKeyOpen,
@@ -924,7 +690,7 @@ function AIKeysTab({
 
 // ─── Automation Tab ─────────────────────────────
 
-function AutomationTab({
+export function AutomationTab({
   settings,
 }: {
   settings: AutomationSettings | null;
@@ -1140,7 +906,7 @@ const EXAMPLE_PROMPTS: { label: string; quote: string; prompt: string }[] = [
   },
 ];
 
-function ResumeTab() {
+export function ResumeTab() {
   const [resumes, setResumes] = useState<ResumeItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [parseOpen, setParseOpen] = useState(false);
@@ -1376,7 +1142,6 @@ function ResumeTab() {
         setEditingResumeId(null);
         setEditData(null);
         fetchResumes();
-        // refresh detail if it was expanded
         if (expandedResume === editingResumeId) {
           setExpandedResume(null);
           setResumeDetail(null);
@@ -2248,717 +2013,6 @@ function ResumeTab() {
                 <>
                   <CheckCircle2 className="h-4 w-4" />
                   Confirm & Save
-                </>
-              )}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-    </div>
-  );
-}
-
-// ─── Extension Tab ──────────────────────────────
-
-function ExtensionTab() {
-  const { isConnected } = useExtensionStore();
-  const { data: session } = useSession();
-  const [debugMode, setDebugMode] = useState(false);
-  const [extensionLogs, setExtensionLogs] = useState<ActivityLogItem[]>([]);
-  const [logsLoading, setLogsLoading] = useState(false);
-  const [tokenCopied, setTokenCopied] = useState(false);
-
-  // Load debug mode from localStorage on mount
-  useEffect(() => {
-    try {
-      const stored = localStorage.getItem("extension_debug_mode");
-      if (stored === "true") setDebugMode(true);
-    } catch {
-      // localStorage not available
-    }
-  }, []);
-
-  const toggleDebugMode = (enabled: boolean) => {
-    setDebugMode(enabled);
-    try {
-      localStorage.setItem("extension_debug_mode", String(enabled));
-    } catch {
-      // localStorage not available
-    }
-    toast.success(enabled ? "Debug mode enabled" : "Debug mode disabled");
-  };
-
-  const fetchExtensionLogs = useCallback(async () => {
-    setLogsLoading(true);
-    try {
-      const res = await fetch("/api/dashboard");
-      if (res.ok) {
-        const data = await res.json();
-        const allActivity: ActivityLogItem[] = data.recentActivity || [];
-        const extensionOnly = allActivity
-          .filter(
-            (log: ActivityLogItem) =>
-              log.module === "extension" || log.module === "scraper"
-          )
-          .slice(0, 20);
-        setExtensionLogs(extensionOnly);
-      }
-    } catch {
-      toast.error("Failed to load extension logs");
-    }
-    setLogsLoading(false);
-  }, []);
-
-  useEffect(() => {
-    fetchExtensionLogs();
-  }, [fetchExtensionLogs]);
-
-  return (
-    <div className="space-y-6">
-      {/* Connection Status */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            {isConnected ? (
-              <Wifi className="h-5 w-5 text-emerald-400" />
-            ) : (
-              <WifiOff className="h-5 w-5 text-red-400" />
-            )}
-            Extension Connection
-          </CardTitle>
-          <CardDescription>
-            Real-time connection status with the browser extension
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <div className="flex items-center gap-4 rounded-xl bg-white/5 border border-white/10 px-5 py-4">
-            <div className="relative">
-              <div
-                className={cn(
-                  "h-4 w-4 rounded-full",
-                  isConnected ? "bg-emerald-400" : "bg-red-400"
-                )}
-              />
-              {isConnected && (
-                <div className="absolute inset-0 h-4 w-4 rounded-full bg-emerald-400 animate-ping opacity-30" />
-              )}
-            </div>
-            <div className="flex-1">
-              <p className="text-sm font-medium text-white">
-                {isConnected ? "Connected" : "Offline"}
-              </p>
-              <p className="text-xs text-white/40">
-                {isConnected
-                  ? "Extension is active and communicating with the server"
-                  : "Extension is not connected to the server"}
-              </p>
-            </div>
-            <Badge variant={isConnected ? "success" : "error"}>
-              {isConnected ? "Active" : "Disconnected"}
-            </Badge>
-          </div>
-
-          {!isConnected && (
-            <div className="mt-4 rounded-lg bg-amber-500/5 border border-amber-500/20 p-4">
-              <div className="flex items-start gap-3">
-                <AlertTriangle className="h-5 w-5 text-amber-400 mt-0.5 shrink-0" />
-                <div className="space-y-2">
-                  <p className="text-sm font-medium text-amber-400">
-                    Troubleshooting Tips
-                  </p>
-                  <ul className="text-xs text-white/50 space-y-1.5 list-disc list-inside">
-                    <li>
-                      Make sure the extension is installed and enabled in Chrome
-                    </li>
-                    <li>
-                      Check that you are logged in on the extension with the
-                      same account
-                    </li>
-                    <li>Try refreshing the extension from chrome://extensions</li>
-                    <li>
-                      Ensure your browser is not blocking WebSocket connections
-                    </li>
-                    <li>
-                      Disable any other extensions that might interfere with
-                      network requests
-                    </li>
-                  </ul>
-                </div>
-              </div>
-            </div>
-          )}
-        </CardContent>
-      </Card>
-
-      {/* Connection Token */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <Key className="h-5 w-5 text-purple-400" />
-            Connection Token
-          </CardTitle>
-          <CardDescription>
-            Copy this token and paste it in the extension popup to connect
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <div className="space-y-3">
-            <div className="flex items-center gap-2">
-              <Input
-                readOnly
-                value={session?.user?.id || "Loading..."}
-                className="font-mono text-xs bg-white/5 border-white/10"
-              />
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => {
-                  if (session?.user?.id) {
-                    navigator.clipboard.writeText(session.user.id);
-                    setTokenCopied(true);
-                    toast.success("Token copied to clipboard");
-                    setTimeout(() => setTokenCopied(false), 2000);
-                  }
-                }}
-              >
-                {tokenCopied ? (
-                  <CheckCircle2 className="h-4 w-4 text-emerald-400" />
-                ) : (
-                  "Copy"
-                )}
-              </Button>
-            </div>
-            <p className="text-xs text-white/40">
-              Open the extension popup, paste this token in the connection field, and click Connect.
-            </p>
-          </div>
-        </CardContent>
-      </Card>
-
-      {/* Installation Instructions */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <Download className="h-5 w-5 text-blue-400" />
-            Install Extension
-          </CardTitle>
-          <CardDescription>
-            Follow these steps to install the LinkedIn automation browser
-            extension
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <div className="space-y-4">
-            {[
-              {
-                step: 1,
-                title: "Download the extension",
-                description:
-                  "Download the latest extension build from the releases page or your dashboard.",
-              },
-              {
-                step: 2,
-                title: "Open Chrome Extensions",
-                description:
-                  'Navigate to chrome://extensions in your browser address bar.',
-              },
-              {
-                step: 3,
-                title: "Enable Developer Mode",
-                description:
-                  'Toggle the "Developer mode" switch in the top-right corner of the extensions page.',
-              },
-              {
-                step: 4,
-                title: 'Click "Load unpacked"',
-                description:
-                  'Click the "Load unpacked" button and select the extracted extension folder.',
-              },
-            ].map((item) => (
-              <div
-                key={item.step}
-                className="flex items-start gap-4 rounded-xl bg-white/5 border border-white/10 px-4 py-3"
-              >
-                <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-blue-500/20 text-blue-400 text-sm font-bold">
-                  {item.step}
-                </div>
-                <div>
-                  <p className="text-sm font-medium text-white">
-                    {item.title}
-                  </p>
-                  <p className="text-xs text-white/40 mt-0.5">
-                    {item.description}
-                  </p>
-                </div>
-              </div>
-            ))}
-          </div>
-        </CardContent>
-      </Card>
-
-      {/* Debug Mode */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <Bug className="h-5 w-5 text-amber-400" />
-            Debug Mode
-          </CardTitle>
-          <CardDescription>
-            Enable verbose logging for troubleshooting extension issues
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <div className="flex items-center justify-between rounded-xl bg-white/5 border border-white/10 px-4 py-3">
-            <div>
-              <p className="text-sm font-medium text-white">
-                Debug Logging
-              </p>
-              <p className="text-xs text-white/40">
-                When enabled, detailed logs are captured for extension
-                activity. Stored locally in your browser.
-              </p>
-            </div>
-            <Switch
-              checked={debugMode}
-              onCheckedChange={toggleDebugMode}
-            />
-          </div>
-        </CardContent>
-      </Card>
-
-      {/* Extension Logs */}
-      <Card>
-        <CardHeader>
-          <div className="flex items-center justify-between">
-            <div>
-              <CardTitle className="flex items-center gap-2">
-                <Activity className="h-5 w-5 text-blue-400" />
-                Extension Logs
-              </CardTitle>
-              <CardDescription>
-                Recent activity logs from the extension
-              </CardDescription>
-            </div>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={fetchExtensionLogs}
-              disabled={logsLoading}
-            >
-              <RefreshCw
-                className={cn(
-                  "h-4 w-4",
-                  logsLoading && "animate-spin"
-                )}
-              />
-              Refresh
-            </Button>
-          </div>
-        </CardHeader>
-        <CardContent>
-          {logsLoading ? (
-            <div className="flex items-center justify-center py-8">
-              <Loader2 className="h-6 w-6 animate-spin text-white/30" />
-            </div>
-          ) : extensionLogs.length === 0 ? (
-            <div className="text-center py-8">
-              <Activity className="h-10 w-10 text-white/20 mx-auto mb-3" />
-              <p className="text-white/40 text-sm">
-                No extension logs found
-              </p>
-              <p className="text-white/25 text-xs mt-1">
-                Logs will appear here once the extension starts performing
-                actions
-              </p>
-            </div>
-          ) : (
-            <div className="max-h-80 overflow-y-auto rounded-lg border border-white/10">
-              <table className="w-full text-sm">
-                <thead className="sticky top-0 bg-[#0A0F1C]">
-                  <tr className="border-b border-white/10">
-                    <th className="text-left text-xs font-medium text-white/50 px-3 py-2">
-                      Action
-                    </th>
-                    <th className="text-left text-xs font-medium text-white/50 px-3 py-2">
-                      Module
-                    </th>
-                    <th className="text-left text-xs font-medium text-white/50 px-3 py-2">
-                      Status
-                    </th>
-                    <th className="text-right text-xs font-medium text-white/50 px-3 py-2">
-                      Time
-                    </th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-white/5">
-                  {extensionLogs.map((log, i) => (
-                    <tr
-                      key={i}
-                      className="hover:bg-white/[0.03] transition-colors"
-                    >
-                      <td className="px-3 py-2 text-xs text-white/70">
-                        {log.action}
-                      </td>
-                      <td className="px-3 py-2">
-                        <Badge variant="info">{log.module}</Badge>
-                      </td>
-                      <td className="px-3 py-2">
-                        <Badge
-                          variant={
-                            log.status === "success"
-                              ? "success"
-                              : log.status === "error"
-                                ? "error"
-                                : "warning"
-                          }
-                        >
-                          {log.status}
-                        </Badge>
-                      </td>
-                      <td className="px-3 py-2 text-right text-xs text-white/40">
-                        {new Date(log.timestamp).toLocaleString()}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </CardContent>
-      </Card>
-    </div>
-  );
-}
-
-// ─── Security Tab ───────────────────────────────
-
-function SecurityTab() {
-  const [exporting, setExporting] = useState(false);
-  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
-  const [deleteConfirmText, setDeleteConfirmText] = useState("");
-  const [deleting, setDeleting] = useState(false);
-  const [activityLogs, setActivityLogs] = useState<ActivityLogItem[]>([]);
-  const [logsLoading, setLogsLoading] = useState(true);
-
-  const fetchActivityLogs = useCallback(async () => {
-    setLogsLoading(true);
-    try {
-      const res = await fetch("/api/dashboard");
-      if (res.ok) {
-        const data = await res.json();
-        setActivityLogs(data.recentActivity || []);
-      }
-    } catch {
-      toast.error("Failed to load activity logs");
-    }
-    setLogsLoading(false);
-  }, []);
-
-  useEffect(() => {
-    fetchActivityLogs();
-  }, [fetchActivityLogs]);
-
-  const exportData = async () => {
-    setExporting(true);
-    try {
-      const res = await fetch("/api/settings/data");
-      if (res.ok) {
-        const data = await res.json();
-        const blob = new Blob([JSON.stringify(data, null, 2)], {
-          type: "application/json",
-        });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement("a");
-        a.href = url;
-        a.download = `data-export-${new Date().toISOString().split("T")[0]}.json`;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        URL.revokeObjectURL(url);
-        toast.success("Data exported successfully");
-      } else {
-        toast.error("Failed to export data");
-      }
-    } catch {
-      toast.error("Network error. Please try again.");
-    }
-    setExporting(false);
-  };
-
-  const deleteAccount = async () => {
-    if (deleteConfirmText !== "DELETE") return;
-    setDeleting(true);
-    try {
-      const res = await fetch("/api/settings/data", { method: "DELETE" });
-      if (res.ok) {
-        toast.success("Account deleted. Signing out...");
-        setTimeout(() => {
-          signOut({ callbackUrl: "/" });
-        }, 1500);
-      } else {
-        const err = await res.json();
-        toast.error(err.error || "Failed to delete account");
-        setDeleting(false);
-      }
-    } catch {
-      toast.error("Network error. Please try again.");
-      setDeleting(false);
-    }
-  };
-
-  return (
-    <div className="space-y-6">
-      {/* Encryption Info */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <Lock className="h-5 w-5 text-emerald-400" />
-            Encryption
-          </CardTitle>
-          <CardDescription>How your data is protected</CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          {[
-            {
-              label: "API Key Encryption",
-              value: "AES-256-GCM with per-key salt + IV",
-            },
-            {
-              label: "Password Hashing",
-              value: "bcrypt with 12 salt rounds",
-            },
-            {
-              label: "Session Security",
-              value: "JWT with HTTP-only cookies",
-            },
-            {
-              label: "Rate Limiting",
-              value: "5 attempts/min on auth endpoints",
-            },
-          ].map((item) => (
-            <div
-              key={item.label}
-              className="flex items-center justify-between rounded-lg bg-white/5 border border-white/10 px-4 py-3"
-            >
-              <span className="text-sm text-white/70">{item.label}</span>
-              <span className="text-xs font-mono text-emerald-400">
-                {item.value}
-              </span>
-            </div>
-          ))}
-        </CardContent>
-      </Card>
-
-      {/* Data & Privacy */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <Shield className="h-5 w-5 text-blue-400" />
-            Data & Privacy
-          </CardTitle>
-          <CardDescription>Your data belongs to you</CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <p className="text-sm text-white/40">
-            LinkedBoost stores your data in MongoDB Atlas with encryption at
-            rest. We never sell your data, track your browsing, or share
-            information with third parties.
-          </p>
-          <Separator />
-          <div className="flex flex-wrap gap-3">
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={exportData}
-              disabled={exporting}
-            >
-              {exporting ? (
-                <>
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                  Exporting...
-                </>
-              ) : (
-                <>
-                  <Download className="h-4 w-4" />
-                  Export My Data
-                </>
-              )}
-            </Button>
-            <Button
-              variant="destructive"
-              size="sm"
-              onClick={() => setDeleteDialogOpen(true)}
-            >
-              <Trash2 className="h-4 w-4" />
-              Delete Account
-            </Button>
-          </div>
-        </CardContent>
-      </Card>
-
-      {/* Activity Log */}
-      <Card>
-        <CardHeader>
-          <div className="flex items-center justify-between">
-            <div>
-              <CardTitle className="flex items-center gap-2">
-                <Clock className="h-5 w-5 text-blue-400" />
-                Activity Log
-              </CardTitle>
-              <CardDescription>
-                Recent account activity and automation events
-              </CardDescription>
-            </div>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={fetchActivityLogs}
-              disabled={logsLoading}
-            >
-              <RefreshCw
-                className={cn(
-                  "h-4 w-4",
-                  logsLoading && "animate-spin"
-                )}
-              />
-              Refresh
-            </Button>
-          </div>
-        </CardHeader>
-        <CardContent>
-          {logsLoading ? (
-            <div className="flex items-center justify-center py-8">
-              <Loader2 className="h-6 w-6 animate-spin text-white/30" />
-            </div>
-          ) : activityLogs.length === 0 ? (
-            <div className="text-center py-8">
-              <Clock className="h-10 w-10 text-white/20 mx-auto mb-3" />
-              <p className="text-white/40 text-sm">No activity yet</p>
-              <p className="text-white/25 text-xs mt-1">
-                Your recent actions will appear here
-              </p>
-            </div>
-          ) : (
-            <div className="max-h-96 overflow-y-auto rounded-lg border border-white/10">
-              <table className="w-full text-sm">
-                <thead className="sticky top-0 bg-[#0A0F1C]">
-                  <tr className="border-b border-white/10">
-                    <th className="text-left text-xs font-medium text-white/50 px-3 py-2">
-                      Action
-                    </th>
-                    <th className="text-left text-xs font-medium text-white/50 px-3 py-2">
-                      Module
-                    </th>
-                    <th className="text-left text-xs font-medium text-white/50 px-3 py-2">
-                      Status
-                    </th>
-                    <th className="text-right text-xs font-medium text-white/50 px-3 py-2">
-                      Timestamp
-                    </th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-white/5">
-                  {activityLogs.map((log, i) => (
-                    <tr
-                      key={i}
-                      className="hover:bg-white/[0.03] transition-colors"
-                    >
-                      <td className="px-3 py-2 text-xs text-white/70 max-w-[200px] truncate">
-                        {log.action}
-                      </td>
-                      <td className="px-3 py-2">
-                        <Badge variant="info">{log.module}</Badge>
-                      </td>
-                      <td className="px-3 py-2">
-                        <Badge
-                          variant={
-                            log.status === "success"
-                              ? "success"
-                              : log.status === "error"
-                                ? "error"
-                                : "warning"
-                          }
-                        >
-                          {log.status}
-                        </Badge>
-                      </td>
-                      <td className="px-3 py-2 text-right text-xs text-white/40 whitespace-nowrap">
-                        {new Date(log.timestamp).toLocaleString()}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </CardContent>
-      </Card>
-
-      {/* Delete Account Dialog */}
-      <Dialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2 text-red-400">
-              <AlertTriangle className="h-5 w-5" />
-              Delete Account
-            </DialogTitle>
-            <DialogDescription>
-              This action is permanent and cannot be undone. All your data
-              including resumes, API keys, automation history, and account
-              information will be permanently deleted.
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-4">
-            <div className="rounded-lg bg-red-500/10 border border-red-500/20 p-4">
-              <p className="text-sm text-red-400 font-medium mb-2">
-                This will permanently delete:
-              </p>
-              <ul className="text-xs text-white/50 space-y-1 list-disc list-inside">
-                <li>Your account and profile information</li>
-                <li>All saved resumes and parsed data</li>
-                <li>All encrypted API keys</li>
-                <li>Automation settings and history</li>
-                <li>Activity logs and analytics data</li>
-              </ul>
-            </div>
-            <div className="space-y-2">
-              <Label className="text-white/70">
-                Type <span className="font-mono font-bold text-red-400">DELETE</span> to
-                confirm
-              </Label>
-              <Input
-                value={deleteConfirmText}
-                onChange={(e) => setDeleteConfirmText(e.target.value)}
-                placeholder="Type DELETE to confirm"
-                className="font-mono"
-              />
-            </div>
-          </div>
-          <DialogFooter>
-            <Button
-              type="button"
-              variant="outline"
-              onClick={() => {
-                setDeleteDialogOpen(false);
-                setDeleteConfirmText("");
-              }}
-            >
-              Cancel
-            </Button>
-            <Button
-              variant="destructive"
-              onClick={deleteAccount}
-              disabled={deleteConfirmText !== "DELETE" || deleting}
-            >
-              {deleting ? (
-                <>
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                  Deleting...
-                </>
-              ) : (
-                <>
-                  <Trash2 className="h-4 w-4" />
-                  Delete My Account
                 </>
               )}
             </Button>

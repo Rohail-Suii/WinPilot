@@ -63,6 +63,13 @@ export const WS_EVENTS = {
   // Automation logs
   AUTOMATION_LOG: "automation:log",
 
+  // Lead generation events
+  LEADGEN_LOG: "leadgen:log",
+  LEADGEN_PROGRESS: "leadgen:progress",
+  LEADGEN_COMMENT: "leadgen:comment",
+  LEADGEN_COMPLETE: "leadgen:complete",
+  LEADGEN_ERROR: "leadgen:error",
+
   // Heartbeat
   HEARTBEAT: "heartbeat",
   HEARTBEAT_ACK: "heartbeat:ack",
@@ -315,6 +322,11 @@ export type SseEventType =
   | "limit:reached"
   | "safety:alert"
   | "automation:log"
+  | "leadgen:log"
+  | "leadgen:progress"
+  | "leadgen:comment"
+  | "leadgen:complete"
+  | "leadgen:error"
   | "heartbeat:ack"
   | "notification";
 

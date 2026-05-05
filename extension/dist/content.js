@@ -4,6 +4,372 @@
 (function () {
   "use strict";
 
+  // ═══════════════════════════════════════════════════════════
+  // HUMAN BEHAVIOR SIMULATION MODULE
+  // Makes all interactions appear natural to LinkedIn's bot detection
+  // ═══════════════════════════════════════════════════════════
+
+  const HumanBehavior = (() => {
+    // --- Gaussian random using Box-Muller ---
+    function gaussianRandom(mean, stdDev) {
+      const u1 = Math.random();
+      const u2 = Math.random();
+      const z = Math.sqrt(-2 * Math.log(u1)) * Math.cos(2 * Math.PI * u2);
+      return mean + z * stdDev;
+    }
+
+    function clampedGaussian(min, max) {
+      const mean = (min + max) / 2;
+      const stdDev = (max - min) / 6;
+      return Math.max(min, Math.min(max, Math.round(gaussianRandom(mean, stdDev))));
+    }
+
+    function sleep(ms) {
+      return new Promise((r) => setTimeout(r, ms));
+    }
+
+    // --- Bezier curve point for smooth mouse paths ---
+    function bezierPoint(t, p0, p1, p2, p3) {
+      const u = 1 - t;
+      return u * u * u * p0 + 3 * u * u * t * p1 + 3 * u * t * t * p2 + t * t * t * p3;
+    }
+
+    // --- Simulate mouse movement along a Bezier curve to a target ---
+    async function moveMouseTo(targetX, targetY, steps) {
+      const numSteps = steps || clampedGaussian(15, 35);
+      // Start from a random-ish position (simulate where cursor "was")
+      const startX = targetX + clampedGaussian(-300, 300);
+      const startY = targetY + clampedGaussian(-200, 200);
+
+      // Random control points for natural curve (not a straight line)
+      const cp1x = startX + (targetX - startX) * 0.3 + clampedGaussian(-50, 50);
+      const cp1y = startY + (targetY - startY) * 0.1 + clampedGaussian(-40, 40);
+      const cp2x = startX + (targetX - startX) * 0.7 + clampedGaussian(-30, 30);
+      const cp2y = startY + (targetY - startY) * 0.9 + clampedGaussian(-20, 20);
+
+      for (let i = 0; i <= numSteps; i++) {
+        const t = i / numSteps;
+        // Ease-out timing (faster start, slower approach to target)
+        const easedT = 1 - Math.pow(1 - t, 2.5);
+        const x = bezierPoint(easedT, startX, cp1x, cp2x, targetX);
+        const y = bezierPoint(easedT, startY, cp1y, cp2y, targetY);
+
+        document.dispatchEvent(
+          new MouseEvent("mousemove", {
+            bubbles: true,
+            cancelable: true,
+            clientX: x + clampedGaussian(-2, 2), // tiny jitter
+            clientY: y + clampedGaussian(-1, 1),
+            view: window,
+          })
+        );
+
+        // Variable speed: slower near target (human deceleration)
+        const baseDelay = t > 0.8 ? clampedGaussian(8, 20) : clampedGaussian(3, 10);
+        await sleep(baseDelay);
+      }
+    }
+
+    // --- Hover over an element before clicking ---
+    async function hoverElement(element) {
+      const rect = element.getBoundingClientRect();
+      // Aim slightly off-center (humans don't click dead center)
+      const offsetX = clampedGaussian(-rect.width * 0.2, rect.width * 0.2);
+      const offsetY = clampedGaussian(-rect.height * 0.15, rect.height * 0.15);
+      const x = rect.left + rect.width / 2 + offsetX;
+      const y = rect.top + rect.height / 2 + offsetY;
+
+      await moveMouseTo(x, y);
+
+      // Dispatch mouseenter and mouseover
+      element.dispatchEvent(
+        new MouseEvent("mouseenter", { bubbles: true, cancelable: true, clientX: x, clientY: y, view: window })
+      );
+      element.dispatchEvent(
+        new MouseEvent("mouseover", { bubbles: true, cancelable: true, clientX: x, clientY: y, view: window })
+      );
+
+      // Brief hover pause (humans don't click instantly after arriving)
+      await sleep(clampedGaussian(80, 250));
+
+      return { x, y };
+    }
+
+    // --- Human-like click with full event sequence ---
+    async function humanClick(element) {
+      // Scroll element into view with natural behavior
+      if (element.getBoundingClientRect) {
+        const rect = element.getBoundingClientRect();
+        const isVisible = rect.top >= 0 && rect.bottom <= window.innerHeight;
+        if (!isVisible) {
+          element.scrollIntoView({ behavior: "smooth", block: "center" });
+          await sleep(clampedGaussian(300, 700));
+        }
+      }
+
+      // Move mouse to element with Bezier curve
+      const { x, y } = await hoverElement(element);
+
+      // Full mouse event sequence: mousedown -> (small delay) -> mouseup -> click
+      element.dispatchEvent(
+        new MouseEvent("mousedown", {
+          bubbles: true, cancelable: true, view: window, clientX: x, clientY: y, button: 0,
+        })
+      );
+
+      // Humans hold mouse button for 50-150ms
+      await sleep(clampedGaussian(50, 150));
+
+      element.dispatchEvent(
+        new MouseEvent("mouseup", {
+          bubbles: true, cancelable: true, view: window, clientX: x, clientY: y, button: 0,
+        })
+      );
+
+      // Tiny gap before click event fires
+      await sleep(clampedGaussian(5, 20));
+
+      element.dispatchEvent(
+        new MouseEvent("click", {
+          bubbles: true, cancelable: true, view: window, clientX: x, clientY: y, button: 0,
+        })
+      );
+    }
+
+    // --- Human-like typing: character by character ---
+    async function humanType(element, text) {
+      // Focus the element naturally
+      element.focus();
+      element.dispatchEvent(new FocusEvent("focus", { bubbles: true }));
+      await sleep(clampedGaussian(100, 300));
+
+      // Clear existing value first if present
+      const nativeInputValueSetter = Object.getOwnPropertyDescriptor(
+        window.HTMLInputElement.prototype, "value"
+      )?.set;
+      const nativeTextAreaValueSetter = Object.getOwnPropertyDescriptor(
+        window.HTMLTextAreaElement.prototype, "value"
+      )?.set;
+
+      const setter = element.tagName === "TEXTAREA" ? nativeTextAreaValueSetter : nativeInputValueSetter;
+      if (setter && element.value) {
+        setter.call(element, "");
+        element.dispatchEvent(new Event("input", { bubbles: true }));
+        await sleep(clampedGaussian(50, 150));
+      }
+
+      // Type each character with realistic delays
+      const chars = text.split("");
+      let typed = "";
+
+      for (let i = 0; i < chars.length; i++) {
+        const char = chars[i];
+        typed += char;
+
+        // Dispatch keydown
+        element.dispatchEvent(
+          new KeyboardEvent("keydown", {
+            key: char, code: `Key${char.toUpperCase()}`, bubbles: true, cancelable: true,
+          })
+        );
+
+        // Set value using native setter to trigger React/LinkedIn's state updates
+        if (setter) {
+          setter.call(element, typed);
+        }
+
+        // Dispatch keypress (deprecated but LinkedIn may still listen)
+        element.dispatchEvent(
+          new KeyboardEvent("keypress", {
+            key: char, code: `Key${char.toUpperCase()}`, bubbles: true, cancelable: true,
+          })
+        );
+
+        // Dispatch input event
+        element.dispatchEvent(new Event("input", { bubbles: true }));
+
+        // Dispatch keyup
+        element.dispatchEvent(
+          new KeyboardEvent("keyup", {
+            key: char, code: `Key${char.toUpperCase()}`, bubbles: true, cancelable: true,
+          })
+        );
+
+        // Variable keystroke delay:
+        // - Faster for common letters in the middle of words
+        // - Slower at word boundaries, after capitals, or punctuation
+        let delay;
+        if (char === " " || char === "." || char === ",") {
+          delay = clampedGaussian(100, 250); // Pause at word/sentence boundaries
+        } else if (char === char.toUpperCase() && char !== char.toLowerCase()) {
+          delay = clampedGaussian(80, 200); // Slight pause for capitals (Shift key)
+        } else {
+          delay = clampedGaussian(40, 130); // Normal typing speed ~70-130ms per char
+        }
+
+        // Occasional longer pause (simulating thinking mid-word) ~5% chance
+        if (Math.random() < 0.05) {
+          delay += clampedGaussian(200, 600);
+        }
+
+        await sleep(delay);
+      }
+
+      // Brief pause before blur
+      await sleep(clampedGaussian(100, 300));
+      element.dispatchEvent(new Event("change", { bubbles: true }));
+    }
+
+    // --- For short values (numbers, dropdown triggers), use fast input ---
+    function fastInput(element, value) {
+      element.focus();
+      element.dispatchEvent(new FocusEvent("focus", { bubbles: true }));
+
+      const nativeInputValueSetter = Object.getOwnPropertyDescriptor(
+        window.HTMLInputElement.prototype, "value"
+      )?.set;
+      const nativeTextAreaValueSetter = Object.getOwnPropertyDescriptor(
+        window.HTMLTextAreaElement.prototype, "value"
+      )?.set;
+
+      if (element.tagName === "TEXTAREA" && nativeTextAreaValueSetter) {
+        nativeTextAreaValueSetter.call(element, value);
+      } else if (nativeInputValueSetter) {
+        nativeInputValueSetter.call(element, value);
+      }
+
+      element.dispatchEvent(new Event("input", { bubbles: true }));
+      element.dispatchEvent(new Event("change", { bubbles: true }));
+    }
+
+    // --- Natural scrolling with variable speed ---
+    async function naturalScroll(targetY, duration) {
+      // requestAnimationFrame is suspended in background/inactive tabs, which causes
+      // an infinite hang. If the tab is not visible, skip animation and scroll instantly.
+      if (document.hidden) {
+        window.scrollTo(0, targetY);
+        return;
+      }
+
+      const startY = window.scrollY;
+      const distance = targetY - startY;
+      const totalDuration = duration || clampedGaussian(600, 1400);
+      const startTime = performance.now();
+
+      return new Promise((resolve) => {
+        function step(currentTime) {
+          const elapsed = currentTime - startTime;
+          const progress = Math.min(elapsed / totalDuration, 1);
+          // Ease-in-out cubic for natural scroll feel
+          const eased = progress < 0.5
+            ? 4 * progress * progress * progress
+            : 1 - Math.pow(-2 * progress + 2, 3) / 2;
+
+          window.scrollTo(0, startY + distance * eased);
+
+          if (progress < 1) {
+            requestAnimationFrame(step);
+          } else {
+            resolve();
+          }
+        }
+        requestAnimationFrame(step);
+      });
+    }
+
+    // --- Random small scrolls (simulates reading) ---
+    async function idleScroll() {
+      const scrollAmount = clampedGaussian(50, 300);
+      const direction = Math.random() > 0.3 ? 1 : -1; // Usually scroll down
+      const targetY = Math.max(0, window.scrollY + scrollAmount * direction);
+      await naturalScroll(targetY, clampedGaussian(400, 800));
+    }
+
+    // --- Random micro mouse movements (background activity) ---
+    async function microMovements() {
+      const count = clampedGaussian(2, 6);
+      for (let i = 0; i < count; i++) {
+        const x = clampedGaussian(100, window.innerWidth - 100);
+        const y = clampedGaussian(100, window.innerHeight - 100);
+        document.dispatchEvent(
+          new MouseEvent("mousemove", {
+            bubbles: true, cancelable: true, clientX: x, clientY: y, view: window,
+          })
+        );
+        await sleep(clampedGaussian(50, 200));
+      }
+    }
+
+    // --- Simulate brief idle activity (between actions) ---
+    async function simulateIdleActivity() {
+      const action = Math.random();
+      if (action < 0.4) {
+        await idleScroll();
+      } else if (action < 0.7) {
+        await microMovements();
+      } else {
+        // Just wait (simulates reading)
+        await sleep(clampedGaussian(500, 2000));
+      }
+    }
+
+    // --- Check if LinkedIn has signed the user out ---
+    function isSignedOut() {
+      const url = window.location.href;
+      // LinkedIn sign-out redirects to login or authwall
+      if (url.includes("/login") || url.includes("/authwall") || url.includes("/uas/login")) {
+        return true;
+      }
+      // Check for sign-in button prominence (logged-out state)
+      const signInBtn = document.querySelector(
+        'a[href*="/login"], a[data-tracking-control-name="auth_wall_desktop_profile_sign-in"], ' +
+        '.nav__button-secondary[href*="login"], .authwall-join-form'
+      );
+      if (signInBtn && signInBtn.offsetParent !== null) {
+        return true;
+      }
+      // Check for "Join now" / "Sign in" as main page CTA
+      const bodyText = (document.body?.textContent || "").substring(0, 2000).toLowerCase();
+      if (
+        (bodyText.includes("join now") || bodyText.includes("sign in to linkedin")) &&
+        !document.querySelector('.global-nav__me, .feed-identity-module, [data-control-name="identity_welcome_message"]')
+      ) {
+        return true;
+      }
+      return false;
+    }
+
+    // --- Check for LinkedIn security challenge ---
+    function isSecurityChallenge() {
+      const url = window.location.href;
+      if (url.includes("/checkpoint") || url.includes("/challenge")) {
+        return true;
+      }
+      const bodyText = (document.body?.textContent || "").substring(0, 3000).toLowerCase();
+      return (
+        bodyText.includes("security verification") ||
+        bodyText.includes("let's do a quick security check") ||
+        bodyText.includes("verify your identity")
+      );
+    }
+
+    return {
+      humanClick,
+      humanType,
+      fastInput,
+      hoverElement,
+      moveMouseTo,
+      naturalScroll,
+      idleScroll,
+      microMovements,
+      simulateIdleActivity,
+      isSignedOut,
+      isSecurityChallenge,
+      clampedGaussian,
+      sleep,
+    };
+  })();
+
   // --- Page Detection ---
 
   function detectPage() {
@@ -57,87 +423,92 @@
   }
 
   // --- Action Executors ---
-  // All actions use native event dispatching for anti-detection
+  // All actions use human-like behavior simulation for anti-detection
 
+  // Async human-like click (used in async contexts like handleAction)
+  async function dispatchNativeClickAsync(element) {
+    await HumanBehavior.humanClick(element);
+  }
+
+  // Sync-compatible click fallback (for places that can't await)
   function dispatchNativeClick(element) {
     const rect = element.getBoundingClientRect();
-    const x = rect.left + rect.width / 2;
-    const y = rect.top + rect.height / 2;
+    const offsetX = HumanBehavior.clampedGaussian(-rect.width * 0.15, rect.width * 0.15);
+    const offsetY = HumanBehavior.clampedGaussian(-rect.height * 0.1, rect.height * 0.1);
+    const x = rect.left + rect.width / 2 + offsetX;
+    const y = rect.top + rect.height / 2 + offsetY;
 
+    // Dispatch mouseover first (humans hover before clicking)
     element.dispatchEvent(
-      new MouseEvent("mousedown", {
-        bubbles: true,
-        cancelable: true,
-        view: window,
-        clientX: x,
-        clientY: y,
-      })
+      new MouseEvent("mouseover", { bubbles: true, cancelable: true, view: window, clientX: x, clientY: y })
     );
 
     element.dispatchEvent(
-      new MouseEvent("mouseup", {
-        bubbles: true,
-        cancelable: true,
-        view: window,
-        clientX: x,
-        clientY: y,
-      })
+      new MouseEvent("mousedown", { bubbles: true, cancelable: true, view: window, clientX: x, clientY: y, button: 0 })
     );
 
     element.dispatchEvent(
-      new MouseEvent("click", {
-        bubbles: true,
-        cancelable: true,
-        view: window,
-        clientX: x,
-        clientY: y,
-      })
+      new MouseEvent("mouseup", { bubbles: true, cancelable: true, view: window, clientX: x, clientY: y, button: 0 })
+    );
+
+    element.dispatchEvent(
+      new MouseEvent("click", { bubbles: true, cancelable: true, view: window, clientX: x, clientY: y, button: 0 })
     );
   }
 
-  function dispatchNativeInput(element, value) {
-    // Focus the element
-    element.focus();
-    element.dispatchEvent(new FocusEvent("focus", { bubbles: true }));
+  async function dispatchNativeInput(element, value) {
+    // For short values (numbers, URLs, single words), use fast input
+    // For longer text, use human-like typing
+    const isShortValue = !value || value.length <= 8 || /^\d+$/.test(value) || value.includes("://");
 
-    // Set value via native input setter
-    const nativeInputValueSetter = Object.getOwnPropertyDescriptor(
-      window.HTMLInputElement.prototype,
-      "value"
-    )?.set;
-    const nativeTextAreaValueSetter = Object.getOwnPropertyDescriptor(
-      window.HTMLTextAreaElement.prototype,
-      "value"
-    )?.set;
-
-    if (element.tagName === "TEXTAREA" && nativeTextAreaValueSetter) {
-      nativeTextAreaValueSetter.call(element, value);
-    } else if (nativeInputValueSetter) {
-      nativeInputValueSetter.call(element, value);
+    if (isShortValue) {
+      HumanBehavior.fastInput(element, value);
+    } else {
+      await HumanBehavior.humanType(element, value);
     }
-
-    element.dispatchEvent(new Event("input", { bubbles: true }));
-    element.dispatchEvent(new Event("change", { bubbles: true }));
   }
 
   function scrollTo(y) {
-    window.scrollTo({ top: y, behavior: "smooth" });
+    HumanBehavior.naturalScroll(y);
   }
 
   // --- Action Handler ---
 
   async function handleAction(action) {
     try {
+      // Check for sign-out or security challenge BEFORE every action
+      if (HumanBehavior.isSignedOut()) {
+        return {
+          status: "error",
+          actionId: action.actionId,
+          error: "LINKEDIN_SIGNED_OUT",
+          message: "LinkedIn has signed you out. Please sign in again.",
+        };
+      }
+      if (HumanBehavior.isSecurityChallenge()) {
+        return {
+          status: "error",
+          actionId: action.actionId,
+          error: "LINKEDIN_SECURITY_CHALLENGE",
+          message: "LinkedIn security challenge detected. Please complete it manually.",
+        };
+      }
+
+      // Inject small random idle activity between actions (30% chance)
+      if (Math.random() < 0.3) {
+        await HumanBehavior.simulateIdleActivity();
+      }
+
       switch (action.command) {
         case "CLICK": {
           const el = await waitForElement(action.selector);
-          dispatchNativeClick(el);
+          await dispatchNativeClickAsync(el);
           return { status: "success", actionId: action.actionId };
         }
 
         case "TYPE": {
           const el = await waitForElement(action.selector);
-          dispatchNativeInput(el, action.value);
+          await dispatchNativeInput(el, action.value);
           return { status: "success", actionId: action.actionId };
         }
 
@@ -369,6 +740,46 @@
           return { status: "success", actionId: action.actionId };
         }
 
+        case "CHECK_SESSION": {
+          // Dedicated session-check command for the service worker
+          return {
+            status: "success",
+            actionId: action.actionId,
+            data: {
+              signedOut: HumanBehavior.isSignedOut(),
+              securityChallenge: HumanBehavior.isSecurityChallenge(),
+              url: window.location.href,
+            },
+          };
+        }
+
+        case "SIMULATE_BROWSING": {
+          // Simulate natural browsing activity (scrolling, mouse movement)
+          const duration = action.duration || HumanBehavior.clampedGaussian(3000, 8000);
+          const iterations = Math.floor(duration / 1000);
+          for (let i = 0; i < iterations; i++) {
+            await HumanBehavior.simulateIdleActivity();
+            await HumanBehavior.sleep(HumanBehavior.clampedGaussian(400, 1200));
+          }
+          return { status: "success", actionId: action.actionId };
+        }
+
+        // ─── Lead Generation: scrape posts from LinkedIn search results ───
+        case "SCRAPE_KEYWORD_POSTS": {
+          const posts = await scrapeKeywordPosts(action.keyword || "");
+          return {
+            status: "success",
+            actionId: action.actionId,
+            data: { posts },
+          };
+        }
+
+        // ─── Lead Generation: increment stat for found posts ─────────────
+        case "INCREMENT_LEAD_FOUND": {
+          // No-op in content script — reported via API from service worker
+          return { status: "success", actionId: action.actionId };
+        }
+
         default:
           return {
             status: "error",
@@ -593,16 +1004,18 @@
       selectedAnchor;
 
     if (clickable instanceof HTMLElement) {
-      clickable.scrollIntoView({ behavior: "instant", block: "center" });
+      clickable.scrollIntoView({ behavior: "smooth", block: "center" });
     }
 
-    dispatchNativeClick(selectedAnchor);
-    await new Promise((r) => setTimeout(r, 350));
+    // Use human-like click
+    await dispatchNativeClickAsync(selectedAnchor);
+    await HumanBehavior.sleep(HumanBehavior.clampedGaussian(300, 600));
     if (clickable && clickable !== selectedAnchor) {
       dispatchNativeClick(clickable);
     }
 
-    await new Promise((r) => setTimeout(r, 1400));
+    // Simulate reading the job card briefly
+    await HumanBehavior.sleep(HumanBehavior.clampedGaussian(800, 2000));
     return {
       selected: true,
       href: selectedAnchor.getAttribute("href") || selectedAnchor.href || "",
@@ -897,6 +1310,10 @@
       return { clicked: false, error: "Easy Apply button not found" };
     }
 
+    // Simulate reading the job before clicking apply (human behavior)
+    await HumanBehavior.idleScroll();
+    await HumanBehavior.sleep(HumanBehavior.clampedGaussian(500, 1500));
+
     // Check if SDUI Easy Apply link (navigates to apply page instead of modal)
     const isLink = btn.tagName === "A" && btn.href && btn.href.includes("/apply/");
 
@@ -904,7 +1321,8 @@
       // Return immediately so the message channel can respond before navigation unloads the page.
       const urlBefore = window.location.href;
       const targetUrl = btn.href;
-      btn.click();
+      // Human-like click on the link
+      await dispatchNativeClickAsync(btn);
 
       // If click doesn't navigate promptly, force it shortly after.
       setTimeout(() => {
@@ -916,7 +1334,7 @@
       return { clicked: true, sdui: true };
     }
 
-    dispatchNativeClick(btn);
+    await dispatchNativeClickAsync(btn);
 
     // Legacy: wait for modal to appear
     try {
@@ -987,7 +1405,31 @@
         value: sel.value,
         options,
         selector: buildSelector(sel),
-        required: sel.required,
+        required: sel.required || sel.getAttribute("aria-required") === "true",
+      });
+    }
+
+    // Custom dropdowns/comboboxes (LinkedIn's typeahead selects)
+    const customDropdowns = modal.querySelectorAll("[role='combobox'], [data-test-text-selectable-option], button[aria-haspopup='listbox']");
+    for (const control of customDropdowns) {
+      if (!(control instanceof HTMLElement)) continue;
+      if (control.tagName.toLowerCase() === "select") continue; // Skip native selects
+      if (control.tagName.toLowerCase() === "input" && (control.type === "text" || control.type === "search")) continue; // Skip text inputs with combobox role (they're typeaheads, handled by text)
+      if (control.getAttribute("aria-disabled") === "true") continue;
+      if (control.offsetParent === null) continue;
+
+      const label = control.closest(".fb-dash-form-element")?.querySelector("label")?.textContent?.trim() ||
+        control.getAttribute("aria-label") || "";
+      const currentText = (control.textContent || "").trim();
+      const isPlaceholder = /select|choose|please|pick|--|option/i.test(currentText);
+
+      fields.push({
+        type: "custom-dropdown",
+        label,
+        value: isPlaceholder ? "" : currentText,
+        selector: buildSelector(control),
+        required: control.getAttribute("aria-required") === "true" ||
+          control.closest("[data-required='true']") !== null,
       });
     }
 
@@ -1112,6 +1554,14 @@
 
   function pickFirstValidSelectOption(options) {
     const list = Array.from(options || []);
+    // Always prefer "Yes" option — answering Yes keeps doors open
+    const yesOption = list.find((o) => {
+      if (o.disabled) return false;
+      const val = (o.value || "").toString().trim().toLowerCase();
+      const txt = (o.textContent || "").toString().trim().toLowerCase();
+      return val === "yes" || txt === "yes";
+    });
+    if (yesOption) return yesOption;
     const valid = list.find((o) => !o.disabled && !isPlaceholderSelectOption(o));
     return valid || list.find((o) => !o.disabled) || list[0] || null;
   }
@@ -1139,15 +1589,45 @@
       const selects = modal.querySelectorAll("select");
       const sel = bySelector || selects[fieldIndex];
       if (sel) {
-        const firstOption = pickFirstValidSelectOption(sel.options);
-        const selectedValue = value || firstOption?.value || "";
-        sel.value = selectedValue;
-        if (sel.value !== selectedValue && firstOption) {
-          sel.selectedIndex = Array.from(sel.options || []).indexOf(firstOption);
+        // Prefer "Yes" from available options unless a specific value is given
+        const bestOption = pickFirstValidSelectOption(sel.options);
+        let selectedValue = value;
+        if (!selectedValue || isPlaceholderSelectOption({ value: selectedValue, textContent: selectedValue })) {
+          selectedValue = bestOption?.value || "";
+        } else {
+          // Check if the given value matches any option; if not, prefer Yes/first valid
+          const matchingOpt = Array.from(sel.options).find(
+            (o) => o.value.toLowerCase() === selectedValue.toLowerCase() || (o.textContent || "").trim().toLowerCase() === selectedValue.toLowerCase()
+          );
+          if (!matchingOpt) {
+            selectedValue = bestOption?.value || "";
+          } else {
+            selectedValue = matchingOpt.value;
+          }
         }
+
+        // Human-like: focus first, pause, then change
+        sel.focus();
+        sel.dispatchEvent(new FocusEvent("focus", { bubbles: true }));
+        await HumanBehavior.sleep(HumanBehavior.clampedGaussian(80, 200));
+
+        // Use native setter for React/LinkedIn controlled inputs
+        const nativeSetter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value')?.set;
+        if (nativeSetter) {
+          nativeSetter.call(sel, selectedValue);
+        } else {
+          sel.value = selectedValue;
+        }
+        if (sel.value !== selectedValue) {
+          const targetIdx = Array.from(sel.options || []).findIndex((o) => o.value === selectedValue);
+          if (targetIdx >= 0) sel.selectedIndex = targetIdx;
+        }
+
         sel.dispatchEvent(new Event("input", { bubbles: true }));
         sel.dispatchEvent(new Event("change", { bubbles: true }));
         sel.dispatchEvent(new FocusEvent("blur", { bubbles: true }));
+
+        await HumanBehavior.sleep(HumanBehavior.clampedGaussian(100, 300));
       }
     } else if (fieldType === "radio") {
       const bySelector = resolveFromSelector();
@@ -1171,6 +1651,81 @@
           dispatchNativeClick(cb);
         }
       }
+    } else if (fieldType === "custom-dropdown") {
+      // Handle LinkedIn's custom dropdown/combobox controls
+      const control = resolveFromSelector();
+      if (control) {
+        // Click to open the dropdown
+        if (typeof HumanBehavior.humanClick === "function") {
+          await HumanBehavior.humanClick(control);
+        } else {
+          dispatchNativeClick(control);
+        }
+
+        // Wait for dropdown to render with retry
+        let optionsList = null;
+        for (let attempt = 0; attempt < 4; attempt++) {
+          await HumanBehavior.sleep(200 + attempt * 150);
+          optionsList = document.querySelectorAll([
+            "[role='listbox'] [role='option']:not([aria-disabled='true'])",
+            "li[role='option']:not([aria-disabled='true'])",
+            ".artdeco-dropdown__content li",
+            "[role='listbox'] li",
+            ".artdeco-typeahead__results-list li",
+            "ul[role='listbox'] > li",
+          ].join(", "));
+          if (optionsList && optionsList.length > 0) break;
+        }
+
+        if (optionsList && optionsList.length > 0) {
+          // Find matching option by value, or prefer "Yes", or pick first valid
+          let targetOpt = null;
+
+          if (value) {
+            for (const opt of optionsList) {
+              if (!(opt instanceof HTMLElement) || opt.offsetParent === null) continue;
+              const optText = (opt.textContent || "").trim().toLowerCase();
+              if (optText === value.toLowerCase()) { targetOpt = opt; break; }
+            }
+          }
+
+          if (!targetOpt) {
+            // Prefer "Yes"
+            for (const opt of optionsList) {
+              if (!(opt instanceof HTMLElement) || opt.offsetParent === null) continue;
+              const optText = (opt.textContent || "").trim().toLowerCase();
+              if (optText === "yes") { targetOpt = opt; break; }
+            }
+          }
+
+          if (!targetOpt) {
+            // Pick first visible valid option
+            for (const opt of optionsList) {
+              if (!(opt instanceof HTMLElement) || opt.offsetParent === null) continue;
+              const optText = (opt.textContent || "").trim().toLowerCase();
+              if (optText && !/select|choose|please|pick|--|option/.test(optText)) {
+                targetOpt = opt;
+                break;
+              }
+            }
+          }
+
+          if (targetOpt) {
+            targetOpt.scrollIntoView({ block: "nearest", behavior: "smooth" });
+            await HumanBehavior.sleep(HumanBehavior.clampedGaussian(100, 250));
+            if (typeof HumanBehavior.humanClick === "function") {
+              await HumanBehavior.humanClick(targetOpt);
+            } else {
+              dispatchNativeClick(targetOpt);
+            }
+          }
+        } else {
+          // Close dropdown if nothing found
+          control.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+        }
+
+        await HumanBehavior.sleep(HumanBehavior.clampedGaussian(200, 400));
+      }
     } else {
       // Text input or textarea
       const bySelector = resolveFromSelector();
@@ -1193,61 +1748,147 @@
 
     let selectedCount = 0;
 
+    // --- Native <select> elements ---
     const selects = modal.querySelectorAll("select");
     for (const sel of selects) {
       if (sel.disabled) continue;
       const options = Array.from(sel.options || []);
       if (options.length === 0) continue;
 
-      const firstOption = pickFirstValidSelectOption(sel.options);
-      if (!firstOption) continue;
+      const bestOption = pickFirstValidSelectOption(sel.options);
+      if (!bestOption) continue;
 
       const current = (sel.value || "").trim();
       const currentOption = options.find((o) => o.value === current);
-      if (current && currentOption && !isPlaceholderSelectOption(currentOption) && current !== firstOption.value) {
-        continue;
+      // Skip if already has a valid non-placeholder value that isn't our preferred "Yes"
+      // BUT if our best option is "Yes" and current is NOT "Yes", switch to "Yes"
+      const bestIsYes = (bestOption.value || "").toLowerCase() === "yes" || (bestOption.textContent || "").trim().toLowerCase() === "yes";
+      if (current && currentOption && !isPlaceholderSelectOption(currentOption)) {
+        // If "Yes" is available and we don't already have it, switch to it
+        if (!bestIsYes || current === bestOption.value) {
+          continue;
+        }
       }
 
-      sel.value = firstOption.value;
-      if (sel.value !== firstOption.value) {
-        sel.selectedIndex = options.indexOf(firstOption);
+      // Use human-like interaction: focus, wait, then change
+      sel.focus();
+      sel.dispatchEvent(new FocusEvent("focus", { bubbles: true }));
+      await HumanBehavior.sleep(HumanBehavior.clampedGaussian(100, 300));
+
+      sel.value = bestOption.value;
+      if (sel.value !== bestOption.value) {
+        sel.selectedIndex = options.indexOf(bestOption);
       }
+      // Fire the full event sequence that LinkedIn/React listens for
       sel.dispatchEvent(new Event("input", { bubbles: true }));
       sel.dispatchEvent(new Event("change", { bubbles: true }));
       sel.dispatchEvent(new FocusEvent("blur", { bubbles: true }));
+
+      // Also set via nativeInputValueSetter for React-controlled selects
+      const nativeSetter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value')?.set;
+      if (nativeSetter) {
+        nativeSetter.call(sel, bestOption.value);
+        sel.dispatchEvent(new Event("input", { bubbles: true }));
+        sel.dispatchEvent(new Event("change", { bubbles: true }));
+      }
+
       selectedCount++;
+      await HumanBehavior.sleep(HumanBehavior.clampedGaussian(200, 500));
     }
 
-    const customControls = modal.querySelectorAll("[role='combobox'], button[aria-haspopup='listbox']");
+    // --- Custom dropdown/combobox controls (LinkedIn uses these heavily) ---
+    const customSelectors = [
+      "[role='combobox']",
+      "button[aria-haspopup='listbox']",
+      "[data-test-text-selectable-option]",
+      ".artdeco-dropdown__trigger",
+      "button[aria-haspopup='true']",
+      ".fb-dash-form-element select",
+    ];
+    const customControls = modal.querySelectorAll(customSelectors.join(", "));
+
     for (const control of customControls) {
       if (!(control instanceof HTMLElement)) continue;
       if (control.getAttribute("aria-disabled") === "true") continue;
       if (control.offsetParent === null) continue;
+      // Skip if it's a native <select> (already handled above)
+      if (control.tagName.toLowerCase() === "select") continue;
 
       const controlText = (control.textContent || "").trim().toLowerCase();
-      if (controlText && !/select|choose|please|pick/.test(controlText)) {
+      // Skip if already has a meaningful selected value (unless it's a placeholder)
+      if (controlText && !/select|choose|please|pick|--|option/.test(controlText)) {
         continue;
       }
 
-      dispatchNativeClick(control);
-      await new Promise((r) => setTimeout(r, 250));
+      // Human-like: hover then click the dropdown trigger
+      if (typeof HumanBehavior.humanClick === "function") {
+        await HumanBehavior.humanClick(control);
+      } else {
+        dispatchNativeClick(control);
+      }
 
-      const options = document.querySelectorAll(
-        "[role='listbox'] [role='option']:not([aria-disabled='true']), li[role='option']:not([aria-disabled='true'])"
-      );
+      // Wait for dropdown to open with retry — LinkedIn dropdowns can be slow
+      let optionsList = null;
+      for (let attempt = 0; attempt < 4; attempt++) {
+        await HumanBehavior.sleep(200 + attempt * 150);
+        // Try multiple selectors for the dropdown options
+        optionsList = document.querySelectorAll([
+          "[role='listbox'] [role='option']:not([aria-disabled='true'])",
+          "li[role='option']:not([aria-disabled='true'])",
+          ".artdeco-dropdown__content li",
+          "[role='listbox'] li",
+          ".artdeco-typeahead__results-list li",
+          "ul[role='listbox'] > li",
+          ".ember-power-select-options li",
+        ].join(", "));
+        if (optionsList && optionsList.length > 0) break;
+      }
+
+      if (!optionsList || optionsList.length === 0) {
+        // Close by pressing Escape and move on
+        control.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+        document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+        await HumanBehavior.sleep(150);
+        continue;
+      }
+
+      // Find "Yes" option first, otherwise pick first visible valid option
       let picked = false;
-      for (const opt of options) {
+      let yesOpt = null;
+      let firstValidOpt = null;
+
+      for (const opt of optionsList) {
         if (!(opt instanceof HTMLElement)) continue;
         if (opt.offsetParent === null) continue;
-        dispatchNativeClick(opt);
-        selectedCount++;
-        picked = true;
-        break;
+        const optText = (opt.textContent || "").trim().toLowerCase();
+        if (optText === "yes" && !yesOpt) yesOpt = opt;
+        if (!firstValidOpt && optText && !/select|choose|please|pick|--|option/.test(optText)) {
+          firstValidOpt = opt;
+        }
       }
 
-      if (picked) {
-        await new Promise((r) => setTimeout(r, 250));
+      const targetOpt = yesOpt || firstValidOpt;
+      if (targetOpt) {
+        // Scroll the option into view if needed
+        targetOpt.scrollIntoView({ block: "nearest", behavior: "smooth" });
+        await HumanBehavior.sleep(HumanBehavior.clampedGaussian(100, 250));
+
+        if (typeof HumanBehavior.humanClick === "function") {
+          await HumanBehavior.humanClick(targetOpt);
+        } else {
+          dispatchNativeClick(targetOpt);
+        }
+        selectedCount++;
+        picked = true;
       }
+
+      if (!picked) {
+        // Nothing valid found, close the dropdown
+        control.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+        document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+      }
+
+      await HumanBehavior.sleep(HumanBehavior.clampedGaussian(300, 600));
     }
 
     return { selectedCount };
@@ -1515,34 +2156,230 @@
       : document.querySelector("button[aria-label*='Comment'], button[aria-label*='comment']");
 
     if (!commentBtn) return { commented: false, error: "Comment button not found" };
-    dispatchNativeClick(commentBtn);
-    await new Promise((r) => setTimeout(r, 1500));
 
-    // Find comment input
+    await HumanBehavior.humanClick(commentBtn);
+    await HumanBehavior.sleep(HumanBehavior.clampedGaussian(1200, 2500));
+
+    // Find comment input — try multiple selectors LinkedIn uses
     const commentInput =
       document.querySelector(".comments-comment-box__form .ql-editor") ||
-      document.querySelector("[role='textbox'][aria-label*='comment']");
+      document.querySelector(".comments-comment-box .ql-editor") ||
+      document.querySelector("[role='textbox'][aria-label*='comment']") ||
+      document.querySelector("[role='textbox'][aria-label*='Comment']") ||
+      document.querySelector(".comments-comment-texteditor .ql-editor");
 
     if (!commentInput) return { commented: false, error: "Comment input not found" };
 
-    commentInput.focus();
-    document.execCommand("insertText", false, commentText);
-    commentInput.dispatchEvent(new Event("input", { bubbles: true }));
+    // Use human-like typing for the comment
+    await HumanBehavior.humanType(commentInput, commentText);
 
-    await new Promise((r) => setTimeout(r, 1000));
+    await HumanBehavior.sleep(HumanBehavior.clampedGaussian(800, 1800));
 
-    // Submit comment
+    // Submit comment — try multiple selectors
     const submitBtn =
+      document.querySelector(".comments-comment-box__submit-button:not([disabled])") ||
+      document.querySelector("[class*='comments-comment-box'] button[type='submit']") ||
       getElementByText("button", "Post") ||
-      document.querySelector(".comments-comment-box__submit-button");
+      document.querySelector("form.comments-comment-box button.artdeco-button--primary");
 
     if (submitBtn) {
-      dispatchNativeClick(submitBtn);
-      await new Promise((r) => setTimeout(r, 1500));
+      await HumanBehavior.humanClick(submitBtn);
+      await HumanBehavior.sleep(HumanBehavior.clampedGaussian(1500, 3000));
       return { commented: true };
     }
 
     return { commented: false, error: "Submit button not found" };
+  }
+
+  // ─── Lead Generation: scrape posts from LinkedIn search/feed ──────────────
+
+  /**
+   * Scrape visible posts from LinkedIn search results page.
+   * Called after navigating to: /search/results/content/?keywords=...
+   * Returns an array of post metadata for the service worker to process.
+   */
+  async function scrapeKeywordPosts(keyword) {
+    // Wait for search results to load — try multiple selectors LinkedIn uses
+    const waitSelectors = [
+      "li.reusable-search__result-container",
+      ".search-results-container .artdeco-list__item",
+      ".search-results__list .artdeco-list__item",
+      "[data-view-name='search-entity-result-universal-template']",
+      ".scaffold-finite-scroll__content li",
+    ];
+
+    let found = false;
+    for (const sel of waitSelectors) {
+      try {
+        await waitForElement(sel, 5000);
+        found = true;
+        console.log(`[LinkedBoost CS] scrapeKeywordPosts: Found results via selector: ${sel}`);
+        break;
+      } catch { /* try next */ }
+    }
+    if (!found) {
+      console.warn("[LinkedBoost CS] scrapeKeywordPosts: No search results found — page may not have loaded");
+    }
+
+    // Give LinkedIn a moment to finish lazy-rendering
+    await new Promise((r) => setTimeout(r, 2000));
+
+    // Scroll to trigger lazy load (document.hidden-safe)
+    if (!document.hidden) {
+      try { await HumanBehavior.idleScroll(); } catch { /* ignore */ }
+    } else {
+      window.scrollTo(0, 400);
+    }
+    await new Promise((r) => setTimeout(r, 1500));
+
+    const posts = [];
+    const seenUrls = new Set();
+
+    // Collect result items — try multiple container strategies
+    let resultItems = [];
+
+    // Strategy 1: Modern LinkedIn search result containers
+    const strategy1 = document.querySelectorAll("li.reusable-search__result-container");
+    if (strategy1.length > 0) {
+      resultItems = Array.from(strategy1);
+      console.log(`[LinkedBoost CS] Using strategy1 (reusable-search): ${resultItems.length} items`);
+    }
+
+    // Strategy 2: Data-urn post cards (feed updates embedded in search)
+    if (resultItems.length === 0) {
+      const strategy2 = document.querySelectorAll("[data-urn], [data-activity-urn]");
+      if (strategy2.length > 0) {
+        resultItems = Array.from(strategy2);
+        console.log(`[LinkedBoost CS] Using strategy2 (data-urn): ${resultItems.length} items`);
+      }
+    }
+
+    // Strategy 3: Classic artdeco list items
+    if (resultItems.length === 0) {
+      const strategy3 = document.querySelectorAll(
+        ".search-results-container .artdeco-list__item, " +
+        ".search-results__list .artdeco-list__item, " +
+        ".search-results-container li, " +
+        ".scaffold-finite-scroll__content li"
+      );
+      if (strategy3.length > 0) {
+        resultItems = Array.from(strategy3);
+        console.log(`[LinkedBoost CS] Using strategy3 (artdeco-list): ${resultItems.length} items`);
+      }
+    }
+
+    console.log(`[LinkedBoost CS] scrapeKeywordPosts: Total result items to parse: ${resultItems.length}`);
+
+    for (const item of resultItems) {
+      try {
+        // ── Author name ───────────────────────────────────────────────────────
+        const authorEl =
+          item.querySelector(".update-components-actor__name span[aria-hidden='true']") ||
+          item.querySelector(".update-components-actor__title span[aria-hidden='true']") ||
+          item.querySelector(".update-components-actor__name") ||
+          item.querySelector("[class*='actor__name'] span[aria-hidden='true']") ||
+          item.querySelector("[class*='actor__name']") ||
+          item.querySelector("[class*='actor__title']");
+
+        // ── Author headline ───────────────────────────────────────────────────
+        const headlineEl =
+          item.querySelector(".update-components-actor__description span[aria-hidden='true']") ||
+          item.querySelector("[class*='actor__description'] span[aria-hidden='true']") ||
+          item.querySelector("[class*='actor__description']") ||
+          item.querySelector("[class*='actor__subtitle']");
+
+        // ── Author profile link ───────────────────────────────────────────────
+        const profileLinkEl =
+          item.querySelector("a.update-components-actor__container-link") ||
+          item.querySelector("a.update-components-actor__meta-link") ||
+          item.querySelector("[class*='actor__container-link']") ||
+          item.querySelector("a[href*='/in/']");
+
+        // ── Post content text (multiple fallbacks) ────────────────────────────
+        const contentEl =
+          item.querySelector(".update-components-text span.break-words") ||
+          item.querySelector(".update-components-text-view span[dir]") ||
+          item.querySelector(".feed-shared-update-v2__description .break-words") ||
+          item.querySelector(".update-components-text .break-words") ||
+          item.querySelector("[class*='commentary'] .break-words") ||
+          item.querySelector("[class*='commentary'] span") ||
+          item.querySelector(".feed-shared-text .break-words") ||
+          item.querySelector("[class*='update-v2__description'] span") ||
+          item.querySelector(".update-components-text");
+
+        // ── Post URL ──────────────────────────────────────────────────────────
+        const postLinkEl =
+          item.querySelector("a[href*='/posts/']") ||
+          item.querySelector("a[href*='/feed/update/urn']") ||
+          item.querySelector(".update-components-header__text-wrapper a") ||
+          item.querySelector("[class*='time-ago'] a") ||
+          item.querySelector("a[data-tracking-control-name*='share_via']") ||
+          item.querySelector("a[href*='linkedin.com/posts']");
+
+        // ── URN ───────────────────────────────────────────────────────────────
+        const urnEl =
+          item.querySelector("[data-urn]") ||
+          item.querySelector("[data-activity-urn]") ||
+          item.closest("[data-urn]") ||
+          item;
+
+        const authorName = authorEl?.textContent?.trim() || "";
+        const authorHeadline = headlineEl?.textContent?.trim() || "";
+        const profileUrl = profileLinkEl?.href || "";
+        const urn = urnEl?.getAttribute("data-urn") || urnEl?.getAttribute("data-activity-urn") || "";
+
+        // Get post content — use specific el first, then full item text as fallback
+        let postContent = contentEl?.textContent?.trim() || "";
+        if (!postContent) {
+          // Last resort: strip known boilerplate from item text
+          const fullText = (item.textContent || "").trim();
+          // Skip extremely short items (likely not real posts)
+          if (fullText.length > 80) {
+            postContent = fullText.substring(0, 800);
+          }
+        }
+
+        // Build post URL
+        let postUrl = postLinkEl?.href || "";
+        if (!postUrl && urn) {
+          postUrl = `https://www.linkedin.com/feed/update/${urn}/`;
+        }
+
+        // Skip items without content or URL
+        if (!postContent || !postUrl) continue;
+
+        // Deduplicate
+        const normalizedUrl = postUrl.split("?")[0].replace(/\/$/, "");
+        if (seenUrls.has(normalizedUrl)) continue;
+        seenUrls.add(normalizedUrl);
+
+        // Like / comment counts
+        const likeCountEl = item.querySelector(
+          "[class*='social-counts'] [class*='like-count'], " +
+          "[aria-label*='reaction'], [class*='reactions-count']"
+        );
+        const commentCountEl = item.querySelector(
+          "[class*='social-counts'] [class*='comment-count'], " +
+          "[class*='comments-count']"
+        );
+
+        posts.push({
+          postUrl,
+          postId: urn,
+          authorName,
+          authorHeadline,
+          authorProfileUrl: profileUrl,
+          postContent: postContent.substring(0, 1000),
+          likeCount: parseInt(likeCountEl?.textContent?.trim() || "0", 10) || 0,
+          commentCount: parseInt(commentCountEl?.textContent?.trim() || "0", 10) || 0,
+        });
+      } catch (itemErr) {
+        console.warn("[LinkedBoost CS] scrapeKeywordPosts: Error parsing item:", itemErr.message);
+      }
+    }
+
+    console.log(`[LinkedBoost CS] scrapeKeywordPosts: Found ${posts.length} posts for keyword "${keyword}"`);
+    return posts;
   }
 
   // --- SPA Navigation Detection ---
@@ -1560,15 +2397,46 @@
           page: detectPage(),
           url: currentUrl,
         },
-      }).catch(() => {
-        // Background script not available
-      });
+      }).catch(() => {});
     }
   });
 
   navigationObserver.observe(document.body, {
     childList: true,
     subtree: true,
+  });
+
+  // --- Dashboard → Extension bridge ───────────────────────────────────────────
+  // Listens for window.postMessage events from the Next.js dashboard pages
+  // and relays them to the background service worker via chrome.runtime.sendMessage.
+  // This is the approved Manifest V3 pattern for page ↔ extension communication.
+
+  window.addEventListener("message", (event) => {
+    // Only accept messages from the same frame origin
+    if (event.source !== window) return;
+    const msg = event.data;
+    if (!msg || typeof msg !== "object") return;
+
+    switch (msg.type) {
+      case "START_LEAD_GEN_REQUEST":
+        chrome.runtime.sendMessage(
+          { type: "START_LEAD_GEN", campaignId: msg.campaignId, options: msg.options || {} },
+          () => {}
+        );
+        break;
+      case "STOP_LEAD_GEN_REQUEST":
+        chrome.runtime.sendMessage({ type: "STOP_LEAD_GEN" }, () => {});
+        break;
+      default:
+        break;
+    }
+  });
+
+  // Relay LEADGEN_PROGRESS from service worker back to the page
+  chrome.runtime.onMessage.addListener((message) => {
+    if (message.type === "LEADGEN_PROGRESS") {
+      window.postMessage(message, "*");
+    }
   });
 
   // --- Message Listener ---

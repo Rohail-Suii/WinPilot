@@ -1,59 +1,76 @@
-name: CI/CD - Build & Deploy
+name: CI/CD → DigitalOcean
 
 on:
   push:
-    branches: [main, master]
+    branches: [master]
   pull_request:
-    branches: [main, master]
+    branches: [master]
 
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
+  APP_DIR: /opt/inpilot
 
-# Cancel in-progress runs for the same branch
+# Cancel in-progress runs for the same branch (saves CI minutes)
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  # ─── Job 1: Lint & Type Check ────────────────────────────────────
-  lint:
-    name: Lint & Type Check
+  # ──────────────────────────────────────────────────────────────────
+  # JOB 1: Lint, type-check & unit tests
+  # ──────────────────────────────────────────────────────────────────
+  test:
+    name: Lint, Types & Tests
     runs-on: ubuntu-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
 
-      - name: Setup Node.js
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js 20
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: "20"
           cache: "npm"
 
       - name: Install dependencies
         run: npm ci
 
-      - name: Run ESLint
+      - name: ESLint
         run: npm run lint
 
-      - name: Run TypeScript type check
+      - name: TypeScript type-check
         run: npx tsc --noEmit
 
-  # ─── Job 2: Build & Push Docker Image ─────────────────────────────
+      - name: Unit tests
+        run: npm run test
+        env:
+          MONGODB_URI: mongodb://localhost:27017/ci_test
+          NEXTAUTH_SECRET: ci-placeholder-secret
+          NEXTAUTH_URL: http://localhost:3000
+
+  # ──────────────────────────────────────────────────────────────────
+  # JOB 2: Build & push Docker image    (master push only)
+  # ──────────────────────────────────────────────────────────────────
   build:
-    name: Build & Push Docker Image
+    name: Build & Push Image
     runs-on: ubuntu-latest
-    needs: lint
-    if: github.event_name == 'push'
+    needs: test
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+
     permissions:
       contents: read
-      packages: write
+      packages: write   # required to push to ghcr.io
+
     outputs:
-      image_tag: ${{ steps.meta.outputs.tags }}
+      short_sha: ${{ steps.vars.outputs.short_sha }}
 
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+
+      - name: Set short SHA
+        id: vars
+        run: echo "short_sha=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -71,75 +88,92 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
-            type=sha,prefix=
-            type=ref,event=branch
-            type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=latest
+            type=sha,prefix=sha-
 
-      - name: Build and push Docker image
+      - name: Build & push (linux/amd64 for DigitalOcean)
         uses: docker/build-push-action@v5
         with:
           context: .
           push: true
+          platforms: linux/amd64
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
-          platforms: linux/amd64
 
-  # ─── Job 3: Deploy to VPS ─────────────────────────────────────────
+  # ──────────────────────────────────────────────────────────────────
+  # JOB 3: Deploy to DigitalOcean Droplet   (master push only)
+  # ──────────────────────────────────────────────────────────────────
   deploy:
-    name: Deploy to VPS
+    name: Deploy to Droplet
     runs-on: ubuntu-latest
     needs: build
-    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
-    environment: production
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+
+    environment:
+      name: production
+      url: https://${{ secrets.DOMAIN }}
 
     steps:
-      - name: Deploy via SSH
-        uses: appleboy/ssh-action@v1
+      # Copy updated docker-compose + nginx config to the droplet
+      - uses: actions/checkout@v4
+
+      - name: Sync compose & nginx to droplet
+        uses: appleboy/scp-action@v0.1.7
         with:
-          host: ${{ secrets.VPS_HOST }}
-          username: ${{ secrets.VPS_USER }}
-          key: ${{ secrets.SSH_KEY }}
-          port: ${{ secrets.VPS_PORT || 22 }}
+          host: ${{ secrets.DROPLET_IP }}
+          username: deploy
+          key: ${{ secrets.DROPLET_SSH_KEY }}
+          source: "docker-compose.yml,nginx/"
+          target: "${{ env.APP_DIR }}"
+
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.DROPLET_IP }}
+          username: deploy
+          key: ${{ secrets.DROPLET_SSH_KEY }}
           script: |
             set -e
+            cd ${{ env.APP_DIR }}
 
-            # Navigate to project directory
-            cd ${{ secrets.VPS_PROJECT_DIR || '/opt/linkedboost' }}
+            # ── Authenticate & pull new image ─────────────────────
+            echo "${{ secrets.GITHUB_TOKEN }}" | \
+              docker login ghcr.io -u ${{ github.actor }} --password-stdin
 
-            # Log in to GitHub Container Registry
-            echo ${{ secrets.GHCR_TOKEN }} | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+            docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
 
-            # Pull latest images
-            docker compose pull app
+            # ── Guard: .env.production must exist on droplet ──────
+            if [ ! -f .env.production ]; then
+              echo "ERROR: /opt/inpilot/.env.production missing on droplet. Aborting."
+              exit 1
+            fi
 
-            # Restart services with zero-downtime approach
-            docker compose up -d --no-deps --build app
+            # ── Rolling update (only restarts app, nginx stays up) ─
+            docker compose up -d --no-deps --remove-orphans app
+            docker compose up -d nginx certbot
 
-            # Clean up old images
-            docker image prune -f
-
-            # Wait for health check
-            echo "Waiting for application to become healthy..."
-            for i in $(seq 1 30); do
-              if curl -sf http://localhost:3000/api/health > /dev/null 2>&1; then
-                echo "Application is healthy!"
-                exit 0
+            # ── Wait for healthy status (max 2 min) ───────────────
+            echo "Waiting for container to become healthy…"
+            for i in $(seq 1 24); do
+              HEALTH=$(docker inspect --format='{{.State.Health.Status}}' linkedboost-app 2>/dev/null || echo "starting")
+              echo "  [${i}/24] status: $HEALTH"
+              [ "$HEALTH" = "healthy" ] && { echo "Healthy!"; break; }
+              if [ "$i" -eq 24 ]; then
+                echo "FAILED – printing last 50 log lines:"
+                docker compose logs --tail=50 app
+                exit 1
               fi
-              echo "Attempt $i/30 - waiting..."
               sleep 5
             done
 
-            echo "WARNING: Health check did not pass within 150 seconds"
-            docker compose logs --tail=50 app
-            exit 1
+            # ── Prune old images to save disk space ───────────────
+            docker image prune -f
 
-      - name: Notify deployment status
+      - name: Deployment summary
         if: always()
         run: |
-          if [ "${{ job.status }}" == "success" ]; then
-            echo "Deployment successful!"
-          else
-            echo "Deployment failed!"
-          fi
+          echo "### Deployment ${{ job.status == 'success' && '✅ succeeded' || '❌ failed' }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Commit: \`${{ needs.build.outputs.short_sha }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- URL: https://${{ secrets.DOMAIN }}" >> $GITHUB_STEP_SUMMARY

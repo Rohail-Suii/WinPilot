@@ -20,6 +20,7 @@ import {
   UserCheck,
   GraduationCap,
   TrendingUp,
+  Target,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useSidebarStore } from "@/lib/hooks/use-stores";
@@ -35,6 +36,11 @@ const navItems = [
     label: "Job Automation",
     href: "/dashboard/jobs",
     icon: Briefcase,
+  },
+  {
+    label: "Lead Generation",
+    href: "/dashboard/lead-gen",
+    icon: Target,
   },
   {
     label: "Become a Hero",

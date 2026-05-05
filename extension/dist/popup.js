@@ -99,12 +99,32 @@ function renderDashboard(status) {
           ${status.authenticated ? "Verified" : "Pending"}
         </span>
       </div>
+      <div class="status-row">
+        <span class="status-label">Job Automation</span>
+        <span class="status-value">
+          <span class="dot ${status.automationRunning ? "green" : "red"}"></span>
+          ${status.automationRunning ? "Running" : "Idle"}
+        </span>
+      </div>
+      <div class="status-row">
+        <span class="status-label">Lead Generation</span>
+        <span class="status-value">
+          <span class="dot ${status.leadGenRunning ? "green" : "red"}"></span>
+          ${status.leadGenRunning ? "Running" : "Idle"}
+        </span>
+      </div>
     </div>
 
     <div class="task-info" id="current-task" style="display: none;">
       <div class="label">Current Task</div>
       <div id="task-text">Idle</div>
     </div>
+
+    ${status.leadGenRunning ? `
+      <button class="btn btn-outline" id="stop-lead-gen" style="color: rgba(239,68,68,0.7); margin-bottom: 4px;">
+        ⏹ Stop Lead Generation
+      </button>
+    ` : ""}
 
     <button class="btn btn-primary" id="open-dashboard">
       Open Dashboard
@@ -130,6 +150,14 @@ function renderDashboard(status) {
     reconnectBtn.addEventListener("click", () => {
       chrome.runtime.sendMessage({ type: "CONNECT" });
       setTimeout(init, 1000);
+    });
+  }
+
+  const stopLeadGenBtn = document.getElementById("stop-lead-gen");
+  if (stopLeadGenBtn) {
+    stopLeadGenBtn.addEventListener("click", () => {
+      chrome.runtime.sendMessage({ type: "STOP_LEAD_GEN" });
+      setTimeout(init, 500);
     });
   }
 

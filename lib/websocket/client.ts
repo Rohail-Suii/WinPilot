@@ -44,6 +44,11 @@ function setupEventListeners(socket: Socket) {
     "limit:reached",
     "safety:alert",
     "automation:log",
+    "leadgen:log",
+    "leadgen:progress",
+    "leadgen:comment",
+    "leadgen:complete",
+    "leadgen:error",
   ];
 
   function pushLog(
@@ -53,6 +58,22 @@ function setupEventListeners(socket: Socket) {
     details?: string,
   ) {
     useExtensionStore.getState().addLog({
+      id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      timestamp: new Date().toISOString(),
+      level,
+      source,
+      message,
+      details,
+    });
+  }
+
+  function pushLeadGenLog(
+    level: "info" | "warn" | "error" | "success",
+    source: "extension" | "api" | "content-script" | "system",
+    message: string,
+    details?: string,
+  ) {
+    useExtensionStore.getState().addLeadGenLog({
       id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
       timestamp: new Date().toISOString(),
       level,
@@ -127,6 +148,29 @@ function setupEventListeners(socket: Socket) {
           pushLog(validLevel, validSource, data.message as string || "", data.details as string);
           break;
         }
+        // ── Lead generation events ─────────────────────────────────
+        case "leadgen:log": {
+          const lvl = (data.level as string) || "info";
+          const src = (data.source as string) || "extension";
+          const vLvl = (["info", "warn", "error", "success"].includes(lvl) ? lvl : "info") as "info" | "warn" | "error" | "success";
+          const vSrc = (["extension", "api", "content-script", "system"].includes(src) ? src : "extension") as "extension" | "api" | "content-script" | "system";
+          pushLeadGenLog(vLvl, vSrc, data.message as string || "", data.details as string);
+          break;
+        }
+        case "leadgen:progress":
+          pushLeadGenLog("info", "extension", data.message as string || "Processing...");
+          break;
+        case "leadgen:comment":
+          pushLeadGenLog("success", "extension", data.message as string || `Commented on post by ${data.postAuthor || "unknown"}`);
+          break;
+        case "leadgen:complete":
+          useExtensionStore.getState().setLeadGenRunning(false);
+          pushLeadGenLog("success", "system", data.message as string || "Lead gen run complete");
+          break;
+        case "leadgen:error":
+          useExtensionStore.getState().setLeadGenRunning(false);
+          pushLeadGenLog("error", "system", data.message as string || "Lead gen error");
+          break;
         case "limit:warning":
         case "limit:reached":
         case "safety:alert":
@@ -254,7 +298,7 @@ export function useWebSocket() {
     }
   }, []);
 
-  const startAutomation = useCallback((searchId: string, options?: { useAI?: boolean }) => {
+  const startAutomation = useCallback((searchId: string, options?: { useAI?: boolean; useJobMatching?: boolean }) => {
     if (sharedSocket?.connected) {
       sharedSocket.emit("EXECUTE_ACTION", { type: "START_AUTOMATION", searchId, options: options || {} });
     }

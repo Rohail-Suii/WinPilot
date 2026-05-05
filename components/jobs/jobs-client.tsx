@@ -29,6 +29,12 @@ import {
   Bot,
   Terminal,
   ArrowDown,
+  Sparkles,
+  Settings,
+  Key,
+  SlidersHorizontal,
+  Check,
+  RefreshCw,
 } from "lucide-react";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -50,6 +56,13 @@ import { jobSearchSchema } from "@/lib/validators";
 import { useExtensionStore } from "@/lib/hooks/use-stores";
 import { useWebSocket } from "@/lib/websocket/client";
 import { z } from "zod";
+import {
+  AIKeysTab,
+  AutomationTab,
+  ResumeTab,
+  type ApiKeyInfo,
+  type AutomationSettings,
+} from "@/components/shared/ai-settings-tabs";
 
 type JobSearchFormValues = z.input<typeof jobSearchSchema>;
 
@@ -72,14 +85,27 @@ interface JobApplicationItem {
   company: string;
   location?: string;
   jobUrl?: string;
+  jobDescription?: string;
   status: string;
   matchScore?: number;
+  matchBreakdown?: {
+    skillsMatch?: number;
+    experienceMatch?: number;
+    educationMatch?: number;
+    matchingSkills?: string[];
+    missingSkills?: string[];
+    strengths?: string[];
+    concerns?: string[];
+    recommendation?: string;
+  };
   appliedAt?: string;
   notes?: string;
   tailoredResume?: {
-    tailoredSummary?: string;
-    tailoredSkills?: string[];
+    summary?: string;
+    skills?: string[];
+    highlights?: string[];
     matchExplanation?: string;
+    keywordsUsed?: string[];
   };
   formAnswers?: { question: string; answer: string }[];
   createdAt: string;
@@ -103,30 +129,58 @@ export function JobsClient() {
   const [addOpen, setAddOpen] = useState(false);
   const [statusFilter, setStatusFilter] = useState("");
   const [expandedApp, setExpandedApp] = useState<string | null>(null);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [debouncedSearch, setDebouncedSearch] = useState("");
+  const [nextCursor, setNextCursor] = useState<string | null>(null);
+  const [hasMore, setHasMore] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [expandedDetails, setExpandedDetails] = useState<Record<string, JobApplicationItem>>({});
+  const [loadingDetail, setLoadingDetail] = useState<string | null>(null);
+
+  // Settings tab state
+  const [settingsSubTab, setSettingsSubTab] = useState<"ai-keys" | "automation" | "resume">("ai-keys");
+  const [apiKeys, setApiKeys] = useState<ApiKeyInfo[]>([]);
+  const [loadingKeys, setLoadingKeys] = useState(true);
+  const [addKeyOpen, setAddKeyOpen] = useState(false);
+  const [preferredProvider, setPreferredProvider] = useState("");
+  const [automationSettings, setAutomationSettings] = useState<AutomationSettings | null>(null);
 
   const { isConnected, currentTask, lastTaskError, aiQuotaStatus, automationRunning, automationLogs, clearLogs, setAutomationRunning } = useExtensionStore();
   const { startAutomation, stopAutomation } = useWebSocket();
   const [useAI, setUseAI] = useState(true);
+  const [useJobMatching, setUseJobMatching] = useState(true);
   const logsEndRef = useRef<HTMLDivElement>(null);
   const [autoScroll, setAutoScroll] = useState(true);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
-    const saved = window.localStorage.getItem("jobs-automation-use-ai");
-    if (saved === "false") {
-      setUseAI(false);
-    }
+    const savedAI = window.localStorage.getItem("jobs-automation-use-ai");
+    if (savedAI === "false") setUseAI(false);
+    const savedMatch = window.localStorage.getItem("jobs-automation-use-matching");
+    if (savedMatch === "false") setUseJobMatching(false);
   }, []);
 
-  const handleAiModeToggle = (checked: boolean) => {
+  const handleAiToggle = (checked: boolean) => {
     setUseAI(checked);
     if (typeof window !== "undefined") {
       window.localStorage.setItem("jobs-automation-use-ai", String(checked));
     }
     toast.info(
       checked
-        ? "AI Mode ON: matching + tailored resume generation enabled"
-        : "AI Mode OFF: apply using existing LinkedIn resume (no AI credits)",
+        ? "AI Resume Tailoring ON: generates tailored resume for each job (uses AI credits)"
+        : "AI Resume Tailoring OFF: applies with existing LinkedIn resume",
+    );
+  };
+
+  const handleMatchToggle = (checked: boolean) => {
+    setUseJobMatching(checked);
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem("jobs-automation-use-matching", String(checked));
+    }
+    toast.info(
+      checked
+        ? "Job Matching ON: AI scores jobs against your resume before applying (uses AI credits)"
+        : "Job Matching OFF: applies to all eligible jobs without scoring",
     );
   };
 
@@ -138,16 +192,42 @@ export function JobsClient() {
     }
   }, []);
 
-  const fetchApplications = useCallback(async () => {
+  const fetchApplications = useCallback(async (cursor?: string) => {
     const params = new URLSearchParams({ view: "applications" });
     if (statusFilter) params.set("status", statusFilter);
+    if (debouncedSearch) params.set("search", debouncedSearch);
+    if (cursor) params.set("cursor", cursor);
     const res = await fetch(`/api/jobs?${params}`);
     if (res.ok) {
       const data = await res.json();
-      setApplications(data.applications);
-      setAppTotal(data.total);
+      if (cursor) {
+        setApplications((prev) => [...prev, ...data.applications]);
+      } else {
+        setApplications(data.applications);
+      }
+      setAppTotal(data.total ?? 0);
+      setNextCursor(data.nextCursor ?? null);
+      setHasMore(data.hasMore ?? false);
     }
-  }, [statusFilter]);
+  }, [statusFilter, debouncedSearch]);
+
+  const loadMore = async () => {
+    if (!nextCursor || loadingMore) return;
+    setLoadingMore(true);
+    await fetchApplications(nextCursor);
+    setLoadingMore(false);
+  };
+
+  const fetchApplicationDetail = async (id: string) => {
+    if (expandedDetails[id]) return;
+    setLoadingDetail(id);
+    const res = await fetch(`/api/jobs/${id}`);
+    if (res.ok) {
+      const data = await res.json();
+      setExpandedDetails((prev) => ({ ...prev, [id]: data.application }));
+    }
+    setLoadingDetail(null);
+  };
 
   const fetchStats = useCallback(async () => {
     const res = await fetch("/api/jobs?view=stats");
@@ -157,10 +237,47 @@ export function JobsClient() {
     }
   }, []);
 
+  const fetchApiKeys = useCallback(async () => {
+    setLoadingKeys(true);
+    try {
+      const res = await fetch("/api/settings/api-keys");
+      if (res.ok) {
+        const data = await res.json();
+        setApiKeys(data.keys || []);
+        setPreferredProvider(data.preferredProvider || "");
+      }
+    } catch { /* */ }
+    setLoadingKeys(false);
+  }, []);
+
+  const fetchAutomationSettings = useCallback(async () => {
+    try {
+      const res = await fetch("/api/settings/automation");
+      if (res.ok) {
+        const data = await res.json();
+        setAutomationSettings(data.settings || null);
+      }
+    } catch { /* */ }
+  }, []);
+
   useEffect(() => {
     setLoading(true);
-    Promise.all([fetchSearches(), fetchApplications(), fetchStats()]).then(() => setLoading(false));
-  }, [fetchSearches, fetchApplications, fetchStats]);
+    Promise.all([fetchSearches(), fetchApplications(), fetchStats(), fetchApiKeys(), fetchAutomationSettings()]).then(() => setLoading(false));
+  }, [fetchSearches, fetchApplications, fetchStats, fetchApiKeys, fetchAutomationSettings]);
+
+  // Debounce search input
+  useEffect(() => {
+    const timer = setTimeout(() => setDebouncedSearch(searchQuery), 400);
+    return () => clearTimeout(timer);
+  }, [searchQuery]);
+
+  // Reset pagination when filters change
+  useEffect(() => {
+    setNextCursor(null);
+    setHasMore(false);
+    setExpandedApp(null);
+    setExpandedDetails({});
+  }, [statusFilter, debouncedSearch]);
 
   const deleteSearch = async (id: string) => {
     await fetch(`/api/jobs?id=${id}`, { method: "DELETE" });
@@ -173,12 +290,12 @@ export function JobsClient() {
       toast.error("Extension not connected. Open LinkedIn in Chrome with the extension enabled.");
       return;
     }
-    startAutomation(searchId, { useAI });
+    startAutomation(searchId, { useAI, useJobMatching });
     setAutomationRunning(true);
     toast.success(
       useAI
-        ? "Automation started in AI Mode."
-        : "Automation started in non-AI mode.",
+        ? "Automation started with AI Resume Tailoring."
+        : "Automation started without AI tailoring.",
     );
   };
 
@@ -224,10 +341,16 @@ export function JobsClient() {
         </div>
         <div className="flex items-center gap-3">
           <div className="flex items-center gap-2 rounded-lg border border-white/10 bg-white/[0.03] px-3 py-1.5">
-            <Bot className="h-3.5 w-3.5 text-white/50" />
-            <span className="text-xs text-white/70">AI Mode</span>
-            <Switch checked={useAI} onCheckedChange={handleAiModeToggle} />
+            <Sparkles className="h-3.5 w-3.5 text-purple-400/70" />
+            <span className="text-xs text-white/70">AI Resume Tailoring</span>
+            <Switch checked={useAI} onCheckedChange={handleAiToggle} />
             <span className="text-xs text-white/40">{useAI ? "ON" : "OFF"}</span>
+          </div>
+          <div className="flex items-center gap-2 rounded-lg border border-white/10 bg-white/[0.03] px-3 py-1.5">
+            <Target className="h-3.5 w-3.5 text-cyan-400/70" />
+            <span className="text-xs text-white/70">Job Matching</span>
+            <Switch checked={useJobMatching} onCheckedChange={handleMatchToggle} />
+            <span className="text-xs text-white/40">{useJobMatching ? "ON" : "OFF"}</span>
           </div>
           <div className="flex items-center gap-2 text-sm">
             <span className={`h-2 w-2 rounded-full ${isConnected ? "bg-emerald-400" : "bg-red-400"}`} />
@@ -264,7 +387,7 @@ export function JobsClient() {
                 {typeof aiQuotaStatus.retryAfterSeconds === "number" && aiQuotaStatus.retryAfterSeconds > 0
                   ? `, retry in ~${aiQuotaStatus.retryAfterSeconds}s.`
                   : "."}
-                <span className="ml-1">You can switch AI Mode OFF to continue without AI resume tailoring.</span>
+                <span className="ml-1">You can switch AI Resume Tailoring OFF to continue without tailoring.</span>
               </p>
             )}
           </div>
@@ -287,6 +410,9 @@ export function JobsClient() {
             {automationLogs.length > 0 && (
               <Badge variant="default" className="ml-1.5 text-[10px] px-1.5 py-0">{automationLogs.length}</Badge>
             )}
+          </TabsTrigger>
+          <TabsTrigger value="settings">
+            <Settings className="h-4 w-4 mr-2" />Settings
           </TabsTrigger>
         </TabsList>
 
@@ -356,7 +482,16 @@ export function JobsClient() {
         </TabsContent>
 
         <TabsContent value="applications">
-          <div className="mb-4 flex items-center gap-3">
+          <div className="mb-4 flex items-center gap-3 flex-wrap">
+            <div className="relative flex-1 min-w-[200px]">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-white/30" />
+              <Input
+                placeholder="Search by job title or company..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                className="pl-9"
+              />
+            </div>
             <Select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
               <option value="">All Statuses</option>
               <option value="found">Found</option>
@@ -369,6 +504,9 @@ export function JobsClient() {
               <option value="skipped">Skipped</option>
               <option value="failed">Failed</option>
             </Select>
+            <span className="text-xs text-white/30 whitespace-nowrap">
+              {appTotal} result{appTotal !== 1 ? "s" : ""}
+            </span>
           </div>
 
           {loading ? (
@@ -378,15 +516,22 @@ export function JobsClient() {
           ) : applications.length === 0 ? (
             <EmptyState
               icon={<FileText className="h-10 w-10 text-white/20" />}
-              title="No applications yet"
-              description="Applications will appear here once the extension starts applying"
+              title={debouncedSearch ? "No matching applications" : "No applications yet"}
+              description={debouncedSearch ? "Try a different search term" : "Applications will appear here once the extension starts applying"}
             />
           ) : (
             <div className="space-y-2">
-              {applications.map((app) => (
+              {applications.map((app) => {
+                const detail = expandedDetails[app._id];
+                const isExpanded = expandedApp === app._id;
+                return (
                 <div key={app._id}>
                   <button
-                    onClick={() => setExpandedApp(expandedApp === app._id ? null : app._id)}
+                    onClick={() => {
+                      const willExpand = expandedApp !== app._id;
+                      setExpandedApp(willExpand ? app._id : null);
+                      if (willExpand) fetchApplicationDetail(app._id);
+                    }}
                     className="w-full flex items-center justify-between rounded-xl bg-white/5 border border-white/10 px-5 py-3 hover:bg-white/[0.07] transition-colors text-left"
                   >
                     <div className="flex items-center gap-4">
@@ -409,7 +554,7 @@ export function JobsClient() {
                       <span className="text-xs text-white/30">
                         {new Date(app.appliedAt || app.createdAt).toLocaleDateString()}
                       </span>
-                      {expandedApp === app._id ? (
+                      {isExpanded ? (
                         <ChevronUp className="h-4 w-4 text-white/30" />
                       ) : (
                         <ChevronDown className="h-4 w-4 text-white/30" />
@@ -418,8 +563,14 @@ export function JobsClient() {
                   </button>
 
                   {/* Expanded details */}
-                  {expandedApp === app._id && (
-                    <div className="ml-4 mt-1 mb-3 rounded-xl bg-white/[0.03] border border-white/5 p-4 space-y-3">
+                  {isExpanded && (
+                    <div className="ml-4 mt-1 mb-3 rounded-xl bg-white/[0.03] border border-white/5 p-4 space-y-4">
+                      {loadingDetail === app._id && (
+                        <div className="flex items-center gap-2 text-xs text-white/40">
+                          <Loader2 className="h-3.5 w-3.5 animate-spin" />Loading details...
+                        </div>
+                      )}
+
                       {app.jobUrl && (
                         <a
                           href={app.jobUrl}
@@ -433,7 +584,7 @@ export function JobsClient() {
                       )}
 
                       {app.matchScore != null && (
-                        <div className="space-y-1">
+                        <div className="space-y-2">
                           <p className="text-xs font-medium text-white/60">Match Score</p>
                           <div className="flex items-center gap-2">
                             <div className="h-2 flex-1 rounded-full bg-white/10 overflow-hidden">
@@ -450,21 +601,87 @@ export function JobsClient() {
                             </div>
                             <span className="text-xs text-white/50">{app.matchScore}%</span>
                           </div>
-                          {app.tailoredResume?.matchExplanation && (
-                            <p className="text-xs text-white/40">{app.tailoredResume.matchExplanation}</p>
-                          )}
+
+                          {/* Match Breakdown */}
+                          <MatchBreakdownDisplay
+                            breakdown={(detail?.matchBreakdown || app.matchBreakdown)}
+                            matchExplanation={detail?.tailoredResume?.matchExplanation || app.tailoredResume?.matchExplanation}
+                          />
                         </div>
                       )}
 
-                      {app.tailoredResume?.tailoredSkills && app.tailoredResume.tailoredSkills.length > 0 && (
-                        <div className="space-y-1">
-                          <p className="text-xs font-medium text-white/60">Highlighted Skills</p>
-                          <div className="flex flex-wrap gap-1.5">
-                            {app.tailoredResume.tailoredSkills.map((skill, i) => (
-                              <Badge key={i} variant="info">{skill}</Badge>
-                            ))}
+                      {/* Job Description */}
+                      {detail?.jobDescription && (
+                        <div className="space-y-1.5">
+                          <p className="text-xs font-medium text-white/60 flex items-center gap-1.5">
+                            <Briefcase className="h-3 w-3" />Job Description
+                          </p>
+                          <div className="rounded-lg bg-white/[0.03] border border-white/5 p-3 max-h-[200px] overflow-y-auto">
+                            <p className="text-xs text-white/50 whitespace-pre-line leading-relaxed">
+                              {detail.jobDescription}
+                            </p>
                           </div>
                         </div>
+                      )}
+
+                      {/* Tailored Resume Content */}
+                      {(detail?.tailoredResume || app.tailoredResume) && (
+                        (() => {
+                          const resume = detail?.tailoredResume || app.tailoredResume;
+                          const hasSummary = resume?.summary;
+                          const hasSkills = resume?.skills && resume.skills.length > 0;
+                          const hasHighlights = resume?.highlights && resume.highlights.length > 0;
+                          const hasKeywords = resume?.keywordsUsed && resume.keywordsUsed.length > 0;
+                          if (!hasSummary && !hasSkills && !hasHighlights) return null;
+                          return (
+                            <div className="space-y-1.5">
+                              <p className="text-xs font-medium text-white/60 flex items-center gap-1.5">
+                                <FileText className="h-3 w-3" />Tailored Resume
+                              </p>
+                              <div className="rounded-lg bg-gradient-to-b from-white/[0.04] to-white/[0.02] border border-white/10 p-4 space-y-3">
+                                {hasSummary && (
+                                  <div>
+                                    <p className="text-[10px] uppercase tracking-wider text-white/30 mb-1">Professional Summary</p>
+                                    <p className="text-xs text-white/70 leading-relaxed">{resume!.summary}</p>
+                                  </div>
+                                )}
+                                {hasSkills && (
+                                  <div>
+                                    <p className="text-[10px] uppercase tracking-wider text-white/30 mb-1">Key Skills</p>
+                                    <div className="flex flex-wrap gap-1.5">
+                                      {resume!.skills!.map((skill, i) => (
+                                        <Badge key={i} variant="info">{skill}</Badge>
+                                      ))}
+                                    </div>
+                                  </div>
+                                )}
+                                {hasHighlights && (
+                                  <div>
+                                    <p className="text-[10px] uppercase tracking-wider text-white/30 mb-1">Key Highlights</p>
+                                    <ul className="space-y-1">
+                                      {resume!.highlights!.map((h, i) => (
+                                        <li key={i} className="text-xs text-white/60 flex items-start gap-1.5">
+                                          <span className="text-emerald-400 mt-0.5">•</span>
+                                          <span>{h}</span>
+                                        </li>
+                                      ))}
+                                    </ul>
+                                  </div>
+                                )}
+                                {hasKeywords && (
+                                  <div>
+                                    <p className="text-[10px] uppercase tracking-wider text-white/30 mb-1">Keywords Matched</p>
+                                    <div className="flex flex-wrap gap-1.5">
+                                      {resume!.keywordsUsed!.map((kw, i) => (
+                                        <span key={i} className="text-[10px] px-1.5 py-0.5 rounded bg-white/5 text-white/40">{kw}</span>
+                                      ))}
+                                    </div>
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+                          );
+                        })()
                       )}
 
                       {app.formAnswers && app.formAnswers.length > 0 && (
@@ -490,7 +707,27 @@ export function JobsClient() {
                     </div>
                   )}
                 </div>
-              ))}
+                );
+              })}
+
+              {/* Load More Pagination */}
+              {hasMore && (
+                <div className="flex justify-center pt-3">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={loadMore}
+                    disabled={loadingMore}
+                    className="text-xs"
+                  >
+                    {loadingMore ? (
+                      <><Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" />Loading...</>
+                    ) : (
+                      <>Load More</>
+                    )}
+                  </Button>
+                </div>
+              )}
             </div>
           )}
         </TabsContent>
@@ -551,6 +788,52 @@ export function JobsClient() {
             </div>
           </div>
         </TabsContent>
+
+        <TabsContent value="settings">
+          <div className="space-y-4">
+            {/* Sub-tab selector */}
+            <div className="flex gap-2 border-b border-white/10 pb-3">
+              {([
+                { id: "ai-keys" as const, label: "AI Keys", icon: Key },
+                { id: "automation" as const, label: "Automation", icon: SlidersHorizontal },
+                { id: "resume" as const, label: "Resume", icon: FileText },
+              ]).map((tab) => (
+                <button
+                  key={tab.id}
+                  onClick={() => setSettingsSubTab(tab.id)}
+                  className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm transition-colors ${
+                    settingsSubTab === tab.id
+                      ? "bg-white/10 text-white border border-white/20"
+                      : "bg-white/[0.03] text-white/50 border border-transparent hover:bg-white/[0.06]"
+                  }`}
+                >
+                  <tab.icon className="h-4 w-4" />
+                  {tab.label}
+                </button>
+              ))}
+            </div>
+
+            {settingsSubTab === "ai-keys" && (
+              <AIKeysTab
+                apiKeys={apiKeys}
+                loading={loadingKeys}
+                addKeyOpen={addKeyOpen}
+                setAddKeyOpen={setAddKeyOpen}
+                onRefresh={fetchApiKeys}
+                preferredProvider={preferredProvider}
+                setPreferredProvider={setPreferredProvider}
+              />
+            )}
+
+            {settingsSubTab === "automation" && (
+              <AutomationTab settings={automationSettings} />
+            )}
+
+            {settingsSubTab === "resume" && (
+              <ResumeTab />
+            )}
+          </div>
+        </TabsContent>
       </Tabs>
 
       <AddSearchDialog open={addOpen} onOpenChange={setAddOpen} onSuccess={fetchSearches} />
@@ -594,6 +877,103 @@ function MatchScoreBadge({ score }: { score: number }) {
   );
 }
 
+// ─── Match Breakdown Display ────────────────────
+function MatchBreakdownDisplay({
+  breakdown,
+  matchExplanation,
+}: {
+  breakdown?: JobApplicationItem["matchBreakdown"];
+  matchExplanation?: string;
+}) {
+  if (!breakdown && !matchExplanation) return null;
+
+  const categories = breakdown ? [
+    { label: "Skills", value: breakdown.skillsMatch, color: "bg-blue-500" },
+    { label: "Experience", value: breakdown.experienceMatch, color: "bg-purple-500" },
+    { label: "Education", value: breakdown.educationMatch, color: "bg-cyan-500" },
+  ].filter((c) => c.value != null) : [];
+
+  return (
+    <div className="space-y-2">
+      {categories.length > 0 && (
+        <div className="grid grid-cols-3 gap-2">
+          {categories.map((cat) => (
+            <div key={cat.label} className="space-y-1">
+              <div className="flex items-center justify-between">
+                <span className="text-[10px] text-white/40">{cat.label}</span>
+                <span className="text-[10px] text-white/50">{cat.value}%</span>
+              </div>
+              <div className="h-1.5 rounded-full bg-white/10 overflow-hidden">
+                <div
+                  className={`h-full rounded-full ${cat.color} transition-all`}
+                  style={{ width: `${cat.value}%` }}
+                />
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {breakdown?.matchingSkills && breakdown.matchingSkills.length > 0 && (
+        <div>
+          <p className="text-[10px] text-white/30 mb-1">Matching Skills</p>
+          <div className="flex flex-wrap gap-1">
+            {breakdown.matchingSkills.map((s, i) => (
+              <span key={i} className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-400/80">{s}</span>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {breakdown?.missingSkills && breakdown.missingSkills.length > 0 && (
+        <div>
+          <p className="text-[10px] text-white/30 mb-1">Missing Skills</p>
+          <div className="flex flex-wrap gap-1">
+            {breakdown.missingSkills.map((s, i) => (
+              <span key={i} className="text-[10px] px-1.5 py-0.5 rounded bg-red-500/15 text-red-400/80">{s}</span>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {breakdown?.strengths && breakdown.strengths.length > 0 && (
+        <div>
+          <p className="text-[10px] text-white/30 mb-1">Strengths</p>
+          <ul className="space-y-0.5">
+            {breakdown.strengths.map((s, i) => (
+              <li key={i} className="text-[10px] text-white/50 flex items-start gap-1">
+                <Check className="h-3 w-3 text-emerald-400/70 mt-0.5 shrink-0" /><span>{s}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {breakdown?.concerns && breakdown.concerns.length > 0 && (
+        <div>
+          <p className="text-[10px] text-white/30 mb-1">Concerns</p>
+          <ul className="space-y-0.5">
+            {breakdown.concerns.map((s, i) => (
+              <li key={i} className="text-[10px] text-white/50 flex items-start gap-1">
+                <AlertTriangle className="h-3 w-3 text-amber-400/70 mt-0.5 shrink-0" /><span>{s}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {breakdown?.recommendation && (
+        <p className="text-[10px] text-white/40 italic">{breakdown.recommendation}</p>
+      )}
+
+      {matchExplanation && !breakdown && (
+        <p className="text-xs text-white/40">{matchExplanation}</p>
+      )}
+    </div>
+  );
+}
+
+// ─── Status Icon ────────────────────────────────
 function StatusIcon({ status }: { status: string }) {
   switch (status) {
     case "applied": return <CheckCircle2 className="h-5 w-5 text-blue-400" />;

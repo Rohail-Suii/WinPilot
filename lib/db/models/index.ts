@@ -49,3 +49,6 @@ export type { IInterviewPrep, IInterviewQuestion, ICompanyResearch, ISalaryInsig
 
 export { default as MarketInsight } from "./market-insight";
 export type { IMarketInsight, MarketInsightType } from "./market-insight";
+
+export { default as LeadGenCampaign } from "./lead-gen-campaign";
+export type { ILeadGenCampaign, CampaignStatus, ILeadComment } from "./lead-gen-campaign";

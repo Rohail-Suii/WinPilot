@@ -76,13 +76,24 @@ export async function processDiscoveredJobs(
     const results = await Promise.allSettled(
       batch.map(async (job) => {
         let matchScore = 0;
+        let matchBreakdown = {};
         try {
           const match = await getJobMatchScore(userId, job.jobDescription);
           matchScore = match.score;
+          matchBreakdown = {
+            skillsMatch: match.skillsMatch,
+            experienceMatch: match.experienceMatch,
+            educationMatch: match.educationMatch,
+            matchingSkills: match.matchingSkills,
+            missingSkills: match.missingSkills,
+            strengths: match.strengths,
+            concerns: match.concerns,
+            recommendation: match.recommendation,
+          };
         } catch {
           matchScore = 50;
         }
-        return { job, matchScore };
+        return { job, matchScore, matchBreakdown };
       })
     );
 
@@ -91,7 +102,7 @@ export async function processDiscoveredJobs(
         skipped++;
         continue;
       }
-      const { job, matchScore } = result.value;
+      const { job, matchScore, matchBreakdown } = result.value;
 
       if (matchScore < minMatchScore) {
         skipped++;
@@ -108,6 +119,7 @@ export async function processDiscoveredJobs(
         jobDescription: job.jobDescription,
         status: "found" as ApplicationStatus,
         matchScore,
+        matchBreakdown,
       });
 
       added++;
@@ -149,6 +161,8 @@ export async function prepareJobApplication(
       summary: typeof tailored.tailoredSummary === "string" ? tailored.tailoredSummary : "",
       skills: normalizeStringArray(tailored.tailoredSkills),
       highlights: normalizeStringArray(tailored.tailoredHighlights),
+      matchExplanation: typeof tailored.matchExplanation === "string" ? tailored.matchExplanation : "",
+      keywordsUsed: normalizeStringArray(tailored.keywordsUsed),
     };
     application.matchScore = tailored.matchScore;
     application.status = "applying";

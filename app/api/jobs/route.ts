@@ -28,6 +28,7 @@ export async function GET(req: Request) {
 
     if (view === "applications") {
       const status = searchParams.get("status");
+      const search = searchParams.get("search")?.trim();
       const cursor = searchParams.get("cursor"); // cursor-based pagination
       const limit = Math.min(parseInt(searchParams.get("limit") || "20"), 50);
       const filter: Record<string, unknown> = { userId: session.user.id };
@@ -38,6 +39,15 @@ export async function GET(req: Request) {
       }
       if (status) filter.status = status;
 
+      // Text search on jobTitle and company
+      if (search && search.length <= 100) {
+        const escaped = search.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+        filter.$or = [
+          { jobTitle: { $regex: escaped, $options: "i" } },
+          { company: { $regex: escaped, $options: "i" } },
+        ];
+      }
+
       if (cursor) {
         if (!mongoose.Types.ObjectId.isValid(cursor)) {
           return NextResponse.json({ error: "Invalid cursor" }, { status: 400 });
@@ -45,16 +55,36 @@ export async function GET(req: Request) {
         filter._id = { $lt: cursor };
       }
 
-      const applications = await JobApplication.find(filter)
-        .sort({ _id: -1 })
-        .limit(limit + 1) // Fetch one extra to determine if there's a next page
-        .lean();
+      // Lightweight projection: exclude jobDescription from list
+      const projection = {
+        jobTitle: 1,
+        company: 1,
+        location: 1,
+        jobUrl: 1,
+        status: 1,
+        matchScore: 1,
+        matchBreakdown: 1,
+        appliedAt: 1,
+        notes: 1,
+        tailoredResume: 1,
+        formAnswers: 1,
+        createdAt: 1,
+        updatedAt: 1,
+      };
+
+      const [applications, total] = await Promise.all([
+        JobApplication.find(filter, projection)
+          .sort({ _id: -1 })
+          .limit(limit + 1)
+          .lean(),
+        JobApplication.countDocuments(filter),
+      ]);
 
       const hasMore = applications.length > limit;
       const results = hasMore ? applications.slice(0, limit) : applications;
       const nextCursor = hasMore ? results[results.length - 1]._id : null;
 
-      return NextResponse.json({ applications: results, nextCursor, hasMore });
+      return NextResponse.json({ applications: results, nextCursor, hasMore, total });
     }
 
     if (view === "stats") {

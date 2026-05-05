@@ -11,6 +11,17 @@ export type ApplicationStatus =
   | "rejected"
   | "offered";
 
+export interface IMatchBreakdown {
+  skillsMatch?: number;
+  experienceMatch?: number;
+  educationMatch?: number;
+  matchingSkills?: string[];
+  missingSkills?: string[];
+  strengths?: string[];
+  concerns?: string[];
+  recommendation?: string;
+}
+
 export interface IJobApplication extends Document {
   userId: mongoose.Types.ObjectId;
   jobSearchId?: mongoose.Types.ObjectId;
@@ -24,7 +35,10 @@ export interface IJobApplication extends Document {
     summary?: string;
     skills?: string[];
     highlights?: string[];
+    matchExplanation?: string;
+    keywordsUsed?: string[];
   };
+  matchBreakdown?: IMatchBreakdown;
   formAnswers: {
     question: string;
     answer: string;
@@ -65,6 +79,18 @@ const JobApplicationSchema = new Schema<IJobApplication>(
       summary: String,
       skills: [String],
       highlights: [String],
+      matchExplanation: String,
+      keywordsUsed: [String],
+    },
+    matchBreakdown: {
+      skillsMatch: Number,
+      experienceMatch: Number,
+      educationMatch: Number,
+      matchingSkills: [String],
+      missingSkills: [String],
+      strengths: [String],
+      concerns: [String],
+      recommendation: String,
     },
     formAnswers: [
       {
@@ -84,6 +110,7 @@ JobApplicationSchema.index({ userId: 1, status: 1 });
 JobApplicationSchema.index({ appliedAt: -1 });
 JobApplicationSchema.index({ company: 1 });
 JobApplicationSchema.index({ userId: 1, jobUrl: 1 }, { unique: true });
+JobApplicationSchema.index({ jobTitle: "text", company: "text" });
 
 const JobApplication: Model<IJobApplication> =
   mongoose.models.JobApplication ||

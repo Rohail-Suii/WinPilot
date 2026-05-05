@@ -31,6 +31,11 @@ interface ExtensionStore {
   lastTaskError: string | null;
   automationRunning: boolean;
   automationLogs: AutomationLogEntry[];
+  leadGenRunning: boolean;
+  leadGenLogs: AutomationLogEntry[];
+  setLeadGenRunning: (running: boolean) => void;
+  addLeadGenLog: (log: AutomationLogEntry) => void;
+  clearLeadGenLogs: () => void;
   aiQuotaStatus: {
     provider?: string;
     model?: string;
@@ -61,11 +66,22 @@ export const useExtensionStore = create<ExtensionStore>((set) => ({
   lastTaskError: null,
   automationRunning: false,
   automationLogs: [],
+  leadGenRunning: false,
+  leadGenLogs: [],
   aiQuotaStatus: null,
   setConnected: (connected) => set({ isConnected: connected }),
   setCurrentTask: (task) => set({ currentTask: task }),
   setLastTaskError: (error) => set({ lastTaskError: error }),
   setAutomationRunning: (running) => set({ automationRunning: running }),
+  setLeadGenRunning: (running) => set({ leadGenRunning: running }),
+  addLeadGenLog: (log) =>
+    set((state) => ({
+      leadGenLogs:
+        state.leadGenLogs.length >= MAX_LOGS
+          ? [...state.leadGenLogs.slice(-MAX_LOGS + 1), log]
+          : [...state.leadGenLogs, log],
+    })),
+  clearLeadGenLogs: () => set({ leadGenLogs: [] }),
   setAiQuotaStatus: (status) => set({ aiQuotaStatus: status }),
   addLog: (log) =>
     set((state) => ({

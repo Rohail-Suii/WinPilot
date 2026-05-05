@@ -27,7 +27,12 @@ export type ExtensionEvent =
   | "limit:warning"
   | "limit:reached"
   | "safety:alert"
-  | "automation:log";
+  | "automation:log"
+  | "leadgen:log"
+  | "leadgen:progress"
+  | "leadgen:comment"
+  | "leadgen:complete"
+  | "leadgen:error";
 
 export interface WSMessage {
   event: ExtensionEvent;

@@ -152,6 +152,12 @@ function handleServerMessage(message) {
     case "STOP_AUTOMATION":
       stopAutomation();
       break;
+    case "START_LEAD_GEN":
+      startLeadGenAutomation(message.campaignId, message.options || {});
+      break;
+    case "STOP_LEAD_GEN":
+      stopLeadGen();
+      break;
     case "SYNC_CONFIG":
       chrome.storage.local.set({ config: message.data });
       break;
@@ -194,7 +200,9 @@ function ensureLinkedInTab() {
 
 function sendToContentScript(tabId, message) {
   return new Promise((resolve, reject) => {
-    console.log(`[LinkedBoost] -> Content script (tab ${tabId}):`, message.command || message.type);
+    const cmd = message.command || message.type;
+    console.log(`[LinkedBoost] -> Content script (tab ${tabId}):`, cmd);
+    emitLog("info", "content-script", `-> ${cmd}`, `tab ${tabId}`);
     chrome.tabs.sendMessage(tabId, message, (response) => {
       if (chrome.runtime.lastError) {
         const errMessage = chrome.runtime.lastError.message || "Unknown runtime error";
@@ -209,6 +217,7 @@ function sendToContentScript(tabId, message) {
           console.warn(
             `[LinkedBoost] <- Content script channel closed during ${message.command}; treating as navigation success`
           );
+          emitLog("warn", "content-script", `<- Channel closed during ${message.command}; treating as navigation success`);
 
           if (message.command === "CLICK_NEXT_OR_SUBMIT") {
             resolve({
@@ -236,9 +245,11 @@ function sendToContentScript(tabId, message) {
         }
 
         console.error(`[LinkedBoost] <- Content script error (tab ${tabId}):`, errMessage);
+        emitLog("error", "content-script", `<- Error (tab ${tabId}): ${errMessage}`);
         reject(new Error(errMessage));
       } else {
         console.log(`[LinkedBoost] <- Content script (tab ${tabId}): status=${response?.status}`);
+        emitLog("info", "content-script", `<- status=${response?.status}`, `tab ${tabId}, cmd=${cmd}`);
         resolve(response);
       }
     });
@@ -270,7 +281,7 @@ function sendToServer(message) {
   if (socket && socket.connected) {
     if (message.type === "REPORT_STATUS") {
       socket.emit("REPORT_STATUS", {
-        event: "task:progress",
+        event: message.event || "task:progress",
         payload: message,
       });
       return;
@@ -288,6 +299,7 @@ function sendToServer(message) {
 async function apiCall(endpoint, body) {
   const url = `${apiUrl}${endpoint}`;
   console.log(`[LinkedBoost API] >> ${url}`, { authToken: authToken ? `${authToken.substring(0, 8)}...` : "NONE", body });
+  emitLog("info", "api", `>> ${endpoint}`);
 
   let res;
   try {
@@ -302,10 +314,12 @@ async function apiCall(endpoint, body) {
   } catch (fetchErr) {
     console.error(`[LinkedBoost API] Network error calling ${url}:`, fetchErr.message);
     console.error(`[LinkedBoost API] Check: Is the server running at ${apiUrl}? Is the extension authorized for this host?`);
+    emitLog("error", "api", `Network error: ${fetchErr.message}`, url);
     throw new Error(`Network error: ${fetchErr.message} (URL: ${url})`);
   }
 
   console.log(`[LinkedBoost API] << ${url} status=${res.status}`);
+  emitLog("info", "api", `<< ${endpoint} status=${res.status}`);
 
   if (!res.ok) {
     const err = await res.json().catch(() => ({ error: res.statusText }));
@@ -365,6 +379,138 @@ function randomDelay(min, max) {
   return new Promise((resolve) => setTimeout(resolve, delay));
 }
 
+// ─── Anti-Detection: Session & Sign-Out Monitoring ──────
+
+/**
+ * Check if LinkedIn has signed the user out or is showing a security challenge.
+ * Uses the content script's CHECK_SESSION command.
+ * Returns: { signedOut: boolean, securityChallenge: boolean } or null on error.
+ */
+async function checkLinkedInSession(tabId) {
+  try {
+    const result = await sendToContentScript(tabId, {
+      type: "EXECUTE_ACTION",
+      command: "CHECK_SESSION",
+      actionId: `session-check-${Date.now()}`,
+    });
+    return result?.data || null;
+  } catch (err) {
+    console.warn("[LinkedBoost] Session check failed:", err.message);
+    return null;
+  }
+}
+
+/**
+ * Wait for user to re-authenticate on LinkedIn.
+ * Polls every 15 seconds, gives up after maxWaitMs (default 10 minutes).
+ * Returns true if session is restored, false if timed out.
+ */
+async function waitForReAuthentication(tabId, maxWaitMs = 10 * 60 * 1000) {
+  const startTime = Date.now();
+  const pollInterval = 15000;
+
+  reportProgress("task:error", {
+    message: "⚠️ LinkedIn signed you out! Please sign back in on the LinkedIn tab. Automation is paused and will resume automatically once you're signed in.",
+  });
+  emitLog("warn", "system", "LinkedIn sign-out detected — waiting for re-authentication");
+
+  while (Date.now() - startTime < maxWaitMs) {
+    if (automationAborted) return false;
+
+    await new Promise((r) => setTimeout(r, pollInterval));
+
+    const session = await checkLinkedInSession(tabId);
+    if (session && !session.signedOut && !session.securityChallenge) {
+      reportProgress("task:progress", {
+        message: "✓ LinkedIn session restored! Resuming automation...",
+      });
+      emitLog("info", "system", "LinkedIn session restored — resuming automation");
+      // Give LinkedIn a moment to fully load after sign-in
+      await randomDelay(3000, 6000);
+      return true;
+    }
+
+    if (session?.securityChallenge) {
+      reportProgress("task:error", {
+        message: "⚠️ LinkedIn security challenge detected. Please complete it manually on the LinkedIn tab.",
+      });
+    }
+
+    const remainingMin = Math.round((maxWaitMs - (Date.now() - startTime)) / 60000);
+    emitLog("info", "system", `Still waiting for re-auth... ${remainingMin}min remaining`);
+  }
+
+  reportProgress("task:error", {
+    message: "Timed out waiting for LinkedIn re-authentication. Stopping automation.",
+  });
+  return false;
+}
+
+/**
+ * Simulate natural browsing activity between job applications.
+ * This makes the automation pattern look like a human browsing LinkedIn.
+ */
+async function simulateBrowsingBreak(tabId) {
+  const breakType = Math.random();
+
+  if (breakType < 0.35) {
+    // Scroll the feed for a bit
+    emitLog("info", "extension", "Taking a browsing break: scrolling feed...");
+    reportProgress("task:progress", { message: "Browsing LinkedIn feed..." });
+    try {
+      await sendToContentScript(tabId, {
+        type: "EXECUTE_ACTION",
+        command: "SIMULATE_BROWSING",
+        actionId: `browse-feed-${Date.now()}`,
+        duration: 5000 + Math.random() * 10000, // 5-15s of browsing
+      });
+    } catch { /* ignore errors during browsing simulation */ }
+    await randomDelay(2000, 5000);
+  } else if (breakType < 0.6) {
+    // Brief pause (simulates reading something)
+    emitLog("info", "extension", "Taking a reading pause...");
+    await randomDelay(4000, 12000);
+  } else if (breakType < 0.8) {
+    // View notifications briefly
+    emitLog("info", "extension", "Taking a browsing break: checking notifications...");
+    try {
+      await sendToContentScript(tabId, {
+        type: "EXECUTE_ACTION",
+        command: "SIMULATE_BROWSING",
+        actionId: `browse-notif-${Date.now()}`,
+        duration: 3000 + Math.random() * 5000,
+      });
+    } catch { /* ignore */ }
+    await randomDelay(1500, 4000);
+  } else {
+    // Just a random short pause
+    await randomDelay(3000, 8000);
+  }
+}
+
+/**
+ * Perform a session health check. Returns true if safe to continue.
+ * If signed out, waits for re-auth. If security challenge, pauses.
+ */
+async function ensureSessionHealthy(tabId) {
+  const session = await checkLinkedInSession(tabId);
+  if (!session) return true; // Can't check, assume OK
+
+  if (session.signedOut) {
+    return await waitForReAuthentication(tabId);
+  }
+
+  if (session.securityChallenge) {
+    reportProgress("task:error", {
+      message: "⚠️ LinkedIn security challenge detected. Please complete it manually, then automation will resume.",
+    });
+    // Wait for challenge to be resolved (same mechanism as re-auth)
+    return await waitForReAuthentication(tabId);
+  }
+
+  return true;
+}
+
 function normalizeAutomationOptions(options) {
   const source = options && typeof options === "object" ? options : {};
   return {
@@ -386,10 +532,10 @@ function isMissingFieldValue(field) {
   const value = typeof field.value === "string" ? field.value.trim() : "";
   if (field.type === "checkbox") return value !== "true";
   if (field.type === "radio") return !value;
-  if (field.type === "select") {
+  if (field.type === "select" || field.type === "custom-dropdown") {
     if (!value) return true;
     const normalized = value.toLowerCase();
-    return normalized === "select" || normalized === "choose" || normalized === "none";
+    return normalized === "select" || normalized === "choose" || normalized === "none" || normalized === "please select" || normalized === "pick one";
   }
 
   return !value;
@@ -475,7 +621,14 @@ function fallbackAnswerForField(field) {
     return "5";
   }
 
-  const pickFirstValidSelect = (options = []) => {
+  const pickBestSelectOption = (options = []) => {
+    // Always prefer "Yes" — it keeps doors open
+    const yesOpt = options.find((o) => {
+      const val = (o?.value || "").toString().trim().toLowerCase();
+      const txt = (o?.text || "").toString().trim().toLowerCase();
+      return val === "yes" || txt === "yes";
+    });
+    if (yesOpt) return yesOpt.value;
     const valid = options.find((o) => {
       const value = (o?.value || "").toString().trim().toLowerCase();
       const text = (o?.text || "").toString().trim().toLowerCase();
@@ -487,10 +640,12 @@ function fallbackAnswerForField(field) {
 
   if (field.type === "checkbox") return "true";
   if (field.type === "radio") {
-    return field.options?.[0]?.value || "Yes";
+    // Prefer "Yes" for radio buttons too
+    const yesRadio = (field.options || []).find((o) => (o.label || "").toLowerCase() === "yes" || (o.value || "").toLowerCase() === "yes");
+    return yesRadio?.value || field.options?.[0]?.value || "Yes";
   }
-  if (field.type === "select") {
-    return pickFirstValidSelect(field.options || []);
+  if (field.type === "select" || field.type === "custom-dropdown") {
+    return pickBestSelectOption(field.options || []);
   }
   if (label.includes("linkedin")) return "https://www.linkedin.com/in/profile";
   if (label.includes("website") || label.includes("portfolio")) return "https://example.com";
@@ -588,23 +743,27 @@ function getRuleBasedAnswer(field, storedRules) {
     if (label.includes("authorized") || label.includes("work authorization")) {
       return optionByText("yes")?.value || options[0]?.value || "Yes";
     }
-    return options[0]?.value || "Yes";
+    // Default: prefer "Yes" for all other radio questions
+    const yesRadio = optionByText("yes");
+    return yesRadio?.value || options[0]?.value || "Yes";
   }
 
-  if (field.type === "select") {
+  if (field.type === "select" || field.type === "custom-dropdown") {
     const options = field.options || [];
+    // Always prefer "Yes" option — it keeps doors open and avoids disqualification
+    const yesOption = options.find((o) => {
+      const val = (o?.value || "").toString().trim().toLowerCase();
+      const txt = (o?.text || "").toString().trim().toLowerCase();
+      return val === "yes" || txt === "yes";
+    });
+    if (yesOption) return yesOption.value;
+
     const valid = options.find((o) => {
       const value = (o?.value || "").toString().trim().toLowerCase();
       const text = (o?.text || "").toString().trim().toLowerCase();
       const joined = `${value} ${text}`;
       return !!value && !/select|choose|please|option|pick one|--/.test(joined);
     });
-
-    if (label.includes("comfortable") || label.includes("success fee") || label.includes("without a fixed salary")) {
-      const yesOption = options.find((o) => (o?.value || "").toString().toLowerCase() === "yes" || (o?.text || "").toString().toLowerCase() === "yes");
-      return yesOption?.value || valid?.value || options[0]?.value || "";
-    }
-
     return valid?.value || options[0]?.value || "";
   }
 
@@ -688,8 +847,8 @@ async function ensureContentScriptReady(tabId, maxRetries = 3) {
 async function navigateAndWait(tabId, url) {
   await chrome.tabs.update(tabId, { url });
   await waitForTabLoad(tabId);
-  // SDUI content loads asynchronously after page load; wait longer
-  await randomDelay(3000, 5000);
+  // SDUI content loads asynchronously after page load; wait longer with human-like variance
+  await randomDelay(4000, 7000);
   await ensureContentScriptReady(tabId);
 }
 
@@ -710,6 +869,26 @@ function reportProgress(event, data) {
   }).catch(() => {});
 }
 
+/**
+ * Send a detailed log line to the dashboard via WebSocket.
+ * Also prints to the service-worker console for dev-tools debugging.
+ *
+ * @param {"info"|"warn"|"error"|"success"} level
+ * @param {"extension"|"api"|"content-script"|"system"} source
+ * @param {string} message  – human-readable log text
+ * @param {string} [details] – optional extra detail (e.g. JSON snippet)
+ */
+function emitLog(level, source, message, details) {
+  sendToServer({
+    type: "REPORT_STATUS",
+    event: "automation:log",
+    level,
+    source,
+    message,
+    details: details || undefined,
+  });
+}
+
 async function startAutomation(searchId, options = {}) {
   if (automationRunning) {
     reportProgress("task:error", { message: "Automation already running" });
@@ -726,6 +905,7 @@ async function startAutomation(searchId, options = {}) {
   console.log(`[LinkedBoost] authToken: ${authToken ? `${authToken.substring(0, 8)}...` : "NOT SET"}`);
   console.log(`[LinkedBoost] wsUrl: ${wsUrl}`);
   console.log(`[LinkedBoost] useAI: ${useAI}`);
+  emitLog("info", "system", "====== STARTING AUTOMATION ======", `searchId=${searchId}, useAI=${useAI}`);
 
   automationRunning = true;
   automationAborted = false;
@@ -745,6 +925,7 @@ async function startAutomation(searchId, options = {}) {
     reportProgress("task:progress", { message: "Fetching search configuration..." });
     const startData = await apiCall(`/api/jobs/automate?step=start`, { searchId });
     console.log(`[LinkedBoost] Step 1 result:`, JSON.stringify(startData).substring(0, 300));
+    emitLog("info", "extension", "Search configuration received", `URL: ${startData.url || "none"}, remaining: ${startData.remaining || "?"}`);
 
     if (!startData.url) {
       throw new Error("No search URL returned");
@@ -760,9 +941,14 @@ async function startAutomation(searchId, options = {}) {
     console.log(`[LinkedBoost] Got LinkedIn tab: id=${tab.id}, url=${tab.url}`);
     await chrome.tabs.update(tab.id, { url: startData.url, active: true });
     await waitForTabLoad(tab.id);
-    await randomDelay(3000, 5000);
+    await randomDelay(4000, 7000); // Longer initial load wait
     const csReady = await ensureContentScriptReady(tab.id);
     console.log(`[LinkedBoost] Content script ready: ${csReady}`);
+
+    // Session health check before starting
+    if (!(await ensureSessionHealthy(tab.id))) {
+      return cleanup("Automation stopped: LinkedIn session could not be restored");
+    }
 
     if (automationAborted) return cleanup("Automation stopped by user");
 
@@ -800,8 +986,18 @@ async function startAutomation(searchId, options = {}) {
       // Navigate to the correct page (only if pageNum > 1 or first time)
       if (pageNum > 1) {
         console.log(`[LinkedBoost] Navigating to page ${pageNum}: ${currentPageUrl}`);
+
+        // Take a longer break between pages (natural behavior)
+        emitLog("info", "extension", `Taking a break before navigating to page ${pageNum}...`);
+        await randomDelay(5000, 15000);
+
         await navigateAndWait(tab.id, currentPageUrl);
-        await randomDelay(2000, 3000);
+        await randomDelay(3000, 5000);
+
+        // Session check after page navigation
+        if (!(await ensureSessionHealthy(tab.id))) {
+          return cleanup("Automation stopped: LinkedIn session could not be restored");
+        }
       }
 
       console.log(`[LinkedBoost] ====== Processing Page ${pageNum}/${MAX_PAGES} ======`);
@@ -810,7 +1006,8 @@ async function startAutomation(searchId, options = {}) {
       // Step 2: Scrape job listings for current page
       console.log(`[LinkedBoost] Step 2: Scraping job listings on page ${pageNum}...`);
       reportProgress("task:progress", { message: `Scraping job listings on page ${pageNum}...` });
-      await randomDelay(1500, 2500);
+      // Simulate browsing the listings page first
+      await randomDelay(2500, 5000);
 
       const scrapeResult = await sendToContentScript(tab.id, {
         type: "EXECUTE_ACTION",
@@ -820,6 +1017,7 @@ async function startAutomation(searchId, options = {}) {
 
       const scrapedJobs = scrapeResult?.data?.jobs || [];
       console.log(`[LinkedBoost] Page ${pageNum}: ${scrapedJobs.length} jobs found`);
+      emitLog("info", "extension", `Page ${pageNum}: ${scrapedJobs.length} jobs found`);
       if (scrapedJobs.length > 0) {
         console.log(`[LinkedBoost] First job:`, JSON.stringify(scrapedJobs[0]));
       }
@@ -852,6 +1050,7 @@ async function startAutomation(searchId, options = {}) {
       console.log(
         `[LinkedBoost] Page ${pageNum} eligibility: total=${scrapedJobs.length}, easyApply=${easyApplyDetectedCount}, alreadyApplied=${skippedAppliedCount}, eligible=${dedupedEligibleJobs.length}`
       );
+      emitLog("info", "extension", `Page ${pageNum} eligibility: total=${scrapedJobs.length}, easyApply=${easyApplyDetectedCount}, alreadyApplied=${skippedAppliedCount}, eligible=${dedupedEligibleJobs.length}`);
 
       if (dedupedEligibleJobs.length === 0) {
         console.log(`[LinkedBoost] No new eligible jobs on page ${pageNum}, trying next page...`);
@@ -887,8 +1086,26 @@ async function startAutomation(searchId, options = {}) {
 
         if (automationAborted) return cleanup("Automation stopped by user");
 
+        // ─── Anti-Detection: Session check before each job ───
+        if (!(await ensureSessionHealthy(tab.id))) {
+          return cleanup("Automation stopped: LinkedIn session could not be restored");
+        }
+
+        // ─── Anti-Detection: Natural browsing break every 2-4 jobs ───
+        if (jobIndex > 0 && jobIndex % (2 + Math.floor(Math.random() * 3)) === 0) {
+          emitLog("info", "extension", `Taking a natural browsing break after ${jobIndex} jobs...`);
+          await simulateBrowsingBreak(tab.id);
+        }
+
+        // ─── Anti-Detection: Variable inter-job delay (longer than before) ───
+        if (jobIndex > 0) {
+          const interJobDelay = 5000 + Math.random() * 15000; // 5-20 seconds between jobs
+          await randomDelay(interJobDelay * 0.8, interJobDelay * 1.2);
+        }
+
         try {
           console.log(`[LinkedBoost] Processing job ${jobIndex + 1}/${jobsToProcessOnThisPage} (page ${pageNum}): ${candidateJob.title}`);
+          emitLog("info", "extension", `Processing job ${jobIndex + 1}/${jobsToProcessOnThisPage} (page ${pageNum}): ${candidateJob.title}`);
 
           // Navigate back to the CORRECT page if we navigated away (e.g., after applying)
           if (needsReturnToSearchPage) {
@@ -929,7 +1146,8 @@ async function startAutomation(searchId, options = {}) {
             continue;
           }
 
-          await randomDelay(800, 1200);
+          // Simulate time spent reading the job card (like a human would)
+          await randomDelay(1500, 3500);
 
           const qualResult = await sendToContentScript(tab.id, {
             type: "EXECUTE_ACTION",
@@ -953,9 +1171,8 @@ async function startAutomation(searchId, options = {}) {
             qualification.text ||
             String(qualification.status || "unknown").replace(/_/g, " ");
 
-          console.log(
-            `[LinkedBoost] Qualification check: status="${qualification.status}", matched=${qualification.matched}, shouldSkip=${shouldSkipJob}, text="${qualification.text || ""}"`
-          );
+          console.log(`[LinkedBoost] Qualification check: status="${qualification.status}", matched=${qualification.matched}, shouldSkip=${shouldSkipJob}, text="${qualification.text || ""}"`);
+          emitLog("info", "extension", `Qualification check: status="${qualification.status}", matched=${qualification.matched}, shouldSkip=${shouldSkipJob}`, qualification.text || "");
 
           if (shouldSkipJob) {
             pageSkippedQualificationCount++;
@@ -969,6 +1186,10 @@ async function startAutomation(searchId, options = {}) {
           }
 
           console.log(`[LinkedBoost] Proceeding with application for ${candidateJob.title}...`);
+          emitLog("info", "extension", `Proceeding with application for ${candidateJob.title}`);
+
+          // Simulate reading the job description (human-like pause before scraping)
+          await randomDelay(2000, 5000);
 
           let detail = null;
           for (let attempt = 0; attempt < 3; attempt++) {
@@ -979,7 +1200,7 @@ async function startAutomation(searchId, options = {}) {
             });
             detail = detailResult?.data?.detail;
             if (detail?.description) break;
-            await randomDelay(1000, 1800);
+            await randomDelay(1500, 2500);
           }
 
           if (!detail?.description) {
@@ -1063,7 +1284,13 @@ async function startAutomation(searchId, options = {}) {
             console.log(`[LinkedBoost] Easy Apply not found on side panel, navigating to job page...`);
             await navigateAndWait(tab.id, targetApp.jobUrl);
             needsReturnToSearchPage = true;
-            await randomDelay(1000, 1600);
+
+            // Check session after navigation (LinkedIn may redirect to login)
+            if (!(await ensureSessionHealthy(tab.id))) {
+              return cleanup("Automation stopped: LinkedIn session could not be restored");
+            }
+
+            await randomDelay(1500, 3000);
 
             easyApplyResult = await sendToContentScript(tab.id, {
               type: "EXECUTE_ACTION",
@@ -1161,7 +1388,8 @@ async function startAutomation(searchId, options = {}) {
                 value: chosen,
                 fieldType: field.type,
               });
-              await randomDelay(250, 700);
+              // Human-like pause between form fields
+              await randomDelay(800, 2000);
             }
 
             const dropdownResult = await sendToContentScript(tab.id, {
@@ -1195,7 +1423,8 @@ async function startAutomation(searchId, options = {}) {
             }
 
             if (navAction === "next" || navAction === "review") {
-              await randomDelay(1000, 1600);
+              // Wait for next page to load, then simulate reading
+              await randomDelay(1500, 3000);
               continue;
             }
 
@@ -1249,6 +1478,9 @@ async function startAutomation(searchId, options = {}) {
           // Mark that we need to return to search results for the next job
           needsReturnToSearchPage = true;
 
+          // Post-submission pause — humans don't immediately move on
+          await randomDelay(2000, 5000);
+
           if (targetApp?._id) {
             await apiCall(`/api/jobs/automate?step=complete`, {
               applicationId: targetApp._id,
@@ -1289,6 +1521,7 @@ async function startAutomation(searchId, options = {}) {
       totalSkippedQualificationCount += pageSkippedQualificationCount;
 
       console.log(`[LinkedBoost] Page ${pageNum} complete: Applied=${pageAppliedCount}, Failed=${pageFailedCount}, Skipped=${pageSkippedQualificationCount}`);
+      emitLog("info", "extension", `Page ${pageNum} complete: Applied=${pageAppliedCount}, Failed=${pageFailedCount}, Skipped=${pageSkippedQualificationCount}`);
 
       // Check if we should continue to the next page
       if (totalAppliedCount + totalFailedCount >= MAX_JOBS_PER_RUN) {
@@ -1310,6 +1543,7 @@ async function startAutomation(searchId, options = {}) {
     console.error("[LinkedBoost] Error:", err.message);
     console.error("[LinkedBoost] Stack:", err.stack);
     console.error("[LinkedBoost] apiUrl:", apiUrl, "authToken:", authToken ? `${authToken.substring(0, 8)}...` : "NOT SET");
+    emitLog("error", "system", `AUTOMATION FAILED: ${err.message}`);
     reportProgress("task:error", {
       message: `Automation failed: ${err.message}`,
     });
@@ -1321,6 +1555,396 @@ async function startAutomation(searchId, options = {}) {
 function stopAutomation() {
   automationAborted = true;
   reportProgress("task:progress", { message: "Stopping automation..." });
+}
+
+// ─── Lead Generation Automation State ──────────────────
+
+let leadGenRunning = false;
+let leadGenAborted = false;
+
+function stopLeadGen() {
+  leadGenAborted = true;
+  emitLeadLog("info", "system", "Stopping lead generation...");
+}
+
+function emitLeadLog(level, source, message, details) {
+  sendToServer({
+    type: "REPORT_STATUS",
+    event: "leadgen:log",
+    level,
+    source,
+    message,
+    details: details || undefined,
+  });
+
+  // Also notify popup
+  chrome.runtime.sendMessage({
+    type: "LEADGEN_PROGRESS",
+    level,
+    source,
+    message,
+  }).catch(() => {});
+}
+
+function reportLeadProgress(event, data) {
+  sendToServer({
+    type: "REPORT_STATUS",
+    event,
+    ...data,
+  });
+
+  chrome.runtime.sendMessage({
+    type: "LEADGEN_PROGRESS",
+    event,
+    ...data,
+  }).catch(() => {});
+}
+
+/**
+ * Lead Generation Automation Engine
+ *
+ * Flow per run:
+ *   For each keyword in the campaign:
+ *     1. Navigate to LinkedIn search (posts, sorted by date)
+ *     2. Scrape visible posts via content script
+ *     3. Filter out already-commented posts & posts not mentioning the keyword
+ *     4. For each new post (up to postsPerKeyword):
+ *        a. Generate a personalized comment (AI or template)
+ *        b. Navigate to the individual post page
+ *        c. Simulate reading the post
+ *        d. Post the comment with human-like typing
+ *        e. Record the comment to the server
+ *        f. Wait for cooldown (2-5 min)
+ *        g. Insert browsing break every ~3 comments
+ *
+ * Anti-detection measures used:
+ *   - Gaussian-distributed delays everywhere
+ *   - Browsing breaks between actions
+ *   - Daily limits enforced (from DailyUsage DB + DAILY_LIMITS)
+ *   - Session health checked before each comment
+ *   - Human-like typing for comment text (via content script)
+ */
+async function startLeadGenAutomation(campaignId, options = {}) {
+  if (leadGenRunning) {
+    reportLeadProgress("leadgen:error", { message: "Lead generation already running" });
+    return;
+  }
+  if (automationRunning) {
+    reportLeadProgress("leadgen:error", {
+      message: "Job automation is running. Stop it first before starting lead generation.",
+    });
+    return;
+  }
+
+  leadGenRunning = true;
+  leadGenAborted = false;
+  chrome.storage.local.set({ leadGenRunning: true, leadGenCampaignId: campaignId });
+
+  console.log("[LinkedBoost] ====== STARTING LEAD GEN AUTOMATION ======");
+  console.log("[LinkedBoost] campaignId:", campaignId);
+
+  try {
+    // ── Load campaign ────────────────────────────────────────────────────────
+    const campaignRes = await fetch(`${apiUrl}/api/lead-gen?id=${encodeURIComponent(campaignId)}`, {
+      headers: { "x-auth-token": authToken },
+    });
+    if (!campaignRes.ok) throw new Error(`Failed to load campaign: ${campaignRes.status}`);
+    const { campaign } = await campaignRes.json();
+
+    if (!campaign) throw new Error("Campaign not found");
+    if (campaign.status !== "active") {
+      reportLeadProgress("leadgen:error", {
+        message: `Campaign is ${campaign.status}. Set it to Active first.`,
+      });
+      return;
+    }
+
+    emitLeadLog("info", "system", `Campaign loaded: "${campaign.name}"`);
+    emitLeadLog("info", "system", `Keywords: ${campaign.keywords.join(", ")}`);
+    emitLeadLog("info", "system", `Daily limit: ${campaign.dailyCommentLimit} | Per keyword: ${campaign.postsPerKeyword}`);
+
+    // ── Ensure LinkedIn tab is open ──────────────────────────────────────────
+    const tab = await ensureLinkedInTab();
+    if (!tab?.id) {
+      reportLeadProgress("leadgen:error", { message: "Could not open LinkedIn tab" });
+      return;
+    }
+
+    const alreadyCommented = new Set(campaign.alreadyCommentedUrls || []);
+    let totalCommentedThisRun = 0;
+    let processedPosts = 0;
+
+    // ── Per-keyword loop ─────────────────────────────────────────────────────
+    for (const keyword of campaign.keywords) {
+      if (leadGenAborted) break;
+
+      emitLeadLog("info", "extension", `Searching for keyword: "${keyword}"`);
+      reportLeadProgress("leadgen:progress", {
+        message: `Searching LinkedIn for: "${keyword}"`,
+        keyword,
+      });
+
+      // Check session health before navigating
+      if (!await ensureSessionHealthy(tab.id)) break;
+
+      // Navigate to LinkedIn content search, sorted by date
+      const searchUrl =
+        `https://www.linkedin.com/search/results/content/?keywords=${encodeURIComponent(keyword)}&sortBy=date_posted`;
+      await navigateAndWait(tab.id, searchUrl);
+
+      // Check session again after navigation
+      if (!await ensureSessionHealthy(tab.id)) break;
+
+      // Simulate briefly reading the feed before acting
+      await randomDelay(3000, 7000);
+
+      // Scrape posts
+      let posts = [];
+      try {
+        const scrapeRes = await sendToContentScript(tab.id, {
+          type: "EXECUTE_ACTION",
+          command: "SCRAPE_KEYWORD_POSTS",
+          actionId: `lead-scrape-${Date.now()}`,
+          keyword,
+        });
+        posts = scrapeRes?.data?.posts || [];
+      } catch (e) {
+        emitLeadLog("warn", "extension", `Could not scrape posts for "${keyword}": ${e.message}`);
+        continue;
+      }
+
+      emitLeadLog("info", "extension", `Found ${posts.length} posts for "${keyword}"`);
+      reportLeadProgress("leadgen:progress", {
+        message: `Found ${posts.length} posts for "${keyword}"`,
+        keyword,
+        found: posts.length,
+      });
+
+      // ── AI intent classification: keep only potential clients ─────────────
+      if (campaign.useAI && posts.length > 0) {
+        try {
+          emitLeadLog("info", "api", `Filtering ${posts.length} posts for client intent...`);
+          const classifyRes = await apiCall("/api/lead-gen", {
+            action: "classify_posts",
+            campaignId,
+            posts: posts.slice(0, 15).map((p) => ({
+              postUrl: p.postUrl,
+              postContent: p.postContent,
+              authorName: p.authorName,
+              authorHeadline: p.authorHeadline,
+            })),
+            keyword,
+          });
+          if (classifyRes?.posts) {
+            const before = posts.length;
+            posts = classifyRes.posts;
+            emitLeadLog(
+              posts.length > 0 ? "info" : "warn",
+              "api",
+              `Client filter: ${posts.length}/${before} posts are potential clients`
+            );
+            reportLeadProgress("leadgen:progress", {
+              message: `${posts.length}/${before} posts identified as potential clients`,
+              keyword,
+            });
+          }
+        } catch (e) {
+          emitLeadLog("warn", "api", `Intent filter failed: ${e.message} — proceeding with all posts`);
+        }
+      }
+
+      // Record found count
+      try {
+        await fetch(`${apiUrl}/api/lead-gen`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json", "x-auth-token": authToken },
+          body: JSON.stringify({
+            id: campaignId,
+            // We bump stats.totalFound via a dedicated field — use record_comment for comments
+          }),
+        });
+      } catch { /* ignore — stats update is non-critical */ }
+
+      // Filter out already-commented posts
+      const newPosts = posts.filter((p) => {
+        const normalized = (p.postUrl || "").split("?")[0].replace(/\/$/, "");
+        return normalized && !alreadyCommented.has(normalized);
+      });
+
+      if (newPosts.length === 0) {
+        emitLeadLog("info", "extension", `No new posts for "${keyword}" — all already commented`);
+        continue;
+      }
+
+      // ── Per-post loop ──────────────────────────────────────────────────────
+      for (const post of newPosts.slice(0, campaign.postsPerKeyword)) {
+        if (leadGenAborted) break;
+
+        // Check daily comment limit (from server-side DailyUsage)
+        const limitCheckRes = await fetch(
+          `${apiUrl}/api/lead-gen`,
+          { headers: { "x-auth-token": authToken } }
+        );
+        if (limitCheckRes.ok) {
+          const { commentsToday, commentLimit } = await limitCheckRes.json();
+          if (commentsToday >= commentLimit) {
+            emitLeadLog("warn", "system", `Daily comment limit (${commentLimit}) reached. Stopping.`);
+            reportLeadProgress("leadgen:progress", {
+              message: `Daily comment limit (${commentLimit}) reached. Stopping for today.`,
+            });
+            leadGenAborted = true;
+            break;
+          }
+        }
+
+        // Also respect campaign-level daily limit
+        if (totalCommentedThisRun >= campaign.dailyCommentLimit) {
+          emitLeadLog("info", "system", `Campaign daily limit (${campaign.dailyCommentLimit}) reached`);
+          leadGenAborted = true;
+          break;
+        }
+
+        emitLeadLog("info", "extension", `Processing post by ${post.authorName || "unknown"}: ${post.postUrl}`);
+
+        // ── Generate comment ───────────────────────────────────────────────
+        let comment = "";
+        try {
+          const genRes = await apiCall("/api/lead-gen", {
+            action: "generate_comment",
+            campaignId,
+            postContent: post.postContent,
+            authorName: post.authorName,
+            authorHeadline: post.authorHeadline,
+            keyword,
+          });
+          comment = genRes?.comment || "";
+        } catch (e) {
+          emitLeadLog("warn", "api", `Comment generation failed: ${e.message}. Using template fallback.`);
+          // Build a minimal fallback
+          const firstName = (post.authorName || "").split(" ")[0];
+          const templates = campaign.commentTemplates || [];
+          if (templates.length > 0) {
+            comment = templates[Math.floor(Math.random() * templates.length)]
+              .replace(/\{authorName\}/g, post.authorName || "")
+              .replace(/\{firstName\}/g, firstName);
+          } else {
+            comment = `Hey${firstName ? ` ${firstName}` : ""}, I can help with that! Feel free to message me.`;
+          }
+        }
+
+        if (!comment) continue;
+
+        // ── Navigate to the individual post ───────────────────────────────
+        await navigateAndWait(tab.id, post.postUrl);
+
+        if (!await ensureSessionHealthy(tab.id)) break;
+
+        // Simulate reading the post (5-20 seconds)
+        const readTime = 5000 + Math.random() * 15000;
+        emitLeadLog("info", "extension", `Reading post... (${Math.round(readTime / 1000)}s)`);
+        await randomDelay(readTime * 0.9, readTime * 1.1);
+
+        // Randomly scroll the post to simulate reading
+        try {
+          await sendToContentScript(tab.id, {
+            type: "EXECUTE_ACTION",
+            command: "SIMULATE_BROWSING",
+            actionId: `lead-read-${Date.now()}`,
+            duration: 3000 + Math.random() * 5000,
+          });
+        } catch { /* ignore */ }
+
+        // ── Post the comment ───────────────────────────────────────────────
+        let commented = false;
+        try {
+          const commentRes = await sendToContentScript(tab.id, {
+            type: "EXECUTE_ACTION",
+            command: "COMMENT_ON_POST",
+            actionId: `lead-comment-${Date.now()}`,
+            selector: null, // We're on the post page — no need to target a specific element
+            comment,
+          });
+          commented = commentRes?.data?.commented === true;
+
+          if (!commented && commentRes?.data?.error) {
+            emitLeadLog("warn", "content-script", `Comment failed: ${commentRes.data.error}`);
+          }
+        } catch (e) {
+          emitLeadLog("warn", "content-script", `Comment error: ${e.message}`);
+        }
+
+        if (commented) {
+          // ── Record to server ─────────────────────────────────────────────
+          try {
+            await apiCall("/api/lead-gen", {
+              action: "record_comment",
+              campaignId,
+              postUrl: post.postUrl,
+              postAuthor: post.authorName,
+              comment,
+              keyword,
+            });
+          } catch (e) {
+            emitLeadLog("warn", "api", `Failed to record comment: ${e.message}`);
+          }
+
+          alreadyCommented.add((post.postUrl || "").split("?")[0].replace(/\/$/, ""));
+          totalCommentedThisRun++;
+
+          emitLeadLog("success", "extension", `✓ Commented on post by ${post.authorName || "unknown"}`);
+          reportLeadProgress("leadgen:comment", {
+            message: `Commented on post by ${post.authorName || "unknown"}`,
+            postUrl: post.postUrl,
+            postAuthor: post.authorName,
+            comment,
+            keyword,
+            totalThisRun: totalCommentedThisRun,
+          });
+        }
+
+        processedPosts++;
+
+        // ── Cooldown between comments (2-5 min with Gaussian variance) ─────
+        if (!leadGenAborted) {
+          const cooldownMin = 2 * 60 * 1000;  // 2 min
+          const cooldownMax = 5 * 60 * 1000;  // 5 min
+          const cooldown = cooldownMin + Math.random() * (cooldownMax - cooldownMin);
+          emitLeadLog("info", "system", `Cooldown: ${Math.round(cooldown / 1000)}s before next action...`);
+          reportLeadProgress("leadgen:progress", {
+            message: `Waiting ${Math.round(cooldown / 60000)} min before next comment...`,
+          });
+          await randomDelay(cooldown * 0.9, cooldown * 1.1);
+        }
+
+        // ── Browsing break every 3 comments ───────────────────────────────
+        if (processedPosts > 0 && processedPosts % 3 === 0 && !leadGenAborted) {
+          await simulateBrowsingBreak(tab.id);
+        }
+      }
+
+      // Short pause between keywords (not the full cooldown)
+      if (!leadGenAborted) {
+        await randomDelay(5000, 15000);
+      }
+    }
+
+    // ── Session complete ─────────────────────────────────────────────────────
+    const summary = `Lead gen run complete: ${totalCommentedThisRun} comment(s) posted.`;
+    emitLeadLog("success", "system", summary);
+    reportLeadProgress("leadgen:complete", {
+      message: summary,
+      totalCommentedThisRun,
+      campaignId,
+    });
+  } catch (err) {
+    console.error("[LinkedBoost] Lead gen error:", err);
+    emitLeadLog("error", "system", `Lead gen error: ${err.message}`);
+    reportLeadProgress("leadgen:error", { message: err.message });
+  } finally {
+    leadGenRunning = false;
+    leadGenAborted = false;
+    chrome.storage.local.set({ leadGenRunning: false, leadGenCampaignId: null });
+  }
 }
 
 function cleanup(message) {
@@ -1495,6 +2119,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         connected: socket?.connected ?? false,
         authenticated: !!authToken,
         automationRunning,
+        leadGenRunning,
       });
       break;
 
@@ -1505,6 +2130,16 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
     case "STOP_AUTOMATION":
       stopAutomation();
+      sendResponse({ success: true });
+      break;
+
+    case "START_LEAD_GEN":
+      startLeadGenAutomation(message.campaignId, message.options || {});
+      sendResponse({ success: true });
+      break;
+
+    case "STOP_LEAD_GEN":
+      stopLeadGen();
       sendResponse({ success: true });
       break;
 
