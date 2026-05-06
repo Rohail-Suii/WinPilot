@@ -82,9 +82,12 @@ RUN addgroup --system --gid 1001 nodejs && \
 # Copy public assets
 COPY --from=builder /app/public ./public
 
-# Copy Next.js standalone output (includes node_modules and compiled Next.js server)
+# Copy Next.js standalone output (includes minimal node_modules for Next.js)
 COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
 COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
+
+# Overlay full node_modules so the custom server (socket.io, etc.) can resolve packages
+COPY --from=builder --chown=nextjs:nodejs /app/node_modules ./node_modules
 
 # Copy the bundled custom server (replaces the default standalone server.js)
 COPY --from=builder --chown=nextjs:nodejs /app/server.compiled.js ./server.js
