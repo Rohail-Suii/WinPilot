@@ -10,6 +10,7 @@ env:
   REGISTRY: ghcr.io
   IMAGE_NAME: rohail-suii/inpilot
   APP_DIR: /opt/inpilot
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
 
 # Cancel in-progress runs for the same branch (saves CI minutes)
 concurrency:
@@ -92,7 +93,7 @@ jobs:
             type=sha,prefix=sha-
 
       - name: Build & push (linux/amd64 for DigitalOcean)
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v6
         with:
           context: .
           push: true
