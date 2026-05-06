@@ -1,7 +1,6 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef } from "react";
-import { useSession } from "next-auth/react";
 import {
   Target,
   Plus,
@@ -25,7 +24,7 @@ import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
 import { useExtensionStore } from "@/lib/hooks/use-stores";
-import { Wifi, WifiOff } from "lucide-react";
+import { WifiOff } from "lucide-react";
 
 // ─── Types ─────────────────────────────────────────────────────────────────────
 
@@ -79,7 +78,6 @@ const EMPTY_FORM = {
 // ─── Component ─────────────────────────────────────────────────────────────────
 
 export function LeadGenClient() {
-  const { data: session } = useSession();
   const extensionConnected = useExtensionStore((s) => s.isConnected);
   const leadGenLogs = useExtensionStore((s) => s.leadGenLogs);
   const leadGenRunning = useExtensionStore((s) => s.leadGenRunning);
@@ -862,7 +860,7 @@ function CampaignCard({
                 <div className="flex items-center gap-2 text-white/30">
                   <span>{c.postAuthor || "Unknown"}</span>
                   <span>·</span>
-                  <span className="text-[#00E5FF]/50">"{c.keyword}"</span>
+                  <span className="text-[#00E5FF]/50">&ldquo;{c.keyword}&rdquo;</span>
                   <span>·</span>
                   <span>{new Date(c.commentedAt).toLocaleDateString()}</span>
                 </div>

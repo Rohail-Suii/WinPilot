@@ -24,9 +24,7 @@ import {
   ChevronUp,
   Play,
   Square,
-  Zap,
   AlertTriangle,
-  Bot,
   Terminal,
   ArrowDown,
   Sparkles,
@@ -34,10 +32,9 @@ import {
   Key,
   SlidersHorizontal,
   Check,
-  RefreshCw,
 } from "lucide-react";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";

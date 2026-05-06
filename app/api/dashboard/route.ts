@@ -29,7 +29,7 @@ export async function GET() {
 
     const [
       totalApplied,
-      _appliedThisWeek,
+      ,
       appliedCount,
       interviewCount,
       postsThisWeek,

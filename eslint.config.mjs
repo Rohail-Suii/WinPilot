@@ -12,6 +12,9 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // Extension build artifacts and CommonJS build script
+    "extension/dist/**",
+    "extension/build.js",
   ]),
 ]);
 

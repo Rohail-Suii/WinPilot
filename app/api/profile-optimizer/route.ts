@@ -42,7 +42,7 @@ const summarySchema = z.object({
   targetRole: z.string().min(1, "Target role is required"),
 });
 
-export async function GET(_req: Request) {
+export async function GET() {
   try {
     const session = await auth();
     if (!session?.user?.id) {
