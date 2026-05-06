@@ -1,11 +1,7 @@
-version: "3.8"
-
 services:
   # ─── Next.js Application ───────────────────────────────────────────
   app:
-    build:
-      context: .
-      dockerfile: Dockerfile
+    image: ghcr.io/rohail-suii/inpilot:latest
     container_name: linkedboost-app
     restart: always
     ports:
