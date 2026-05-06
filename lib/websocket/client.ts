@@ -289,7 +289,7 @@ export function useWebSocket() {
         disconnectSharedSocket();
       }
     };
-  }, [session?.user?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [session?.user?.id]);
 
   const sendCommand = useCallback((action: Record<string, unknown>) => {
     if (sharedSocket?.connected) {

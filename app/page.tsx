@@ -845,7 +845,7 @@ export default function Home() {
             <div className={styles.masonryColumns}>
               {TESTIMONIALS.map((item) => (
                 <article key={item.author} className={styles.testimonialCard}>
-                  <p className={styles.testimonialQuote}>"{item.quote}"</p>
+                  <p className={styles.testimonialQuote}>&ldquo;{item.quote}&rdquo;</p>
                   <div className={styles.testimonialAuthorRow}>
                     <span className={styles.testimonialAvatar}>{item.initials}</span>
                     <div>
