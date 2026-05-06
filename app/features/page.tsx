@@ -36,9 +36,6 @@ export const metadata: Metadata = {
       "Automatically apply to LinkedIn jobs, tailor your resume with AI, and scrape leads — all with WinPilot's powerful automation engine.",
   },
 };
-      "Auto-apply to jobs, build your personal brand, and scrape leads on LinkedIn — completely free with BYOK AI.",
-  },
-};
 
 const pillarFeatures = [
   {
