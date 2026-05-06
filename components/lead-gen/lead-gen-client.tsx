@@ -249,7 +249,7 @@ export function LeadGenClient() {
     useExtensionStore.getState().setLeadGenRunning(false);
   };
 
-  const addLog = (level: LogEntry["level"], message: string, keyword?: string) => {
+  const _addLog = (level: LogEntry["level"], message: string, keyword?: string) => {
     useExtensionStore.getState().addLeadGenLog({
       id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
       timestamp: new Date().toISOString(),
@@ -262,7 +262,7 @@ export function LeadGenClient() {
 
   // ─── Dynamic form helpers ──────────────────────────────────────────────────────
 
-  const updateKeyword = (
+  const _updateKeyword = (
     arr: string[],
     setArr: (v: string[]) => void,
     idx: number,

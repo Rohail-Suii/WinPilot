@@ -4,7 +4,7 @@
  * Randomizes order, inserts browsing breaks, and varies timing.
  */
 
-import { randomDelay, readingPause, cooldownDelay } from "./human-simulator";
+import { randomDelay, cooldownDelay } from "./human-simulator";
 
 /**
  * Shuffle an array using Fisher-Yates algorithm

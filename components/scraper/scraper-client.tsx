@@ -525,8 +525,6 @@ export function ScraperClient() {
       return;
     }
 
-    const now = new Date().toISOString();
-
     if (editingTemplate) {
       const id = editingTemplate._id || editingTemplate.id;
       if (!id) return;

@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { checkCooldown, checkActionCooldown } from '@/lib/anti-detection/rate-limiter';
 
 // Mock the DB-dependent modules so we can test the synchronous functions

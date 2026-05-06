@@ -88,7 +88,7 @@ function normalizeTailoredResumeResult(raw: unknown): TailoredResumeResult {
 export async function tailorResumeForJob(
   userId: string,
   jobDescription: string,
-  resumeId?: string
+  _resumeId?: string
 ): Promise<TailoredResumeResult> {
   const ai = await getUserAIProvider(userId);
   if (!ai) {

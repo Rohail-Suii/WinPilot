@@ -31,7 +31,6 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Badge } from "@/components/ui/badge";
 import { Switch } from "@/components/ui/switch";
 import { Select } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
@@ -871,6 +870,7 @@ interface ParsedResumeData {
   projects: { name: string; description: string; url?: string | null; tech: string[] }[];
 }
 
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 const DEFAULT_TAILORING_PROMPT = `Match my tech stack exactly to the job description — use their terminology, their framework names, their tool versions. First sentence of summary must contain the exact job title and my years of relevant experience. Every highlight must map to a specific requirement from the JD. Preserve all my quantified achievements (percentages, dollar amounts, user counts, performance metrics) but frame them through the lens of what this role needs. Prioritize required skills over nice-to-haves. If I have adjacent experience to a required skill, bridge it explicitly. Remove any skill or experience that doesn't serve this specific application. My resume should make the recruiter think "this person already does this job."`;
 
 const EXAMPLE_PROMPTS: { label: string; quote: string; prompt: string }[] = [

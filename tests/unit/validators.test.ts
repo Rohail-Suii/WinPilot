@@ -3,7 +3,6 @@ import {
   loginSchema,
   registerSchema,
   forgotPasswordSchema,
-  resetPasswordSchema,
   verifyEmailSchema,
   aiApiKeySchema,
   jobSearchSchema,

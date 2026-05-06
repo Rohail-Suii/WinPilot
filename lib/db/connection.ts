@@ -16,8 +16,7 @@ const MAX_RETRIES = 5;
 const RETRY_DELAY_MS = 2000;
 
 declare global {
-  // eslint-disable-next-line no-var
-  var mongooseCache: MongooseCache | undefined;
+  var mongooseCache: MongooseCache | undefined; // eslint-disable-line no-var
 }
 
 const cached: MongooseCache = global.mongooseCache ?? { conn: null, promise: null, retryCount: 0 };

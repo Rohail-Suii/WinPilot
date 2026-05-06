@@ -28,13 +28,6 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 // Types
 // ---------------------------------------------------------------------------
 
-interface SectionScore {
-  score: number;
-  current?: string;
-  suggestion?: string;
-  suggestions?: string[];
-  missing?: string[];
-}
 
 interface ProfileAnalysis {
   _id: string;
