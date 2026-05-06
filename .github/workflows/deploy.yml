@@ -8,7 +8,7 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}
+  IMAGE_NAME: rohail-suii/inpilot
   APP_DIR: /opt/inpilot
 
 # Cancel in-progress runs for the same branch (saves CI minutes)
