@@ -109,10 +109,10 @@ docker run --rm -p 80:80 certbot/certbot certonly \
 # Certs are in /etc/letsencrypt – mount into docker volumes
 # docker-compose already maps ssl-certs:/etc/letsencrypt
 # Copy them into the named volume:
-docker volume create inpilot_ssl-certs
+docker volume create winpilot_ssl-certs
 docker run --rm \
   -v /etc/letsencrypt:/src:ro \
-  -v inpilot_ssl-certs:/dest \
+  -v winpilot_ssl-certs:/dest \
   alpine sh -c "cp -a /src/. /dest/"
 ```
 
@@ -132,7 +132,6 @@ scp scripts/deploy.sh deploy@YOUR_DROPLET_IP:/opt/inpilot/scripts/
 cd /opt/inpilot
 
 # Log in to GitHub Container Registry (use a GitHub Personal Access Token)
-echo YOUR_GITHUB_PAT | docker login ghcr.io -u YOUR_GITHUB_USERNAME --password-stdin
 
 # Deploy
 bash scripts/deploy.sh

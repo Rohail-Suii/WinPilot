@@ -1,7 +1,6 @@
 import type { NextAuthConfig } from "next-auth";
 import Credentials from "next-auth/providers/credentials";
 import Google from "next-auth/providers/google";
-import GitHub from "next-auth/providers/github";
 
 // Edge-compatible auth config (no Node.js imports like mongoose/bcrypt).
 // Used by middleware. The full auth.ts extends this with the authorize callback.
@@ -20,14 +19,6 @@ export const authConfig = {
           Google({
             clientId: process.env.GOOGLE_CLIENT_ID,
             clientSecret: process.env.GOOGLE_CLIENT_SECRET!,
-          }),
-        ]
-      : []),
-    ...(process.env.GITHUB_CLIENT_ID
-      ? [
-          GitHub({
-            clientId: process.env.GITHUB_CLIENT_ID,
-            clientSecret: process.env.GITHUB_CLIENT_SECRET!,
           }),
         ]
       : []),
