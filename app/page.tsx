@@ -93,33 +93,33 @@ const QUICKSTART_STEPS = [
   },
 ];
 
-// ΓöÇΓöÇΓöÇ Regional Pricing ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+// ─── Regional Pricing ─────────────────────────────
 const REGION_PRICES: Record<string, { symbol: string; amount: number; code: string }> = {
   US: { symbol: "$", amount: 20, code: "USD" },
   CA: { symbol: "CA$", amount: 27, code: "CAD" },
-  GB: { symbol: "┬ú", amount: 16, code: "GBP" },
-  EU: { symbol: "Γé¼", amount: 18, code: "EUR" },
-  DE: { symbol: "Γé¼", amount: 18, code: "EUR" },
-  FR: { symbol: "Γé¼", amount: 18, code: "EUR" },
-  ES: { symbol: "Γé¼", amount: 18, code: "EUR" },
-  IT: { symbol: "Γé¼", amount: 18, code: "EUR" },
-  NL: { symbol: "Γé¼", amount: 18, code: "EUR" },
-  IN: { symbol: "Γé╣", amount: 499, code: "INR" },
+  GB: { symbol: "£", amount: 16, code: "GBP" },
+  EU: { symbol: "€", amount: 18, code: "EUR" },
+  DE: { symbol: "€", amount: 18, code: "EUR" },
+  FR: { symbol: "€", amount: 18, code: "EUR" },
+  ES: { symbol: "€", amount: 18, code: "EUR" },
+  IT: { symbol: "€", amount: 18, code: "EUR" },
+  NL: { symbol: "€", amount: 18, code: "EUR" },
+  IN: { symbol: "₹", amount: 499, code: "INR" },
   PK: { symbol: "Rs", amount: 2500, code: "PKR" },
-  BD: { symbol: "αº│", amount: 1500, code: "BDT" },
-  NG: { symbol: "Γéª", amount: 15000, code: "NGN" },
+  BD: { symbol: "৳", amount: 1500, code: "BDT" },
+  NG: { symbol: "₦", amount: 15000, code: "NGN" },
   BR: { symbol: "R$", amount: 99, code: "BRL" },
   MX: { symbol: "MX$", amount: 349, code: "MXN" },
   AU: { symbol: "A$", amount: 30, code: "AUD" },
-  JP: { symbol: "┬Ñ", amount: 2900, code: "JPY" },
-  KR: { symbol: "Γé⌐", amount: 26000, code: "KRW" },
+  JP: { symbol: "¥", amount: 2900, code: "JPY" },
+  KR: { symbol: "₩", amount: 26000, code: "KRW" },
   AE: { symbol: "AED", amount: 75, code: "AED" },
   SA: { symbol: "SAR", amount: 75, code: "SAR" },
-  TR: { symbol: "Γé║", amount: 650, code: "TRY" },
-  PH: { symbol: "Γé▒", amount: 1100, code: "PHP" },
+  TR: { symbol: "₺", amount: 650, code: "TRY" },
+  PH: { symbol: "₱", amount: 1100, code: "PHP" },
   ID: { symbol: "Rp", amount: 310000, code: "IDR" },
   ZA: { symbol: "R", amount: 350, code: "ZAR" },
-  EG: { symbol: "E┬ú", amount: 950, code: "EGP" },
+  EG: { symbol: "E£", amount: 950, code: "EGP" },
   KE: { symbol: "KSh", amount: 2500, code: "KES" },
 };
 
@@ -139,7 +139,7 @@ const PRICING_PLANS = [
     features: [
       "Auto-apply to jobs on LinkedIn",
       "AI resume tailoring per job",
-      "Bring your own AI key (Gemini, Groq ΓÇö free)",
+      "Bring your own AI key (Gemini, Groq — free)",
       "LinkedIn post scheduling",
       "Data scraping",
       "Chrome extension",
@@ -158,7 +158,7 @@ const PRICING_PLANS = [
     cadence: "/ month",
     features: [
       "Everything in Free",
-      "AI credits included ΓÇö no API key needed",
+      "AI credits included — no API key needed",
       "Unlimited resume tailoring",
       "Interview prep with AI",
       "Market insights & salary data",
@@ -167,7 +167,7 @@ const PRICING_PLANS = [
       "Advanced analytics",
     ],
     excluded: [],
-    cta: "Get Pro ΓåÆ",
+    cta: "Get Pro →",
     highlighted: true,
   },
 ];
@@ -239,21 +239,21 @@ const CHART_BARS = [48, 72, 58, 84, 66, 92, 74];
 
 function renderBar(filledBlocks: number): string {
   const boundedBlocks = Math.max(0, Math.min(12, filledBlocks));
-  return `${"Γûê".repeat(boundedBlocks)}${"Γûæ".repeat(12 - boundedBlocks)}`;
+  return `${"█".repeat(boundedBlocks)}${"░".repeat(12 - boundedBlocks)}`;
 }
 
 function buildTerminalText(progress: number[]): string {
   return `$ Winpilot apply --jobs 50 --filter "remote AND senior"
 
-Γ£ô Scraping LinkedIn jobs...     [${renderBar(progress[0])}] 412 found
-Γ£ô Filtering by criteria...      [${renderBar(progress[1])}] 50 matched
-Γ£ô Generating cover letters...   [${renderBar(progress[2])}] 50 done
-ΓåÆ Submitting applications...    [${renderBar(progress[3])}] 38/50
+✔ Scraping LinkedIn jobs...     [${renderBar(progress[0])}] 412 found
+✔ Filtering by criteria...      [${renderBar(progress[1])}] 50 matched
+✔ Generating cover letters...   [${renderBar(progress[2])}] 50 done
+→ Submitting applications...    [${renderBar(progress[3])}] 38/50
 
 Applied to 38 jobs in 4m 12s.
 
 $ Winpilot post --schedule "Mon,Wed,Fri 9am" --content ./posts/
-Γ£ô Scheduled 12 posts across 3 weeks.
+✔ Scheduled 12 posts across 3 weeks.
 
 $ `;
 }
@@ -451,7 +451,7 @@ export default function Home() {
           <div className={styles.navInner}>
             <Link href="/" className={styles.logo}>
               <span className={styles.logoSquare} aria-hidden="true">
-                Γûá
+                ✦
               </span>
               <span className={styles.logoWordmark}>Winpilot</span>
             </Link>
@@ -477,7 +477,7 @@ export default function Home() {
                 aria-label="Open command palette"
                 onClick={() => setPaletteOpen(true)}
               >
-                Γîÿ
+                ⌘
               </button>
               <button
                 type="button"
@@ -485,7 +485,7 @@ export default function Home() {
                 onClick={() => setMobileMenuOpen(true)}
                 aria-label="Open menu"
               >
-                Γÿ░
+                ☰
               </button>
             </div>
           </div>
@@ -495,14 +495,14 @@ export default function Home() {
       {mobileMenuOpen && (
         <div className={styles.mobileMenuOverlay}>
           <div className={styles.mobileMenuHeader}>
-            <span className={styles.mobileMenuBrand}>Γûá Winpilot</span>
+            <span className={styles.mobileMenuBrand}>✦ Winpilot</span>
             <button
               type="button"
               className={styles.mobileCloseButton}
               onClick={() => setMobileMenuOpen(false)}
               aria-label="Close menu"
             >
-              Γ£ò
+              ✘
             </button>
           </div>
 
@@ -539,7 +539,7 @@ export default function Home() {
             aria-modal="true"
             aria-label="Command palette"
           >
-            <div className={styles.paletteHeader}>Γîÿ Command Palette</div>
+            <div className={styles.paletteHeader}>⌘ Command Palette</div>
             <input className={styles.paletteInput} readOnly value="Type a command..." aria-label="Command input" />
             <div className={styles.paletteCommandList}>
               {PALETTE_COMMANDS.map((command) => (
@@ -565,7 +565,7 @@ export default function Home() {
               <div className={styles.heroCopy}>
                 <div className={styles.betaBadge}>
                   <span className={styles.betaDot} aria-hidden="true" />
-                  <span>Γûá NOW IN BETA</span>
+                  <span>✦ NOW IN BETA</span>
                 </div>
 
                 <h1 className={styles.heroHeadline}>
@@ -580,7 +580,7 @@ export default function Home() {
 
                 <div className={styles.heroCtas}>
                   <Link href="/register" className={`${styles.ctaButton} ${styles.ctaPrimary}`}>
-                    Start automating ΓåÆ
+                    Start automating →
                   </Link>
                   <a href="#quickstart" className={`${styles.ctaButton} ${styles.ctaGhost}`}>
                     View docs
@@ -607,7 +607,7 @@ export default function Home() {
                       <span className={styles.dotYellow} />
                       <span className={styles.dotGreen} />
                     </div>
-                    <span className={styles.terminalTitle}>Winpilot ΓÇö bash ΓÇö 80├ù24</span>
+                    <span className={styles.terminalTitle}>Winpilot — bash — 80×24</span>
                   </div>
 
                   <div className={styles.terminalBody}>
@@ -624,28 +624,28 @@ export default function Home() {
                         <div className={styles.terminalSpacer} />
 
                         <div className={styles.terminalProgressLine}>
-                          <span className={styles.terminalSymbol}>Γ£ô</span>
+                          <span className={styles.terminalSymbol}>✔</span>
                           <span className={styles.terminalLabel}>Scraping LinkedIn jobs...</span>
                           <span className={styles.terminalBar}>[{renderBar(progressBars[0])}]</span>
                           <span className={styles.terminalMeta}>412 found</span>
                         </div>
 
                         <div className={styles.terminalProgressLine}>
-                          <span className={styles.terminalSymbol}>Γ£ô</span>
+                          <span className={styles.terminalSymbol}>✔</span>
                           <span className={styles.terminalLabel}>Filtering by criteria...</span>
                           <span className={styles.terminalBar}>[{renderBar(progressBars[1])}]</span>
                           <span className={styles.terminalMeta}>50 matched</span>
                         </div>
 
                         <div className={styles.terminalProgressLine}>
-                          <span className={styles.terminalSymbol}>Γ£ô</span>
+                          <span className={styles.terminalSymbol}>✔</span>
                           <span className={styles.terminalLabel}>Generating cover letters...</span>
                           <span className={styles.terminalBar}>[{renderBar(progressBars[2])}]</span>
                           <span className={styles.terminalMeta}>50 done</span>
                         </div>
 
                         <div className={styles.terminalProgressLine}>
-                          <span className={styles.terminalArrow}>ΓåÆ</span>
+                          <span className={styles.terminalArrow}>→</span>
                           <span className={styles.terminalLabel}>Submitting applications...</span>
                           <span className={styles.terminalBar}>[{renderBar(progressBars[3])}]</span>
                           <span className={styles.terminalMeta}>38/50</span>
@@ -656,7 +656,7 @@ export default function Home() {
                         <div className={styles.terminalSpacer} />
                         <div className={styles.terminalCommandLine}>{'$ Winpilot post --schedule "Mon,Wed,Fri 9am" --content ./posts/'}</div>
                         <div className={styles.terminalProgressLine}>
-                          <span className={styles.terminalSymbol}>Γ£ô</span>
+                          <span className={styles.terminalSymbol}>✔</span>
                           <span className={styles.terminalLabel}>Scheduled 12 posts across 3 weeks.</span>
                         </div>
                         <div className={styles.terminalSpacer} />
@@ -773,7 +773,7 @@ export default function Home() {
 
             <div className={styles.quickstartCtaWrap}>
               <a href="/features" className={`${styles.ctaButton} ${styles.ctaOutlineCyan}`}>
-                Read the full docs ΓåÆ
+                Read the full docs →
               </a>
             </div>
           </div>
@@ -811,13 +811,13 @@ export default function Home() {
                     <ul className={styles.planFeatureList}>
                       {plan.features.map((feature) => (
                         <li key={feature} className={styles.planFeatureItem}>
-                          <span className={styles.checkmark}>Γ£ô</span>
+                          <span className={styles.checkmark}>✔</span>
                           <span>{feature}</span>
                         </li>
                       ))}
                       {plan.excluded.map((feature) => (
                         <li key={feature} className={styles.planFeatureItemExcluded}>
-                          <span className={styles.crossmark}>Γ£ò</span>
+                          <span className={styles.crossmark}>✘</span>
                           <span>{feature}</span>
                         </li>
                       ))}
@@ -845,7 +845,7 @@ export default function Home() {
             <div className={styles.masonryColumns}>
               {TESTIMONIALS.map((item) => (
                 <article key={item.author} className={styles.testimonialCard}>
-                  <p className={styles.testimonialQuote}>ΓÇ£{item.quote}ΓÇ¥</p>
+                  <p className={styles.testimonialQuote}>"{item.quote}"</p>
                   <div className={styles.testimonialAuthorRow}>
                     <span className={styles.testimonialAvatar}>{item.initials}</span>
                     <div>
@@ -870,14 +870,14 @@ export default function Home() {
 
             <div className={styles.finalCtaButtons}>
               <Link href="/register" className={`${styles.ctaButton} ${styles.ctaPrimary}`}>
-                Get started free ΓåÆ
+                Get started free →
               </Link>
               <a href="/about" className={`${styles.ctaButton} ${styles.ctaGhost}`}>
                 Talk to a founder
               </a>
             </div>
 
-            <p className={styles.finalCtaMeta}>No credit card required ┬╖ Cancel anytime ┬╖ Open API</p>
+            <p className={styles.finalCtaMeta}>No credit card required · Cancel anytime · Open API</p>
           </div>
         </section>
       </main>
@@ -886,7 +886,7 @@ export default function Home() {
         <div className={styles.container}>
           <div className={styles.footerGrid}>
             <div>
-              <div className={styles.footerBrand}>Γûá Winpilot</div>
+              <div className={styles.footerBrand}>✦ Winpilot</div>
               <p className={styles.footerTagline}>LinkedIn, automated.</p>
               <div className={styles.footerSocials}>
                 <a href="https://github.com" className={styles.footerLink}>
@@ -913,7 +913,7 @@ export default function Home() {
           </div>
 
           <div className={styles.footerBottomBar}>
-            <span>┬⌐ 2025 Winpilot. Built for developers, by developers.</span>
+            <span>© 2025 Winpilot. Built for developers, by developers.</span>
             <div className={styles.footerBottomLinks}>
               <a href="/terms" className={styles.footerLink}>
                 Terms
