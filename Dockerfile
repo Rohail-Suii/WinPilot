@@ -30,12 +30,20 @@ COPY . .
 ENV NEXT_TELEMETRY_DISABLED=1
 
 # Provide dummy build-time env vars so Next.js can import route modules
-# during static analysis without throwing (real values are injected at runtime).
-# NextAuth v5 throws at module load if NEXTAUTH_SECRET is absent.
-ENV NEXTAUTH_SECRET=build-time-placeholder-secret
-ENV NEXTAUTH_URL=http://localhost:3000
-ENV MONGODB_URI=mongodb://localhost:27017/build
-ENV ENCRYPTION_MASTER_KEY=build-time-placeholder-key-32chars!!
+# during static analysis without throwing (real values are injected at runtime
+# via docker-compose env_file / .env.production).
+# Use ARG so values don't persist in the final image layers.
+ARG NEXTAUTH_SECRET=build-time-placeholder-secret
+ARG NEXTAUTH_URL=http://localhost:3000
+ARG MONGODB_URI=mongodb://localhost:27017/build
+ARG ENCRYPTION_MASTER_KEY=build-time-placeholder-key-32chars!!
+ARG RESEND_API_KEY=build-time-placeholder
+
+ENV NEXTAUTH_SECRET=$NEXTAUTH_SECRET
+ENV NEXTAUTH_URL=$NEXTAUTH_URL
+ENV MONGODB_URI=$MONGODB_URI
+ENV ENCRYPTION_MASTER_KEY=$ENCRYPTION_MASTER_KEY
+ENV RESEND_API_KEY=$RESEND_API_KEY
 
 # Build Next.js (produces .next/standalone)
 RUN npm run build

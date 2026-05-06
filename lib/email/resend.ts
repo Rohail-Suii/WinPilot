@@ -5,12 +5,19 @@ import {
   welcomeEmailHtml,
 } from "./templates";
 
-const resend = new Resend(process.env.RESEND_API_KEY);
+// Lazy-initialize so module evaluation doesn't throw at build time
+let _resend: Resend | null = null;
+function getResend(): Resend {
+  if (!_resend) {
+    _resend = new Resend(process.env.RESEND_API_KEY);
+  }
+  return _resend;
+}
 
 const fromAddress = process.env.RESEND_FROM_EMAIL || "LinkedBoost <noreply@linkedboost.app>";
 
 async function sendEmail(to: string, subject: string, html: string) {
-  const { error } = await resend.emails.send({
+  const { error } = await getResend().emails.send({
     from: fromAddress,
     to,
     subject,
