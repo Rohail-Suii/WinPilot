@@ -15,7 +15,6 @@ import {
   Megaphone,
   Search,
   ChevronRight,
-  Inbox,
   Eye,
   MessageSquare,
   UserPlus,

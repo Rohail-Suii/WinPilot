@@ -6,7 +6,6 @@ import {
   FileText,
   Users,
 } from "lucide-react";
-import { cn } from "@/lib/utils";
 import { useDashboardData } from "./dashboard-data-provider";
 
 export function StatsCards() {

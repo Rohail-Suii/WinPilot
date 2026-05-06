@@ -24,7 +24,6 @@ import {
   Share2,
   TrendingUp,
   CalendarDays,
-  Edit3,
 } from "lucide-react";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";

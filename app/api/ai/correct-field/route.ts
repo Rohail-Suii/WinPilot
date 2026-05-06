@@ -96,10 +96,30 @@ export async function POST(req: Request) {
   }
 }
 
+interface FormFieldOption {
+  text: string;
+  value: string;
+}
+
+interface FormFieldContext {
+  fieldLabel: string;
+  fieldType: string;
+  currentValue: string;
+  errorMessage: string;
+  placeholder?: string;
+  hint?: string;
+  options?: FormFieldOption[];
+  pattern?: string;
+  min?: number | string;
+  max?: number | string;
+  minLength?: number;
+  maxLength?: number;
+}
+
 /**
  * Build default prompt if none provided by client
  */
-function buildDefaultPrompt(context: any): string {
+function buildDefaultPrompt(context: FormFieldContext): string {
   const {
     fieldLabel,
     fieldType,
@@ -132,7 +152,7 @@ function buildDefaultPrompt(context: any): string {
 
   if (options && options.length > 0) {
     prompt += `\n**Available Options:**\n`;
-    options.slice(0, 20).forEach((opt: any, idx: number) => {
+    options.slice(0, 20).forEach((opt: FormFieldOption, idx: number) => {
       prompt += `${idx + 1}. "${opt.text}" (value: "${opt.value}")\n`;
     });
     if (options.length > 20) {

@@ -160,7 +160,7 @@ async function checkAnthropicInfo(apiKey: string): Promise<ProviderCreditsResult
     });
 
     if (!res.ok) {
-      const err = await res.text();
+      await res.text();
       if (res.status === 401) {
         return { provider: "anthropic", type: "error", error: "Invalid API key" };
       }

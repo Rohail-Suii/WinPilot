@@ -522,10 +522,10 @@ function CampaignForm({ form, setForm, onSave, onCancel, saving, title }: Campai
         <div className="mt-2 p-3 bg-yellow-500/5 border border-yellow-500/20 rounded-md">
           <p className="text-xs text-yellow-400/80 font-medium mb-1">💡 Tips for finding real clients (not competitors):</p>
           <ul className="text-xs text-white/40 space-y-0.5 list-disc list-inside">
-            <li>Use phrases that signal <em>need</em>: <span className="text-white/60">"looking for web developer"</span>, <span className="text-white/60">"anyone recommend a website builder"</span></li>
-            <li>Target pain points: <span className="text-white/60">"my website is broken"</span>, <span className="text-white/60">"need to redesign my website"</span>, <span className="text-white/60">"no website for my business"</span></li>
-            <li>Business owner intent: <span className="text-white/60">"want to get my business online"</span>, <span className="text-white/60">"starting a small business website"</span></li>
-            <li>Avoid single broad terms like <span className="text-white/60">"website"</span> — too many service providers will show up.</li>
+            <li>Use phrases that signal <em>need</em>: <span className="text-white/60">&ldquo;looking for web developer&rdquo;</span>, <span className="text-white/60">&ldquo;anyone recommend a website builder&rdquo;</span></li>
+            <li>Target pain points: <span className="text-white/60">&ldquo;my website is broken&rdquo;</span>, <span className="text-white/60">&ldquo;need to redesign my website&rdquo;</span>, <span className="text-white/60">&ldquo;no website for my business&rdquo;</span></li>
+            <li>Business owner intent: <span className="text-white/60">&ldquo;want to get my business online&rdquo;</span>, <span className="text-white/60">&ldquo;starting a small business website&rdquo;</span></li>
+            <li>Avoid single broad terms like <span className="text-white/60">&ldquo;website&rdquo;</span> — too many service providers will show up.</li>
           </ul>
           <p className="text-xs text-white/30 mt-1.5">AI will also automatically filter out service providers from results when AI mode is on.</p>
         </div>

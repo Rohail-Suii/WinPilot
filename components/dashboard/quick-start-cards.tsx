@@ -2,7 +2,6 @@
 
 import Link from "next/link";
 import { Briefcase, Trophy, Database, ArrowRight } from "lucide-react";
-import { cn } from "@/lib/utils";
 
 const features = [
   {
