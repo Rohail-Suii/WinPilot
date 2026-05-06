@@ -29,6 +29,14 @@ COPY . .
 # Set Next.js telemetry off during build
 ENV NEXT_TELEMETRY_DISABLED=1
 
+# Provide dummy build-time env vars so Next.js can import route modules
+# during static analysis without throwing (real values are injected at runtime).
+# NextAuth v5 throws at module load if NEXTAUTH_SECRET is absent.
+ENV NEXTAUTH_SECRET=build-time-placeholder-secret
+ENV NEXTAUTH_URL=http://localhost:3000
+ENV MONGODB_URI=mongodb://localhost:27017/build
+ENV ENCRYPTION_MASTER_KEY=build-time-placeholder-key-32chars!!
+
 # Build Next.js (produces .next/standalone)
 RUN npm run build
 
