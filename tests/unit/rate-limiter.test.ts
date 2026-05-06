@@ -120,7 +120,7 @@ describe('Rate Limiter - checkActionCooldown', () => {
 
 describe('Rate Limiter - DAILY_LIMITS and SPEED_PRESETS', () => {
   it('should have reasonable daily limits defined', async () => {
-    const { DAILY_LIMITS, SPEED_PRESETS } = await import('@/lib/anti-detection/human-simulator');
+    const { DAILY_LIMITS } = await import('@/lib/anti-detection/human-simulator');
 
     expect(DAILY_LIMITS.applies).toBeGreaterThan(0);
     expect(DAILY_LIMITS.posts).toBeGreaterThan(0);
