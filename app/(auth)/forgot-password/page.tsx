@@ -1,9 +1,9 @@
-import type { Metadata } from "next";
+﻿import type { Metadata } from "next";
 import ForgotPasswordPage from "./forgot-password-client";
 
 export const metadata: Metadata = {
   title: "Forgot Password",
-  description: "Reset your InPilot password.",
+  description: "Reset your Winpilot password.",
   alternates: { canonical: "/forgot-password" },
 };
 

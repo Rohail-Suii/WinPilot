@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import { useState, useEffect, useCallback } from "react";
 import { useSession } from "next-auth/react";
@@ -2764,7 +2764,7 @@ function SecurityTab() {
         </CardHeader>
         <CardContent className="space-y-4">
           <p className="text-sm text-white/40">
-            LinkedBoost stores your data in MongoDB Atlas with encryption at
+            Winpilot stores your data in MongoDB Atlas with encryption at
             rest. We never sell your data, track your browsing, or share
             information with third parties.
           </p>

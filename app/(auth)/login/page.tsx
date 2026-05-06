@@ -1,9 +1,9 @@
-import type { Metadata } from "next";
+﻿import type { Metadata } from "next";
 import LoginPage from "./login-client";
 
 export const metadata: Metadata = {
   title: "Sign In",
-  description: "Sign in to your InPilot account.",
+  description: "Sign in to your Winpilot account.",
   alternates: { canonical: "/login" },
 };
 

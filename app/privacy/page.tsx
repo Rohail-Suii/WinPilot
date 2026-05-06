@@ -1,14 +1,14 @@
-import type { Metadata } from "next";
+﻿import type { Metadata } from "next";
 import Link from "next/link";
 import { Zap, ArrowRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
 export const metadata: Metadata = {
   title: "Privacy Policy",
-  description: "LinkedBoost privacy policy. Learn how we protect your data and respect your privacy.",
+  description: "Winpilot privacy policy. Learn how we protect your data and respect your privacy.",
   openGraph: {
-    title: "Privacy Policy — LinkedBoost",
-    description: "Learn how LinkedBoost protects your data and respects your privacy.",
+    title: "Privacy Policy — Winpilot",
+    description: "Learn how Winpilot protects your data and respects your privacy.",
   },
 };
 
@@ -23,7 +23,7 @@ export default function PrivacyPage() {
               <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-blue-600 shadow-lg shadow-blue-600/25">
                 <Zap className="h-5 w-5 text-white" />
               </div>
-              <span className="text-lg font-bold text-white tracking-tight">LinkedBoost</span>
+              <span className="text-lg font-bold text-white tracking-tight">Winpilot</span>
             </Link>
             <div className="flex items-center gap-3">
               <Link href="/login">
@@ -49,9 +49,9 @@ export default function PrivacyPage() {
             <div>
               <h2 className="text-xl font-semibold text-white mb-3">1. Overview</h2>
               <p className="text-white/40 leading-relaxed">
-                LinkedBoost (&quot;we&quot;, &quot;our&quot;, &quot;us&quot;) is committed to protecting your privacy. This policy explains
-                what data we collect, how we use it, and your rights regarding your data. LinkedBoost is a
-                self-hosted, open-source application. When you self-host LinkedBoost, you control all data storage.
+                Winpilot (&quot;we&quot;, &quot;our&quot;, &quot;us&quot;) is committed to protecting your privacy. This policy explains
+                what data we collect, how we use it, and your rights regarding your data. Winpilot is a
+                self-hosted, open-source application. When you self-host Winpilot, you control all data storage.
               </p>
             </div>
 
@@ -69,7 +69,7 @@ export default function PrivacyPage() {
             <div>
               <h2 className="text-xl font-semibold text-white mb-3">3. How We Use Your Data</h2>
               <ul className="text-white/40 leading-relaxed space-y-2">
-                <li>To provide and operate the LinkedBoost automation platform.</li>
+                <li>To provide and operate the Winpilot automation platform.</li>
                 <li>To authenticate your identity and protect your account.</li>
                 <li>To generate AI-powered content using your own API keys (keys are decrypted in-memory only during API calls).</li>
                 <li>To track daily usage for anti-detection rate limiting.</li>
@@ -126,7 +126,7 @@ export default function PrivacyPage() {
             <div>
               <h2 className="text-xl font-semibold text-white mb-3">9. Open Source</h2>
               <p className="text-white/40 leading-relaxed">
-                LinkedBoost is open-source software. You can audit every line of code, self-host the application,
+                Winpilot is open-source software. You can audit every line of code, self-host the application,
                 and control exactly where your data is stored. We encourage transparency and community oversight.
               </p>
             </div>
@@ -135,7 +135,7 @@ export default function PrivacyPage() {
               <h2 className="text-xl font-semibold text-white mb-3">10. Changes to This Policy</h2>
               <p className="text-white/40 leading-relaxed">
                 We may update this privacy policy from time to time. Changes will be reflected in the
-                &quot;Last updated&quot; date at the top of this page. Continued use of LinkedBoost after changes
+                &quot;Last updated&quot; date at the top of this page. Continued use of Winpilot after changes
                 constitutes acceptance of the updated policy.
               </p>
             </div>
@@ -158,7 +158,7 @@ export default function PrivacyPage() {
               <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-blue-600">
                 <Zap className="h-4 w-4 text-white" />
               </div>
-              <span className="text-sm font-semibold text-white">LinkedBoost</span>
+              <span className="text-sm font-semibold text-white">Winpilot</span>
             </Link>
             <div className="flex items-center gap-6">
               <Link href="/features" className="text-xs text-white/30 hover:text-white/50 transition-colors">Features</Link>
@@ -166,7 +166,7 @@ export default function PrivacyPage() {
               <Link href="/privacy" className="text-xs text-white/30 hover:text-white/50 transition-colors">Privacy</Link>
               <Link href="/terms" className="text-xs text-white/30 hover:text-white/50 transition-colors">Terms</Link>
             </div>
-            <p className="text-xs text-white/20">&copy; {new Date().getFullYear()} LinkedBoost. Free and open source.</p>
+            <p className="text-xs text-white/20">&copy; {new Date().getFullYear()} Winpilot. Free and open source.</p>
           </div>
         </div>
       </footer>

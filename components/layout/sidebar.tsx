@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
@@ -14,7 +14,6 @@ import {
   ChevronLeft,
   ChevronRight,
   LogOut,
-  Zap,
   User,
   Users,
   UserCheck,
@@ -118,8 +117,10 @@ export function Sidebar() {
       >
         {/* Logo */}
         <div className="flex h-16 items-center gap-3 border-b border-[#1A1A1A] px-4">
-          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-[#00E5FF]/10 border border-[#00E5FF]/20">
-            <Zap className="h-5 w-5 text-[#00E5FF]" />
+          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-[#00E5FF] to-[#6366F1] shadow-md shadow-[#00E5FF]/20">
+            <svg viewBox="0 0 24 24" fill="none" className="h-4.5 w-4.5 h-[18px] w-[18px]">
+              <path d="M13 2L4.5 13H11L10 22L19.5 11H13L13 2Z" fill="white" strokeLinejoin="round" />
+            </svg>
           </div>
           <AnimatePresence>
             {!isCollapsed && (
@@ -127,9 +128,9 @@ export function Sidebar() {
                 initial={{ opacity: 0, width: 0 }}
                 animate={{ opacity: 1, width: "auto" }}
                 exit={{ opacity: 0, width: 0 }}
-                className="text-lg font-bold text-white whitespace-nowrap overflow-hidden tracking-tight"
+                className="text-lg font-bold whitespace-nowrap overflow-hidden tracking-tight bg-gradient-to-r from-white to-white/60 bg-clip-text text-transparent"
               >
-                InPilot
+                Winpilot
               </motion.span>
             )}
           </AnimatePresence>

@@ -1,4 +1,4 @@
-import { Resend } from "resend";
+﻿import { Resend } from "resend";
 import {
   verificationEmailHtml,
   passwordResetEmailHtml,
@@ -14,7 +14,7 @@ function getResend(): Resend {
   return _resend;
 }
 
-const fromAddress = process.env.RESEND_FROM_EMAIL || "LinkedBoost <noreply@linkedboost.app>";
+const fromAddress = process.env.RESEND_FROM_EMAIL || "Winpilot <noreply@linkedboost.app>";
 
 async function sendEmail(to: string, subject: string, html: string) {
   const { error } = await getResend().emails.send({
@@ -32,7 +32,7 @@ async function sendEmail(to: string, subject: string, html: string) {
 export async function sendVerificationEmail(email: string, name: string, otp: string) {
   await sendEmail(
     email,
-    "Verify your email — LinkedBoost",
+    "Verify your email — Winpilot",
     verificationEmailHtml(name, otp)
   );
 }
@@ -40,7 +40,7 @@ export async function sendVerificationEmail(email: string, name: string, otp: st
 export async function sendPasswordResetEmail(email: string, name: string, resetToken: string) {
   await sendEmail(
     email,
-    "Reset your password — LinkedBoost",
+    "Reset your password — Winpilot",
     passwordResetEmailHtml(name, resetToken)
   );
 }
@@ -48,7 +48,7 @@ export async function sendPasswordResetEmail(email: string, name: string, resetT
 export async function sendWelcomeEmail(email: string, name: string) {
   await sendEmail(
     email,
-    "Welcome to LinkedBoost! 🚀",
+    "Welcome to Winpilot! 🚀",
     welcomeEmailHtml(name)
   );
 }

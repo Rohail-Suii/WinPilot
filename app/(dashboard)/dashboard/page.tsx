@@ -1,4 +1,4 @@
-import { Suspense } from "react";
+﻿import { Suspense } from "react";
 import type { Metadata } from "next";
 import { auth } from "@/auth";
 import { DashboardDataProvider } from "@/components/dashboard/dashboard-data-provider";
@@ -10,7 +10,7 @@ import { CardSkeleton } from "@/components/ui/spinner";
 
 export const metadata: Metadata = {
   title: "Dashboard",
-  description: "Your InPilot dashboard - track automation and activity.",
+  description: "Your Winpilot dashboard - track automation and activity.",
 };
 
 export default async function DashboardPage() {

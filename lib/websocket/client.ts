@@ -1,4 +1,4 @@
-/**
+﻿/**
  * WebSocket Client Utility for Dashboard
  * React hook that connects to the /dashboard namespace and integrates
  * with Zustand stores for extension status and notifications.
@@ -211,13 +211,13 @@ function connectSharedSocket(userId: string) {
   });
 
   socket.on("connect", () => {
-    console.log("[LinkedBoost Dashboard] Socket.IO connected");
+    console.log("[Winpilot Dashboard] Socket.IO connected");
     reconnectAttempt = 0;
     socket.emit(WS_EVENTS.AUTH, { token: userId });
   });
 
   socket.on(WS_EVENTS.AUTH_SUCCESS, (data: { extensionConnected?: boolean }) => {
-    console.log("[LinkedBoost Dashboard] Authenticated, extensionConnected:", data.extensionConnected);
+    console.log("[Winpilot Dashboard] Authenticated, extensionConnected:", data.extensionConnected);
     if (data.extensionConnected !== undefined) {
       useExtensionStore.getState().setConnected(data.extensionConnected);
     }
@@ -226,7 +226,7 @@ function connectSharedSocket(userId: string) {
   setupEventListeners(socket);
 
   socket.on("disconnect", (reason) => {
-    console.log("[LinkedBoost Dashboard] Socket.IO disconnected, reason:", reason);
+    console.log("[Winpilot Dashboard] Socket.IO disconnected, reason:", reason);
     // Only reconnect if still subscribed and not a client-initiated disconnect
     if (subscriberCount > 0 && reason !== "io client disconnect") {
       scheduleReconnect();
@@ -234,7 +234,7 @@ function connectSharedSocket(userId: string) {
   });
 
   socket.on("connect_error", (err) => {
-    console.log("[LinkedBoost Dashboard] Socket.IO connect error:", err.message);
+    console.log("[Winpilot Dashboard] Socket.IO connect error:", err.message);
     if (subscriberCount > 0) {
       scheduleReconnect();
     }

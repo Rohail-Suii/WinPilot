@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+﻿import { describe, it, expect } from 'vitest';
 
 // The env var ENCRYPTION_MASTER_KEY is set in tests/setup.ts before this file loads.
 // We use dynamic import to ensure the module picks it up after setup runs.
@@ -10,7 +10,7 @@ describe('Encryption (AES-256-GCM)', () => {
 
   it('should encrypt and decrypt a string roundtrip', async () => {
     const { encrypt, decrypt } = await getEncryption();
-    const plaintext = 'Hello, LinkedBoost!';
+    const plaintext = 'Hello, Winpilot!';
     const encrypted = encrypt(plaintext);
     const decrypted = decrypt(encrypted);
     expect(decrypted).toBe(plaintext);

@@ -1,14 +1,14 @@
-import type { Metadata } from "next";
+﻿import type { Metadata } from "next";
 import Link from "next/link";
 import { Zap, ArrowRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
 export const metadata: Metadata = {
   title: "Terms of Service",
-  description: "LinkedBoost terms of service. Understand the rules and guidelines for using our platform.",
+  description: "Winpilot terms of service. Understand the rules and guidelines for using our platform.",
   openGraph: {
-    title: "Terms of Service — LinkedBoost",
-    description: "Understand the rules and guidelines for using LinkedBoost.",
+    title: "Terms of Service — Winpilot",
+    description: "Understand the rules and guidelines for using Winpilot.",
   },
 };
 
@@ -23,7 +23,7 @@ export default function TermsPage() {
               <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-blue-600 shadow-lg shadow-blue-600/25">
                 <Zap className="h-5 w-5 text-white" />
               </div>
-              <span className="text-lg font-bold text-white tracking-tight">LinkedBoost</span>
+              <span className="text-lg font-bold text-white tracking-tight">Winpilot</span>
             </Link>
             <div className="flex items-center gap-3">
               <Link href="/login">
@@ -49,15 +49,15 @@ export default function TermsPage() {
             <div>
               <h2 className="text-xl font-semibold text-white mb-3">1. Acceptance of Terms</h2>
               <p className="text-white/40 leading-relaxed">
-                By using LinkedBoost (&quot;the Service&quot;), you agree to these Terms of Service. If you do not agree,
-                do not use the Service. LinkedBoost is free, open-source software provided as-is.
+                By using Winpilot (&quot;the Service&quot;), you agree to these Terms of Service. If you do not agree,
+                do not use the Service. Winpilot is free, open-source software provided as-is.
               </p>
             </div>
 
             <div>
               <h2 className="text-xl font-semibold text-white mb-3">2. Description of Service</h2>
               <p className="text-white/40 leading-relaxed">
-                LinkedBoost is a LinkedIn automation platform that enables automated job applications,
+                Winpilot is a LinkedIn automation platform that enables automated job applications,
                 content creation, and lead scraping through a web dashboard and Chrome extension.
                 The Service uses AI providers through your own API keys (BYOK model).
               </p>
@@ -66,10 +66,10 @@ export default function TermsPage() {
             <div>
               <h2 className="text-xl font-semibold text-white mb-3">3. User Responsibilities</h2>
               <ul className="text-white/40 leading-relaxed space-y-2">
-                <li>You are responsible for your LinkedIn account and any actions taken by LinkedBoost on your behalf.</li>
+                <li>You are responsible for your LinkedIn account and any actions taken by Winpilot on your behalf.</li>
                 <li>You must comply with LinkedIn&apos;s Terms of Service and User Agreement.</li>
                 <li>You are responsible for the security of your account credentials and AI API keys.</li>
-                <li>You must not use LinkedBoost for spam, harassment, or any illegal purpose.</li>
+                <li>You must not use Winpilot for spam, harassment, or any illegal purpose.</li>
                 <li>You acknowledge that LinkedIn automation carries inherent risks, including potential account restrictions.</li>
               </ul>
             </div>
@@ -77,7 +77,7 @@ export default function TermsPage() {
             <div>
               <h2 className="text-xl font-semibold text-white mb-3">4. BYOK (Bring Your Own Key)</h2>
               <p className="text-white/40 leading-relaxed">
-                LinkedBoost requires you to provide your own AI API keys from third-party providers
+                Winpilot requires you to provide your own AI API keys from third-party providers
                 (Google Gemini, OpenAI, Anthropic, Groq). You are responsible for:
               </p>
               <ul className="text-white/40 leading-relaxed space-y-2 mt-2">
@@ -90,7 +90,7 @@ export default function TermsPage() {
             <div>
               <h2 className="text-xl font-semibold text-white mb-3">5. Anti-Detection & Safety</h2>
               <p className="text-white/40 leading-relaxed">
-                LinkedBoost includes anti-detection features designed to minimize the risk of LinkedIn account restrictions.
+                Winpilot includes anti-detection features designed to minimize the risk of LinkedIn account restrictions.
                 However, we cannot guarantee that your account will not be affected. You use the Service at your own risk.
                 We recommend using conservative settings and monitoring your account regularly.
               </p>
@@ -99,7 +99,7 @@ export default function TermsPage() {
             <div>
               <h2 className="text-xl font-semibold text-white mb-3">6. Limitation of Liability</h2>
               <p className="text-white/40 leading-relaxed">
-                LinkedBoost is provided &quot;as is&quot; without warranty of any kind, express or implied. We are not liable for:
+                Winpilot is provided &quot;as is&quot; without warranty of any kind, express or implied. We are not liable for:
               </p>
               <ul className="text-white/40 leading-relaxed space-y-2 mt-2">
                 <li>Any LinkedIn account restrictions, suspensions, or bans.</li>
@@ -113,7 +113,7 @@ export default function TermsPage() {
             <div>
               <h2 className="text-xl font-semibold text-white mb-3">7. Intellectual Property</h2>
               <p className="text-white/40 leading-relaxed">
-                LinkedBoost is open-source software. You retain ownership of all content you create,
+                Winpilot is open-source software. You retain ownership of all content you create,
                 upload, or generate through the Service, including resumes, posts, and outreach messages.
               </p>
             </div>
@@ -163,7 +163,7 @@ export default function TermsPage() {
               <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-blue-600">
                 <Zap className="h-4 w-4 text-white" />
               </div>
-              <span className="text-sm font-semibold text-white">LinkedBoost</span>
+              <span className="text-sm font-semibold text-white">Winpilot</span>
             </Link>
             <div className="flex items-center gap-6">
               <Link href="/features" className="text-xs text-white/30 hover:text-white/50 transition-colors">Features</Link>
@@ -171,7 +171,7 @@ export default function TermsPage() {
               <Link href="/privacy" className="text-xs text-white/30 hover:text-white/50 transition-colors">Privacy</Link>
               <Link href="/terms" className="text-xs text-white/30 hover:text-white/50 transition-colors">Terms</Link>
             </div>
-            <p className="text-xs text-white/20">&copy; {new Date().getFullYear()} LinkedBoost. Free and open source.</p>
+            <p className="text-xs text-white/20">&copy; {new Date().getFullYear()} Winpilot. Free and open source.</p>
           </div>
         </div>
       </footer>

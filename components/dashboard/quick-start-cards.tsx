@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import Link from "next/link";
 import { Briefcase, Trophy, Database, ArrowRight } from "lucide-react";
@@ -10,7 +10,7 @@ const features = [
     href: "/dashboard/jobs",
     icon: Briefcase,
     accent: "#00E5FF",
-    command: "inpilot apply --jobs 50",
+    command: "winpilot apply --jobs 50",
   },
   {
     title: "Become a Hero",
@@ -18,7 +18,7 @@ const features = [
     href: "/dashboard/hero",
     icon: Trophy,
     accent: "#A855F7",
-    command: "inpilot post --schedule",
+    command: "winpilot post --schedule",
   },
   {
     title: "Data Scraper",
@@ -26,7 +26,7 @@ const features = [
     href: "/dashboard/scraper",
     icon: Database,
     accent: "#FEBC2E",
-    command: "inpilot scrape --export",
+    command: "winpilot scrape --export",
   },
 ];
 
