@@ -113,7 +113,6 @@ jobs:
 
     environment:
       name: production
-      url: https://${{ secrets.DOMAIN }}
 
     steps:
       # Copy updated docker-compose + nginx config to the droplet
