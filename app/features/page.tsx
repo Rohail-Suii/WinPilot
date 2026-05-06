@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+﻿import type { Metadata } from "next";
 import Link from "next/link";
 import {
   Zap,
@@ -27,12 +27,15 @@ import {
 import { Button } from "@/components/ui/button";
 
 export const metadata: Metadata = {
-  title: "Features",
+  title: "Features — LinkedIn Job Automation & Auto Apply",
   description:
-    "Explore LinkedBoost features: AI-powered job applications, personal brand building, intelligent lead scraping, and human-level anti-detection.",
+    "Explore WinPilot features: AI-powered automatic LinkedIn job applications, Easy Apply automation, intelligent resume tailoring, LinkedIn scraping, and human-level anti-detection.",
   openGraph: {
-    title: "Features — LinkedBoost",
+    title: "WinPilot Features — Auto Apply to LinkedIn Jobs",
     description:
+      "Automatically apply to LinkedIn jobs, tailor your resume with AI, and scrape leads — all with WinPilot's powerful automation engine.",
+  },
+};
       "Auto-apply to jobs, build your personal brand, and scrape leads on LinkedIn — completely free with BYOK AI.",
   },
 };
@@ -115,7 +118,7 @@ const platformFeatures = [
   {
     icon: Clock,
     title: "Smart Scheduling",
-    description: "Set working hours, daily limits, and speed preferences. LinkedBoost works within your safety parameters.",
+    description: "Set working hours, daily limits, and speed preferences. Winpilot works within your safety parameters.",
   },
   {
     icon: Settings,
@@ -135,7 +138,7 @@ export default function FeaturesPage() {
               <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-blue-600 shadow-lg shadow-blue-600/25">
                 <Zap className="h-5 w-5 text-white" />
               </div>
-              <span className="text-lg font-bold text-white tracking-tight">LinkedBoost</span>
+              <span className="text-lg font-bold text-white tracking-tight">Winpilot</span>
             </Link>
             <div className="hidden md:flex items-center gap-8">
               <Link href="/features" className="text-sm text-white font-medium">Features</Link>
@@ -241,7 +244,7 @@ export default function FeaturesPage() {
         <div className="mx-auto max-w-4xl px-6">
           <div className="text-center mb-16">
             <h2 className="text-3xl sm:text-4xl font-bold text-white tracking-tight mb-4">
-              Why <span className="gradient-text">LinkedBoost</span>?
+              Why <span className="gradient-text">Winpilot</span>?
             </h2>
             <p className="text-white/40">See how we compare to paid alternatives.</p>
           </div>
@@ -250,7 +253,7 @@ export default function FeaturesPage() {
               <thead>
                 <tr className="border-b border-white/8">
                   <th className="text-left text-sm text-white/40 font-medium p-4">Feature</th>
-                  <th className="text-center text-sm font-semibold text-blue-400 p-4">LinkedBoost</th>
+                  <th className="text-center text-sm font-semibold text-blue-400 p-4">Winpilot</th>
                   <th className="text-center text-sm text-white/30 font-medium p-4">Others</th>
                 </tr>
               </thead>
@@ -312,7 +315,7 @@ export default function FeaturesPage() {
               <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-blue-600">
                 <Zap className="h-4 w-4 text-white" />
               </div>
-              <span className="text-sm font-semibold text-white">LinkedBoost</span>
+              <span className="text-sm font-semibold text-white">Winpilot</span>
             </Link>
             <div className="flex items-center gap-6">
               <Link href="/features" className="text-xs text-white/30 hover:text-white/50 transition-colors">Features</Link>
@@ -320,7 +323,7 @@ export default function FeaturesPage() {
               <Link href="/privacy" className="text-xs text-white/30 hover:text-white/50 transition-colors">Privacy</Link>
               <Link href="/terms" className="text-xs text-white/30 hover:text-white/50 transition-colors">Terms</Link>
             </div>
-            <p className="text-xs text-white/20">&copy; {new Date().getFullYear()} LinkedBoost. Free and open source.</p>
+            <p className="text-xs text-white/20">&copy; {new Date().getFullYear()} Winpilot. Free and open source.</p>
           </div>
         </div>
       </footer>

@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+﻿import type { Metadata } from "next";
 import Link from "next/link";
 import {
   Zap,
@@ -13,13 +13,13 @@ import {
 import { Button } from "@/components/ui/button";
 
 export const metadata: Metadata = {
-  title: "About",
+  title: "About WinPilot — LinkedIn Job Automation",
   description:
-    "LinkedBoost is a free, open-source LinkedIn automation platform. Learn about our mission to democratize professional networking.",
+    "WinPilot is the leading LinkedIn job automation platform. Learn about our mission to help job seekers automatically apply to hundreds of LinkedIn jobs with AI.",
   openGraph: {
-    title: "About — LinkedBoost",
+    title: "About WinPilot — LinkedIn Job Automation",
     description:
-      "Learn about our mission to make LinkedIn automation accessible to everyone.",
+      "Learn about our mission to help job seekers land jobs faster with automated LinkedIn job applications.",
   },
 };
 
@@ -73,7 +73,7 @@ export default function AboutPage() {
               <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-blue-600 shadow-lg shadow-blue-600/25">
                 <Zap className="h-5 w-5 text-white" />
               </div>
-              <span className="text-lg font-bold text-white tracking-tight">LinkedBoost</span>
+              <span className="text-lg font-bold text-white tracking-tight">Winpilot</span>
             </Link>
             <div className="hidden md:flex items-center gap-8">
               <Link href="/features" className="text-sm text-white/50 hover:text-white transition-colors">Features</Link>
@@ -103,7 +103,7 @@ export default function AboutPage() {
             <span className="gradient-text">for everyone</span>
           </h1>
           <p className="mt-6 text-lg text-white/40 max-w-2xl mx-auto leading-relaxed">
-            LinkedBoost was born from a simple frustration: existing LinkedIn automation tools are
+            Winpilot was born from a simple frustration: existing LinkedIn automation tools are
             either overpriced, privacy-invasive, or dangerously detectable. We built something better.
           </p>
         </div>
@@ -116,7 +116,7 @@ export default function AboutPage() {
             <h2 className="text-2xl font-bold text-white mb-4">Our Mission</h2>
             <p className="text-white/50 leading-relaxed text-lg">
               We believe that everyone deserves access to powerful automation tools — not just those
-              who can afford $99/month subscriptions. LinkedBoost is completely free, forever. You bring
+              who can afford $99/month subscriptions. Winpilot is completely free, forever. You bring
               your own AI keys (many have generous free tiers), and we provide the entire platform.
               No catch. No upsells. Just great software.
             </p>
@@ -154,7 +154,7 @@ export default function AboutPage() {
             Built with <span className="gradient-text">modern tech</span>
           </h2>
           <p className="text-white/40 mb-10">
-            LinkedBoost uses battle-tested, modern technologies for reliability and performance.
+            Winpilot uses battle-tested, modern technologies for reliability and performance.
           </p>
           <div className="flex flex-wrap items-center justify-center gap-4">
             {[
@@ -186,7 +186,7 @@ export default function AboutPage() {
       <section className="py-24 border-t border-white/5">
         <div className="mx-auto max-w-3xl px-6 text-center">
           <h2 className="text-3xl sm:text-4xl font-bold text-white tracking-tight mb-6">
-            Join <span className="gradient-text">LinkedBoost</span> today
+            Join <span className="gradient-text">Winpilot</span> today
           </h2>
           <p className="text-lg text-white/40 mb-10">Free forever. Open source. Community driven.</p>
           <Link href="/register">
@@ -205,7 +205,7 @@ export default function AboutPage() {
               <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-blue-600">
                 <Zap className="h-4 w-4 text-white" />
               </div>
-              <span className="text-sm font-semibold text-white">LinkedBoost</span>
+              <span className="text-sm font-semibold text-white">Winpilot</span>
             </Link>
             <div className="flex items-center gap-6">
               <Link href="/features" className="text-xs text-white/30 hover:text-white/50 transition-colors">Features</Link>
@@ -213,7 +213,7 @@ export default function AboutPage() {
               <Link href="/privacy" className="text-xs text-white/30 hover:text-white/50 transition-colors">Privacy</Link>
               <Link href="/terms" className="text-xs text-white/30 hover:text-white/50 transition-colors">Terms</Link>
             </div>
-            <p className="text-xs text-white/20">&copy; {new Date().getFullYear()} LinkedBoost. Free and open source.</p>
+            <p className="text-xs text-white/20">&copy; {new Date().getFullYear()} Winpilot. Free and open source.</p>
           </div>
         </div>
       </footer>

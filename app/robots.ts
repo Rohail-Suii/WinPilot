@@ -7,6 +7,6 @@ export default function robots(): MetadataRoute.Robots {
       allow: "/",
       disallow: ["/api/", "/dashboard/"],
     },
-    sitemap: `${process.env.NEXTAUTH_URL || "https://linkedboost.app"}/sitemap.xml`,
+    sitemap: `${process.env.NEXTAUTH_URL || "https://winpilot.tech"}/sitemap.xml`,
   };
 }

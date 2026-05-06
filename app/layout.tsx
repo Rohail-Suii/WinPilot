@@ -16,39 +16,57 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  metadataBase: new URL(process.env.NEXTAUTH_URL || "https://inpilot.app"),
+  metadataBase: new URL(process.env.NEXTAUTH_URL || "https://winpilot.tech"),
   title: {
-    default: "InPilot — LinkedIn Automation For Developers",
-    template: "%s — InPilot",
+    default: "WinPilot — LinkedIn Job Automation | Auto Apply to LinkedIn Jobs",
+    template: "%s | WinPilot",
   },
   description:
-    "Automate LinkedIn job applications, profile scraping, and post scheduling with a command-first platform built for developers.",
+    "WinPilot automatically applies to LinkedIn jobs for you. The #1 LinkedIn job automation tool — auto-fill Easy Apply forms, AI resume tailoring, and apply to 100+ jobs per day hands-free.",
   keywords: [
-    "LinkedIn automation",
-    "job application automation",
+    "LinkedIn job automation",
+    "automatic job apply LinkedIn",
+    "auto apply LinkedIn jobs",
+    "LinkedIn Easy Apply automation",
+    "automated job application tool",
+    "LinkedIn job bot",
+    "apply to jobs automatically on LinkedIn",
+    "LinkedIn automation tool",
+    "job application automation software",
+    "bulk apply LinkedIn",
+    "LinkedIn auto apply extension",
+    "AI job application",
     "LinkedIn scraper",
-    "post scheduling automation",
-    "developer growth tools",
+    "job search automation",
+    "automatic LinkedIn job apply",
   ],
   openGraph: {
-    title: "InPilot — LinkedIn Automation For Developers",
+    title: "WinPilot — Auto Apply to LinkedIn Jobs Automatically",
     description:
-      "Automate applications, scraping, and posting on LinkedIn with a command-first workflow.",
+      "Stop manually applying to jobs. WinPilot automates your entire LinkedIn job search — AI resume tailoring, auto-fill Easy Apply forms, and 100+ applications per day.",
     type: "website",
     locale: "en_US",
+    url: "https://winpilot.tech",
+    siteName: "WinPilot",
   },
   twitter: {
     card: "summary_large_image",
-    title: "InPilot — LinkedIn Automation For Developers",
+    title: "WinPilot — LinkedIn Job Automation",
     description:
-      "Automate applications, scraping, and post scheduling on LinkedIn with InPilot.",
+      "Automatically apply to LinkedIn jobs with AI. Auto-fill Easy Apply forms, tailor resumes per job, and apply to 100+ jobs per day.",
   },
   robots: {
     index: true,
     follow: true,
+    googleBot: {
+      index: true,
+      follow: true,
+      "max-image-preview": "large",
+      "max-snippet": -1,
+    },
   },
   alternates: {
-    canonical: "/",
+    canonical: "https://winpilot.tech",
   },
 };
 
@@ -57,8 +75,38 @@ export default function RootLayout({
 }: Readonly<{
   children: React.ReactNode;
 }>) {
+  const jsonLd = {
+    "@context": "https://schema.org",
+    "@type": "SoftwareApplication",
+    name: "WinPilot",
+    applicationCategory: "BusinessApplication",
+    operatingSystem: "Web, Chrome Extension",
+    url: "https://winpilot.tech",
+    description:
+      "WinPilot automatically applies to LinkedIn jobs for you. Auto-fill Easy Apply forms, AI resume tailoring, and apply to 100+ jobs per day.",
+    offers: {
+      "@type": "Offer",
+      price: "0",
+      priceCurrency: "USD",
+    },
+    featureList: [
+      "LinkedIn Job Automation",
+      "Auto Apply LinkedIn Easy Apply",
+      "AI Resume Tailoring",
+      "LinkedIn Profile Scraper",
+      "Automated Job Applications",
+      "Bulk Job Apply",
+    ],
+  };
+
   return (
     <html lang="en" className="dark">
+      <head>
+        <script
+          type="application/ld+json"
+          dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd) }}
+        />
+      </head>
       <body
         className={`${geistSans.variable} ${geistMono.variable} antialiased bg-[#0A0A0A] text-white`}
       >
