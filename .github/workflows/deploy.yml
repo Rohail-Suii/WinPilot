@@ -151,7 +151,7 @@ jobs:
 
             # ── Rolling update (only restarts app, nginx stays up) ─
             docker compose up -d --no-deps --remove-orphans app
-            docker compose up -d nginx certbot
+            docker compose up -d --no-deps nginx certbot
 
             # ── Wait for healthy status (max 2 min) ───────────────
             echo "Waiting for container to become healthy…"

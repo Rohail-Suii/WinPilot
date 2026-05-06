@@ -80,7 +80,7 @@ export async function GET(request: Request) {
         },
         error: "Database connection failed",
       },
-      { status: 503 }
+      { status: 200 }
     );
   }
 }

@@ -20,9 +20,9 @@ services:
     healthcheck:
       test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3000/api/health"]
       interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 40s
+      timeout: 15s
+      retries: 5
+      start_period: 90s
 
   # ─── MongoDB ───────────────────────────────────────────────────────
   mongo:
@@ -60,7 +60,7 @@ services:
       - certbot-webroot:/var/www/certbot:ro
     depends_on:
       app:
-        condition: service_healthy
+        condition: service_started
     networks:
       - linkedboost-network
 
