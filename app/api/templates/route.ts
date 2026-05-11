@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { auth } from "@/auth";
+import { getActorId } from "@/lib/utils/get-actor-id";
 import connectDB from "@/lib/db/connection";
 import OutreachTemplate from "@/lib/db/models/outreach-template";
 import { checkApiRateLimit } from "@/lib/utils/rate-limit";
@@ -12,13 +12,14 @@ const templateSchema = z.object({
 
 export async function GET() {
   try {
-    const session = await auth();
-    if (!session?.user?.id) {
+    const actor = await getActorId();
+    if (!actor) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
+    const { id: userId } = actor;
 
     await connectDB();
-    const templates = await OutreachTemplate.find({ userId: session.user.id })
+    const templates = await OutreachTemplate.find({ userId: userId })
       .sort({ updatedAt: -1 })
       .lean();
 
@@ -31,12 +32,13 @@ export async function GET() {
 
 export async function POST(req: Request) {
   try {
-    const session = await auth();
-    if (!session?.user?.id) {
+    const actor = await getActorId();
+    if (!actor) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
+    const { id: userId } = actor;
 
-    const rateLimit = await checkApiRateLimit(session.user.id);
+    const rateLimit = await checkApiRateLimit(userId);
     if (!rateLimit.success) {
       return NextResponse.json({ error: "Too many requests" }, { status: 429 });
     }
@@ -49,7 +51,7 @@ export async function POST(req: Request) {
 
     await connectDB();
     const template = await OutreachTemplate.create({
-      userId: session.user.id,
+      userId: userId,
       ...parsed.data,
     });
 
@@ -62,10 +64,11 @@ export async function POST(req: Request) {
 
 export async function PATCH(req: Request) {
   try {
-    const session = await auth();
-    if (!session?.user?.id) {
+    const actor = await getActorId();
+    if (!actor) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
+    const { id: userId } = actor;
 
     const { searchParams } = new URL(req.url);
     const id = searchParams.get("id");
@@ -81,7 +84,7 @@ export async function PATCH(req: Request) {
 
     await connectDB();
     const template = await OutreachTemplate.findOneAndUpdate(
-      { _id: id, userId: session.user.id },
+      { _id: id, userId: userId },
       { $set: parsed.data },
       { returnDocument: "after" }
     ).lean();
@@ -99,10 +102,11 @@ export async function PATCH(req: Request) {
 
 export async function DELETE(req: Request) {
   try {
-    const session = await auth();
-    if (!session?.user?.id) {
+    const actor = await getActorId();
+    if (!actor) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
+    const { id: userId } = actor;
 
     const { searchParams } = new URL(req.url);
     const id = searchParams.get("id");
@@ -113,7 +117,7 @@ export async function DELETE(req: Request) {
     await connectDB();
     const template = await OutreachTemplate.findOneAndDelete({
       _id: id,
-      userId: session.user.id,
+      userId: userId,
     });
 
     if (!template) {

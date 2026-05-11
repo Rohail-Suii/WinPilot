@@ -12,7 +12,6 @@
 
 import { NextResponse } from "next/server";
 import mongoose from "mongoose";
-import { auth } from "@/auth";
 import connectDB from "@/lib/db/connection";
 import JobSearch from "@/lib/db/models/job-search";
 import JobApplication from "@/lib/db/models/job-application";
@@ -22,17 +21,18 @@ import { processDiscoveredJobs, prepareJobApplication, completeApplication } fro
 import { answerFormQuestions } from "@/lib/services/form-answerer";
 import { generateTailoredResumePDF } from "@/lib/services/resume-pdf";
 import { canPerformAction } from "@/lib/anti-detection/rate-limiter";
+import { getActorId } from "@/lib/utils/get-actor-id";
 
 /**
- * Resolve userId from NextAuth session OR extension x-auth-token header.
- * The extension authenticates with its stored token (the userId).
+ * Resolve userId from NextAuth session, guest cookie, OR extension x-auth-token header.
+ * Extension authenticates with its stored token (real userId only — guests cannot run the extension).
  */
 async function resolveUserId(req: Request): Promise<string | null> {
-  // Try NextAuth session first (dashboard calls)
-  const session = await auth();
-  if (session?.user?.id) return session.user.id;
+  // Try NextAuth session / guest cookie first (dashboard calls)
+  const actor = await getActorId();
+  if (actor) return actor.id;
 
-  // Fall back to extension token header
+  // Fall back to extension token header (real users only)
   const token = req.headers.get("x-auth-token");
   if (token && mongoose.Types.ObjectId.isValid(token)) {
     await connectDB();

@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { auth } from "@/auth";
+import { getActorId } from "@/lib/utils/get-actor-id";
 import connectDB from "@/lib/db/connection";
 import ScraperConfig from "@/lib/db/models/scraper-config";
 import ScrapedData from "@/lib/db/models/scraped-data";
@@ -24,12 +24,13 @@ const leadTagSchema = z.object({
 
 export async function GET(req: Request) {
   try {
-    const session = await auth();
-    if (!session?.user?.id) {
+    const actor = await getActorId();
+    if (!actor) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
+    const { id: userId } = actor;
 
-    const rateLimit = await checkApiRateLimit(session.user.id);
+    const rateLimit = await checkApiRateLimit(userId);
     if (!rateLimit.success) {
       return NextResponse.json({ error: "Too many requests" }, { status: 429 });
     }
@@ -46,7 +47,7 @@ export async function GET(req: Request) {
       const cursor = searchParams.get("cursor");
       const search = searchParams.get("search");
       const limit = Math.min(parseInt(searchParams.get("limit") || "20"), 50);
-      const filter: Record<string, unknown> = { userId: session.user.id };
+      const filter: Record<string, unknown> = { userId: userId };
       if (type && !["post", "profile", "company", "job"].includes(type)) {
         return NextResponse.json({ error: "Invalid type" }, { status: 400 });
       }
@@ -87,10 +88,10 @@ export async function GET(req: Request) {
           .sort({ _id: -1 })
           .limit(limit + 1)
           .lean(),
-        ScrapedData.countDocuments({ userId: session.user.id, ...(type ? { type } : {}) }),
+        ScrapedData.countDocuments({ userId: userId, ...(type ? { type } : {}) }),
       ]);
 
-      const allTags = await ScrapedData.distinct("tags", { userId: session.user.id });
+      const allTags = await ScrapedData.distinct("tags", { userId: userId });
 
       const hasMore = leads.length > limit;
       const results = hasMore ? leads.slice(0, limit) : leads;
@@ -101,13 +102,13 @@ export async function GET(req: Request) {
 
     if (view === "stats") {
       const [totalLeads, byType, byStatus] = await Promise.all([
-        ScrapedData.countDocuments({ userId: session.user.id }),
+        ScrapedData.countDocuments({ userId: userId }),
         ScrapedData.aggregate([
-          { $match: { userId: session.user.id } },
+          { $match: { userId: userId } },
           { $group: { _id: "$type", count: { $sum: 1 } } },
         ]),
         ScrapedData.aggregate([
-          { $match: { userId: session.user.id } },
+          { $match: { userId: userId } },
           {
             $facet: {
               new: [{ $match: { "actions.0": { $exists: false } } }, { $count: "count" }],
@@ -132,7 +133,7 @@ export async function GET(req: Request) {
       });
     }
 
-    const configs = await ScraperConfig.find({ userId: session.user.id })
+    const configs = await ScraperConfig.find({ userId: userId })
       .sort({ createdAt: -1 })
       .lean();
 
@@ -145,12 +146,13 @@ export async function GET(req: Request) {
 
 export async function POST(req: Request) {
   try {
-    const session = await auth();
-    if (!session?.user?.id) {
+    const actor = await getActorId();
+    if (!actor) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
+    const { id: userId } = actor;
 
-    const rateLimit = await checkApiRateLimit(session.user.id);
+    const rateLimit = await checkApiRateLimit(userId);
     if (!rateLimit.success) {
       return NextResponse.json({ error: "Too many requests" }, { status: 429 });
     }
@@ -168,7 +170,7 @@ export async function POST(req: Request) {
       }
 
       const lead = await ScrapedData.findOneAndUpdate(
-        { _id: parsed.data.leadId, userId: session.user.id },
+        { _id: parsed.data.leadId, userId: userId },
         {
           $push: {
             actions: {
@@ -186,7 +188,7 @@ export async function POST(req: Request) {
       }
 
       await ActivityLog.create({
-        userId: session.user.id,
+        userId: userId,
         action: `lead_${parsed.data.actionType}`,
         module: "scraper",
         details: { leadId: parsed.data.leadId, actionType: parsed.data.actionType },
@@ -205,7 +207,7 @@ export async function POST(req: Request) {
       }
 
       const lead = await ScrapedData.findOneAndUpdate(
-        { _id: parsed.data.leadId, userId: session.user.id },
+        { _id: parsed.data.leadId, userId: userId },
         { $set: { tags: parsed.data.tags } },
         { returnDocument: "after" }
       );
@@ -218,7 +220,7 @@ export async function POST(req: Request) {
     }
 
     // Default: create scraper config
-    const { allowed } = await canPerformAction(session.user.id, "scrapes");
+    const { allowed } = await canPerformAction(userId, "scrapes");
     if (!allowed) {
       return NextResponse.json({ error: "Daily scrape limit reached" }, { status: 429 });
     }
@@ -229,10 +231,10 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: parsed.error.issues[0].message }, { status: 400 });
     }
 
-    const config = await ScraperConfig.create({ ...parsed.data, userId: session.user.id });
+    const config = await ScraperConfig.create({ ...parsed.data, userId: userId });
 
     await ActivityLog.create({
-      userId: session.user.id,
+      userId: userId,
       action: "scraper_config_created",
       module: "scraper",
       details: { configId: config._id, name: parsed.data.name, type: parsed.data.type },
@@ -240,7 +242,7 @@ export async function POST(req: Request) {
       timestamp: new Date(),
     });
 
-    await incrementUsage(session.user.id, "scrapes");
+    await incrementUsage(userId, "scrapes");
 
     return NextResponse.json({ config }, { status: 201 });
   } catch (error) {
@@ -251,10 +253,11 @@ export async function POST(req: Request) {
 
 export async function DELETE(req: Request) {
   try {
-    const session = await auth();
-    if (!session?.user?.id) {
+    const actor = await getActorId();
+    if (!actor) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
+    const { id: userId } = actor;
 
     const { searchParams } = new URL(req.url);
     const id = searchParams.get("id");
@@ -263,7 +266,7 @@ export async function DELETE(req: Request) {
     }
 
     await connectDB();
-    await ScraperConfig.findOneAndDelete({ _id: id, userId: session.user.id });
+    await ScraperConfig.findOneAndDelete({ _id: id, userId: userId });
     return NextResponse.json({ success: true });
   } catch (error) {
     console.error("[Scraper] Error:", error);

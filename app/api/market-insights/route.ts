@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { auth } from "@/auth";
+import { getActorId } from "@/lib/utils/get-actor-id";
 import connectDB from "@/lib/db/connection";
 import MarketInsight from "@/lib/db/models/market-insight";
 import { checkApiRateLimit } from "@/lib/utils/rate-limit";
@@ -15,12 +15,13 @@ const generateInsightsSchema = z.object({
 
 export async function GET(req: Request) {
   try {
-    const session = await auth();
-    if (!session?.user?.id) {
+    const actor = await getActorId();
+    if (!actor) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
+    const { id: userId } = actor;
 
-    const rateLimit = await checkApiRateLimit(session.user.id);
+    const rateLimit = await checkApiRateLimit(userId);
     if (!rateLimit.success) {
       return NextResponse.json({ error: "Too many requests" }, { status: 429 });
     }
@@ -30,7 +31,7 @@ export async function GET(req: Request) {
 
     await connectDB();
 
-    const filter: Record<string, unknown> = { userId: session.user.id };
+    const filter: Record<string, unknown> = { userId: userId };
     const validTypes = ["trend", "salary", "skill-demand", "hiring"];
 
     if (type && !validTypes.includes(type)) {
@@ -52,12 +53,13 @@ export async function GET(req: Request) {
 
 export async function POST(req: Request) {
   try {
-    const session = await auth();
-    if (!session?.user?.id) {
+    const actor = await getActorId();
+    if (!actor) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
+    const { id: userId } = actor;
 
-    const rateLimit = await checkApiRateLimit(session.user.id);
+    const rateLimit = await checkApiRateLimit(userId);
     if (!rateLimit.success) {
       return NextResponse.json({ error: "Too many requests" }, { status: 429 });
     }
@@ -70,7 +72,7 @@ export async function POST(req: Request) {
 
     await connectDB();
 
-    const aiProvider = await getUserAIProvider(session.user.id);
+    const aiProvider = await getUserAIProvider(userId);
     if (!aiProvider) {
       return NextResponse.json(
         { error: "No AI API key configured. Please add one in Settings." },
@@ -102,10 +104,10 @@ export async function POST(req: Request) {
     const period = `${now.getFullYear()}-W${String(weekNumber).padStart(2, "0")}`;
 
     // Delete old insights for this user and create new ones
-    await MarketInsight.deleteMany({ userId: session.user.id });
+    await MarketInsight.deleteMany({ userId: userId });
 
     const insightDocs = result.insights.map((insight) => ({
-      userId: session.user.id,
+      userId: userId,
       type: insight.type,
       title: insight.title,
       data: insight.data,

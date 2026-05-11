@@ -1,19 +1,42 @@
-// LinkedBoost Popup Script
+// WinPilot Popup Script
 
-const DASHBOARD_URL = "http://localhost:3000/dashboard";
+const DEFAULT_DASHBOARD_BASE_URL = "http://localhost:3000";
 
 const app = document.getElementById("app");
 
 async function init() {
   const status = await getBackgroundStatus();
   const authToken = await getStoredToken();
+  const dashboardBaseUrl = await getDashboardBaseUrl();
 
   if (!authToken) {
-    renderLoginPrompt();
+    renderLoginPrompt(dashboardBaseUrl);
     return;
   }
 
-  renderDashboard(status);
+  renderDashboard(status, dashboardBaseUrl);
+}
+
+function normalizeBaseUrl(url) {
+  return (url || "").replace(/\/$/, "");
+}
+
+function getDashboardBaseUrl() {
+  return new Promise((resolve) => {
+    chrome.storage.local.get(["dashboardUrl", "apiUrl"], (result) => {
+      if (result.dashboardUrl) {
+        resolve(normalizeBaseUrl(result.dashboardUrl));
+        return;
+      }
+
+      if (result.apiUrl) {
+        resolve(normalizeBaseUrl(result.apiUrl));
+        return;
+      }
+
+      resolve(DEFAULT_DASHBOARD_BASE_URL);
+    });
+  });
 }
 
 function getBackgroundStatus() {
@@ -52,10 +75,10 @@ function clearToken() {
   });
 }
 
-function renderLoginPrompt() {
+function renderLoginPrompt(dashboardBaseUrl) {
   app.innerHTML = `
     <div class="login-prompt">
-      <p>Connect to your LinkedBoost account</p>
+      <p>Connect to your WinPilot account</p>
       <div style="margin-bottom: 12px;">
         <input type="text" id="token-input" placeholder="Paste connection token here"
           style="width: 100%; padding: 8px 12px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.15); background: rgba(255,255,255,0.05); color: #F8FAFC; font-size: 12px; font-family: monospace; outline: none;" />
@@ -78,11 +101,11 @@ function renderLoginPrompt() {
   });
 
   document.getElementById("open-dashboard").addEventListener("click", () => {
-    chrome.tabs.create({ url: `${DASHBOARD_URL}/settings` });
+    chrome.tabs.create({ url: `${dashboardBaseUrl}/dashboard/settings` });
   });
 }
 
-function renderDashboard(status) {
+function renderDashboard(status, dashboardBaseUrl) {
   app.innerHTML = `
     <div class="status-card">
       <div class="status-row">
@@ -142,7 +165,7 @@ function renderDashboard(status) {
   `;
 
   document.getElementById("open-dashboard").addEventListener("click", () => {
-    chrome.tabs.create({ url: DASHBOARD_URL });
+    chrome.tabs.create({ url: `${dashboardBaseUrl}/dashboard` });
   });
 
   const reconnectBtn = document.getElementById("reconnect");

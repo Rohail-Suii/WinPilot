@@ -24,6 +24,8 @@ export interface IMatchBreakdown {
 
 export interface IJobApplication extends Document {
   userId: mongoose.Types.ObjectId;
+  isGuest: boolean;
+  expiresAt?: Date;
   jobSearchId?: mongoose.Types.ObjectId;
   jobTitle: string;
   company: string;
@@ -102,10 +104,14 @@ const JobApplicationSchema = new Schema<IJobApplication>(
     appliedAt: Date,
     notes: String,
     matchScore: Number,
+    isGuest: { type: Boolean, default: false, index: true },
+    expiresAt: { type: Date },
   },
   { timestamps: true }
 );
 
+// Auto-delete guest job applications after expiresAt
+JobApplicationSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0, sparse: true });
 JobApplicationSchema.index({ userId: 1, status: 1 });
 JobApplicationSchema.index({ appliedAt: -1 });
 JobApplicationSchema.index({ company: 1 });

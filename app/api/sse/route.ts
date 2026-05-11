@@ -5,7 +5,7 @@
  */
 
 import { NextResponse } from "next/server";
-import { auth } from "@/auth";
+import { getActorId } from "@/lib/utils/get-actor-id";
 
 // userId -> Set of AbortControllers for active SSE connections
 const activeStreams = new Map<string, Set<ReadableStreamDefaultController>>();
@@ -35,12 +35,12 @@ export function pushSseEvent(
 }
 
 export async function GET() {
-  const session = await auth();
-  if (!session?.user?.id) {
+  const actor = await getActorId();
+  if (!actor) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const userId = session.user.id;
+  const { id: userId } = actor;
 
   const stream = new ReadableStream({
     start(controller) {

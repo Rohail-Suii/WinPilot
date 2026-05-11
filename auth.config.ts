@@ -37,34 +37,13 @@ export const authConfig = {
       const isLoggedIn = !!auth?.user;
       const { pathname } = nextUrl;
 
-      // Protect dashboard routes
-      if (pathname.startsWith("/dashboard")) {
-        return isLoggedIn;
-      }
-
       // Redirect authenticated users away from auth pages
       if (isLoggedIn && (pathname === "/login" || pathname === "/register")) {
         return Response.redirect(new URL("/dashboard", nextUrl));
       }
 
+      // Dashboard is open to guests — guest cookie is set by middleware
       return true;
-    },
-    async jwt({ token, user, trigger, session }) {
-      if (user) {
-        token.id = user.id;
-        token.iat = Math.floor(Date.now() / 1000);
-      }
-      if (trigger === "update" && session) {
-        token.name = session.name;
-        token.image = session.image;
-      }
-      // Rotate token every 24 hours
-      const iat = (token.iat as number) || 0;
-      const now = Math.floor(Date.now() / 1000);
-      if (now - iat > 24 * 60 * 60) {
-        token.iat = now;
-      }
-      return token;
     },
     async session({ session, token }) {
       if (token) {

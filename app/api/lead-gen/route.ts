@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { auth } from "@/auth";
+import { getActorId } from "@/lib/utils/get-actor-id";
 import connectDB from "@/lib/db/connection";
 import LeadGenCampaign from "@/lib/db/models/lead-gen-campaign";
 import User from "@/lib/db/models/user";
@@ -10,22 +10,7 @@ import { sanitizeForAI } from "@/lib/utils";
 import { z } from "zod";
 import mongoose from "mongoose";
 
-/**
- * Resolve userId from NextAuth session OR extension x-auth-token header.
- * The extension authenticates with its stored token (the userId).
- */
-async function resolveUserId(req: Request): Promise<string | null> {
-  const session = await auth();
-  if (session?.user?.id) return session.user.id;
 
-  const token = req.headers.get("x-auth-token");
-  if (token && mongoose.Types.ObjectId.isValid(token)) {
-    await connectDB();
-    const user = await User.exists({ _id: token });
-    if (user) return token;
-  }
-  return null;
-}
 
 // ─── Validation schemas ────────────────────────────────────────────────────────
 
@@ -65,10 +50,11 @@ const recordCommentSchema = z.object({
 
 export async function GET(req: Request) {
   try {
-    const userId = await resolveUserId(req);
-    if (!userId) {
+    const actor = await getActorId();
+    if (!actor) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
+    const { id: userId } = actor;
 
     const rateLimit = await checkApiRateLimit(userId);
     if (!rateLimit.success) {
@@ -117,10 +103,11 @@ export async function GET(req: Request) {
 
 export async function POST(req: Request) {
   try {
-    const userId = await resolveUserId(req);
-    if (!userId) {
+    const actor = await getActorId();
+    if (!actor) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
+    const { id: userId } = actor;
 
     const rateLimit = await checkApiRateLimit(userId);
     if (!rateLimit.success) {
@@ -350,10 +337,11 @@ Return ONLY the comment text, no quotes, no explanation.`;
 
 export async function PATCH(req: Request) {
   try {
-    const userId = await resolveUserId(req);
-    if (!userId) {
+    const actor = await getActorId();
+    if (!actor) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
+    const { id: userId } = actor;
 
     const rateLimit = await checkApiRateLimit(userId);
     if (!rateLimit.success) {
@@ -416,10 +404,11 @@ export async function PATCH(req: Request) {
 
 export async function DELETE(req: Request) {
   try {
-    const userId = await resolveUserId(req);
-    if (!userId) {
+    const actor = await getActorId();
+    if (!actor) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
+    const { id: userId } = actor;
 
     const { searchParams } = new URL(req.url);
     const id = searchParams.get("id");

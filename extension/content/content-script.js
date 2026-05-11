@@ -1,4 +1,4 @@
-// LinkedBoost Content Script
+// WinPilot Content Script
 // Runs on LinkedIn pages — handles DOM interaction, page detection, and action execution
 
 (function () {
@@ -550,21 +550,21 @@
         // --- Phase 2: Job Scraping ---
         case "SCRAPE_JOB_LISTINGS": {
           // Wait for job listings to load
-          console.log("[LinkedBoost CS] SCRAPE_JOB_LISTINGS: Waiting for listing elements...");
+          console.log("[WinPilot CS] SCRAPE_JOB_LISTINGS: Waiting for listing elements...");
           try {
             await waitForElement(
               ".jobs-search-results__list-item, .job-card-container, .scaffold-layout__list-item, " +
               "[data-occludable-job-id], .job-card-list",
               12000
             );
-            console.log("[LinkedBoost CS] SCRAPE_JOB_LISTINGS: Found listing container");
+            console.log("[WinPilot CS] SCRAPE_JOB_LISTINGS: Found listing container");
           } catch (e) {
-            console.warn("[LinkedBoost CS] SCRAPE_JOB_LISTINGS: No listing elements found within timeout");
+            console.warn("[WinPilot CS] SCRAPE_JOB_LISTINGS: No listing elements found within timeout");
           }
           await new Promise((r) => setTimeout(r, 500));
           const jobs = scrapeJobListings();
-          console.log(`[LinkedBoost CS] SCRAPE_JOB_LISTINGS: Scraped ${jobs.length} jobs`);
-          if (jobs.length > 0) console.log("[LinkedBoost CS] First job:", JSON.stringify(jobs[0]));
+          console.log(`[WinPilot CS] SCRAPE_JOB_LISTINGS: Scraped ${jobs.length} jobs`);
+          if (jobs.length > 0) console.log("[WinPilot CS] First job:", JSON.stringify(jobs[0]));
           return {
             status: "success",
             actionId: action.actionId,
@@ -574,7 +574,7 @@
 
         case "SCRAPE_JOB_DETAIL": {
           // Wait for the job description container to load
-          console.log("[LinkedBoost CS] SCRAPE_JOB_DETAIL: Waiting for description element...");
+          console.log("[WinPilot CS] SCRAPE_JOB_DETAIL: Waiting for description element...");
           try {
             await waitForElement(
               "#job-details, .jobs-description__content, .jobs-box__html-content, " +
@@ -583,11 +583,11 @@
               "[data-sdui-component*='aboutTheJob']",
               15000
             );
-            console.log("[LinkedBoost CS] SCRAPE_JOB_DETAIL: Found description container");
+            console.log("[WinPilot CS] SCRAPE_JOB_DETAIL: Found description container");
           } catch (e) {
-            console.warn("[LinkedBoost CS] SCRAPE_JOB_DETAIL: No description element found within timeout");
-            console.warn("[LinkedBoost CS] Page URL:", window.location.href);
-            console.warn("[LinkedBoost CS] Page title:", document.title);
+            console.warn("[WinPilot CS] SCRAPE_JOB_DETAIL: No description element found within timeout");
+            console.warn("[WinPilot CS] Page URL:", window.location.href);
+            console.warn("[WinPilot CS] Page title:", document.title);
             // Debug: log what elements ARE on the page
             const debugSelectors = [
               "#job-details", "[class*='jobs-description']", ".show-more-less-html__markup",
@@ -597,7 +597,7 @@
             for (const sel of debugSelectors) {
               const found = document.querySelectorAll(sel);
               if (found.length > 0) {
-                console.log(`[LinkedBoost CS] DEBUG: Found ${found.length} element(s) matching "${sel}"`);
+                console.log(`[WinPilot CS] DEBUG: Found ${found.length} element(s) matching "${sel}"`);
               }
             }
           }
@@ -609,7 +609,7 @@
             for (let i = 0; i < 20; i++) {
               await new Promise((r) => setTimeout(r, 500));
               if ((aboutJobEl.textContent?.trim() || "").length > 50) {
-                console.log(`[LinkedBoost CS] SCRAPE_JOB_DETAIL: Content loaded after ${(i + 1) * 500}ms`);
+                console.log(`[WinPilot CS] SCRAPE_JOB_DETAIL: Content loaded after ${(i + 1) * 500}ms`);
                 break;
               }
             }
@@ -618,7 +618,7 @@
             await new Promise((r) => setTimeout(r, 2000));
           }
           const detail = scrapeJobDetail();
-          console.log(`[LinkedBoost CS] SCRAPE_JOB_DETAIL: title="${detail.title}", company="${detail.company}", description=${detail.description ? `${detail.description.length} chars` : 'EMPTY'}`);
+          console.log(`[WinPilot CS] SCRAPE_JOB_DETAIL: title="${detail.title}", company="${detail.company}", description=${detail.description ? `${detail.description.length} chars` : 'EMPTY'}`);
           return {
             status: "success",
             actionId: action.actionId,
@@ -632,7 +632,7 @@
             action.delayMs || 350
           );
           console.log(
-            `[LinkedBoost CS] CHECK_JOB_QUALIFICATION: status="${qualification.status}", matched=${qualification.matched}, text="${qualification.text || ""}"`
+            `[WinPilot CS] CHECK_JOB_QUALIFICATION: status="${qualification.status}", matched=${qualification.matched}, text="${qualification.text || ""}"`
           );
           return {
             status: "success",
@@ -1054,13 +1054,13 @@
       }
     }
 
-    console.log(`[LinkedBoost CS] clickPaginationNext: Current page appears to be ${currentPage}`);
+    console.log(`[WinPilot CS] clickPaginationNext: Current page appears to be ${currentPage}`);
 
     // Try to find and click the "Next" button
     for (const sel of nextButtonSelectors) {
       const nextBtn = document.querySelector(sel);
       if (nextBtn && !nextBtn.disabled && nextBtn.offsetParent !== null) {
-        console.log(`[LinkedBoost CS] clickPaginationNext: Found next button with selector: ${sel}`);
+        console.log(`[WinPilot CS] clickPaginationNext: Found next button with selector: ${sel}`);
         nextBtn.click();
         await new Promise((r) => setTimeout(r, 2000));
         return { clicked: true, hasNextPage: true, currentPage, nextPage: currentPage + 1 };
@@ -1076,14 +1076,14 @@
     for (const btn of allPageBtns) {
       const pageNum = parseInt(btn.textContent?.trim() || "0", 10);
       if (pageNum === currentPage + 1) {
-        console.log(`[LinkedBoost CS] clickPaginationNext: Clicking page ${pageNum} button`);
+        console.log(`[WinPilot CS] clickPaginationNext: Clicking page ${pageNum} button`);
         btn.click();
         await new Promise((r) => setTimeout(r, 2000));
         return { clicked: true, hasNextPage: true, currentPage, nextPage: pageNum };
       }
     }
 
-    console.log(`[LinkedBoost CS] clickPaginationNext: No next page found`);
+    console.log(`[WinPilot CS] clickPaginationNext: No next page found`);
     return { clicked: false, hasNextPage: false, currentPage, nextPage: null };
   }
 
@@ -2213,12 +2213,12 @@
       try {
         await waitForElement(sel, 5000);
         found = true;
-        console.log(`[LinkedBoost CS] scrapeKeywordPosts: Found results via selector: ${sel}`);
+        console.log(`[WinPilot CS] scrapeKeywordPosts: Found results via selector: ${sel}`);
         break;
       } catch { /* try next */ }
     }
     if (!found) {
-      console.warn("[LinkedBoost CS] scrapeKeywordPosts: No search results found — page may not have loaded");
+      console.warn("[WinPilot CS] scrapeKeywordPosts: No search results found — page may not have loaded");
     }
 
     // Give LinkedIn a moment to finish lazy-rendering
@@ -2242,7 +2242,7 @@
     const strategy1 = document.querySelectorAll("li.reusable-search__result-container");
     if (strategy1.length > 0) {
       resultItems = Array.from(strategy1);
-      console.log(`[LinkedBoost CS] Using strategy1 (reusable-search): ${resultItems.length} items`);
+      console.log(`[WinPilot CS] Using strategy1 (reusable-search): ${resultItems.length} items`);
     }
 
     // Strategy 2: Data-urn post cards (feed updates embedded in search)
@@ -2250,7 +2250,7 @@
       const strategy2 = document.querySelectorAll("[data-urn], [data-activity-urn]");
       if (strategy2.length > 0) {
         resultItems = Array.from(strategy2);
-        console.log(`[LinkedBoost CS] Using strategy2 (data-urn): ${resultItems.length} items`);
+        console.log(`[WinPilot CS] Using strategy2 (data-urn): ${resultItems.length} items`);
       }
     }
 
@@ -2264,11 +2264,11 @@
       );
       if (strategy3.length > 0) {
         resultItems = Array.from(strategy3);
-        console.log(`[LinkedBoost CS] Using strategy3 (artdeco-list): ${resultItems.length} items`);
+        console.log(`[WinPilot CS] Using strategy3 (artdeco-list): ${resultItems.length} items`);
       }
     }
 
-    console.log(`[LinkedBoost CS] scrapeKeywordPosts: Total result items to parse: ${resultItems.length}`);
+    console.log(`[WinPilot CS] scrapeKeywordPosts: Total result items to parse: ${resultItems.length}`);
 
     for (const item of resultItems) {
       try {
@@ -2374,11 +2374,11 @@
           commentCount: parseInt(commentCountEl?.textContent?.trim() || "0", 10) || 0,
         });
       } catch (itemErr) {
-        console.warn("[LinkedBoost CS] scrapeKeywordPosts: Error parsing item:", itemErr.message);
+        console.warn("[WinPilot CS] scrapeKeywordPosts: Error parsing item:", itemErr.message);
       }
     }
 
-    console.log(`[LinkedBoost CS] scrapeKeywordPosts: Found ${posts.length} posts for keyword "${keyword}"`);
+    console.log(`[WinPilot CS] scrapeKeywordPosts: Found ${posts.length} posts for keyword "${keyword}"`);
     return posts;
   }
 
@@ -2457,7 +2457,7 @@
   });
 
   // --- Init ---
-  console.log("[LinkedBoost] Content script loaded on", detectPage());
+  console.log("[WinPilot] Content script loaded on", detectPage());
 
   // Report initial page
   chrome.runtime.sendMessage({

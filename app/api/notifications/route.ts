@@ -1,18 +1,19 @@
 import { NextResponse } from "next/server";
 import mongoose from "mongoose";
-import { auth } from "@/auth";
+import { getActorId } from "@/lib/utils/get-actor-id";
 import connectDB from "@/lib/db/connection";
 import Notification from "@/lib/db/models/notification";
 import { checkApiRateLimit } from "@/lib/utils/rate-limit";
 
 export async function GET(req: Request) {
   try {
-    const session = await auth();
-    if (!session?.user?.id) {
+    const actor = await getActorId();
+    if (!actor) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
+    const { id: userId } = actor;
 
-    const rateLimit = await checkApiRateLimit(session.user.id);
+    const rateLimit = await checkApiRateLimit(userId);
     if (!rateLimit.success) {
       return NextResponse.json({ error: "Too many requests" }, { status: 429 });
     }
@@ -24,7 +25,7 @@ export async function GET(req: Request) {
 
     await connectDB();
 
-    const filter: Record<string, unknown> = { userId: session.user.id };
+    const filter: Record<string, unknown> = { userId: userId };
     if (unreadOnly) filter.read = false;
     if (cursor) {
       if (!mongoose.Types.ObjectId.isValid(cursor)) {
@@ -38,7 +39,7 @@ export async function GET(req: Request) {
         .sort({ _id: -1 })
         .limit(limit + 1)
         .lean(),
-      Notification.countDocuments({ userId: session.user.id, read: false }),
+      Notification.countDocuments({ userId: userId, read: false }),
     ]);
 
     const hasMore = notifications.length > limit;
@@ -54,10 +55,11 @@ export async function GET(req: Request) {
 
 export async function PATCH(req: Request) {
   try {
-    const session = await auth();
-    if (!session?.user?.id) {
+    const actor = await getActorId();
+    if (!actor) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
+    const { id: userId } = actor;
 
     const { searchParams } = new URL(req.url);
     const action = searchParams.get("action");
@@ -66,7 +68,7 @@ export async function PATCH(req: Request) {
 
     if (action === "read-all") {
       await Notification.updateMany(
-        { userId: session.user.id, read: false },
+        { userId: userId, read: false },
         { $set: { read: true } }
       );
       return NextResponse.json({ success: true });
@@ -79,7 +81,7 @@ export async function PATCH(req: Request) {
     }
 
     await Notification.findOneAndUpdate(
-      { _id: id, userId: session.user.id },
+      { _id: id, userId: userId },
       { $set: { read: true } }
     );
 
@@ -92,10 +94,11 @@ export async function PATCH(req: Request) {
 
 export async function DELETE(req: Request) {
   try {
-    const session = await auth();
-    if (!session?.user?.id) {
+    const actor = await getActorId();
+    if (!actor) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
+    const { id: userId } = actor;
 
     const { searchParams } = new URL(req.url);
     const id = searchParams.get("id");
@@ -103,9 +106,9 @@ export async function DELETE(req: Request) {
     await connectDB();
 
     if (id === "all") {
-      await Notification.deleteMany({ userId: session.user.id });
+      await Notification.deleteMany({ userId: userId });
     } else if (id) {
-      await Notification.findOneAndDelete({ _id: id, userId: session.user.id });
+      await Notification.findOneAndDelete({ _id: id, userId: userId });
     }
 
     return NextResponse.json({ success: true });

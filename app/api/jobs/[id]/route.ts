@@ -1,21 +1,22 @@
 import { NextResponse } from "next/server";
 import mongoose from "mongoose";
-import { auth } from "@/auth";
 import connectDB from "@/lib/db/connection";
 import JobApplication from "@/lib/db/models/job-application";
 import { checkApiRateLimit } from "@/lib/utils/rate-limit";
+import { getActorId } from "@/lib/utils/get-actor-id";
 
 export async function GET(
   _req: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const session = await auth();
-    if (!session?.user?.id) {
+    const actor = await getActorId();
+    if (!actor) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
+    const { id: userId } = actor;
 
-    const rateLimit = await checkApiRateLimit(session.user.id);
+    const rateLimit = await checkApiRateLimit(userId);
     if (!rateLimit.success) {
       return NextResponse.json({ error: "Too many requests" }, { status: 429 });
     }
@@ -29,7 +30,7 @@ export async function GET(
 
     const application = await JobApplication.findOne({
       _id: id,
-      userId: session.user.id,
+      userId,
     }).lean();
 
     if (!application) {

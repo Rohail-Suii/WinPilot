@@ -1,9 +1,9 @@
 import { NextResponse } from "next/server";
-import { auth } from "@/auth";
 import connectDB from "@/lib/db/connection";
 import User from "@/lib/db/models/user";
 import { z } from "zod";
 import { checkApiRateLimit } from "@/lib/utils/rate-limit";
+import { getActorId } from "@/lib/utils/get-actor-id";
 
 const automationSettingsSchema = z.object({
   dailyLimits: z.object({
@@ -22,18 +22,31 @@ const automationSettingsSchema = z.object({
 
 export async function GET() {
   try {
-    const session = await auth();
-    if (!session?.user?.id) {
+    const actor = await getActorId();
+    if (!actor) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
+    const { id: userId, isGuest } = actor;
 
-    const rateLimit = await checkApiRateLimit(session.user.id);
+    // Return default settings for guests — no User document exists
+    if (isGuest) {
+      return NextResponse.json({
+        settings: {
+          timezone: "UTC",
+          language: "en",
+          notificationPrefs: { email: true, inApp: true, extension: true },
+          dailyLimits: { applies: 15, posts: 2, scrapes: 50 },
+        },
+      });
+    }
+
+    const rateLimit = await checkApiRateLimit(userId);
     if (!rateLimit.success) {
       return NextResponse.json({ error: "Too many requests" }, { status: 429 });
     }
 
     await connectDB();
-    const user = await User.findById(session.user.id).lean();
+    const user = await User.findById(userId).lean();
     if (!user) {
       return NextResponse.json({ error: "User not found" }, { status: 404 });
     }
@@ -47,12 +60,21 @@ export async function GET() {
 
 export async function PATCH(req: Request) {
   try {
-    const session = await auth();
-    if (!session?.user?.id) {
+    const actor = await getActorId();
+    if (!actor) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
+    const { id: userId, isGuest } = actor;
 
-    const rateLimit = await checkApiRateLimit(session.user.id);
+    // Guests cannot save automation settings
+    if (isGuest) {
+      return NextResponse.json(
+        { error: "Create a free account to save automation settings", requiresAuth: true },
+        { status: 403 }
+      );
+    }
+
+    const rateLimit = await checkApiRateLimit(userId);
     if (!rateLimit.success) {
       return NextResponse.json({ error: "Too many requests" }, { status: 429 });
     }
@@ -78,7 +100,7 @@ export async function PATCH(req: Request) {
       update["settings.useAIFormFilling"] = parsed.data.useAIFormFilling;
     }
 
-    await User.findByIdAndUpdate(session.user.id, { $set: update });
+    await User.findByIdAndUpdate(userId, { $set: update });
     return NextResponse.json({ success: true });
   } catch (error) {
     console.error("[Settings/Automation] Error:", error);

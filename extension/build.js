@@ -63,19 +63,35 @@ fs.copyFileSync(
   path.join(DIST, "popup.js")
 );
 
-// Create icons directory with placeholder
+// Create icons directory with proper WinPilot branding
 const iconsDir = path.join(DIST, "icons");
 fs.mkdirSync(iconsDir, { recursive: true });
 
-// Generate simple SVG icons as placeholders
+// Generate SVG icons — same lightning bolt + cyan→purple gradient as the sidebar logo
 const sizes = [16, 48, 128];
 for (const size of sizes) {
-  // Create a minimal PNG placeholder (1x1 blue pixel header)
-  // In production, replace with actual icons
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 ${size} ${size}">
-    <rect width="${size}" height="${size}" rx="${size * 0.15}" fill="#3B82F6"/>
-    <text x="50%" y="55%" text-anchor="middle" dominant-baseline="middle" fill="white" font-size="${size * 0.5}" font-family="system-ui" font-weight="bold">⚡</text>
-  </svg>`;
+  const rx = Math.round(size * 0.15);
+  // Scale the lightning bolt path (original: 24×24, padded to 80% of icon size)
+  const pad = size * 0.1;
+  const area = size - pad * 2;
+  const s = area / 24;
+  const ox = pad, oy = pad;
+  const pts = [
+    [13, 2], [4.5, 13], [11, 13], [10, 22], [19.5, 11], [13, 11], [13, 2],
+  ];
+  const scaled = pts.map(([x, y]) => `${Math.round(x * s + ox)},${Math.round(y * s + oy)}`);
+  const d = `M${scaled[0]}L${scaled[1]}H${Math.round(11 * s + ox)}L${scaled[3]}L${scaled[4]}H${Math.round(13 * s + ox)}Z`;
+  const gradId = `g${size}`;
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${size} ${size}" width="${size}" height="${size}">
+  <defs>
+    <linearGradient id="${gradId}" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#00E5FF"/>
+      <stop offset="100%" stop-color="#6366F1"/>
+    </linearGradient>
+  </defs>
+  <rect width="${size}" height="${size}" rx="${rx}" ry="${rx}" fill="url(#${gradId})"/>
+  <path d="${d}" fill="white"/>
+</svg>`;
   fs.writeFileSync(path.join(iconsDir, `icon${size}.svg`), svg);
 }
 

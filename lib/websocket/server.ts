@@ -418,16 +418,16 @@ export function sendToExtension(userId: string, action: Record<string, unknown>)
 }
 
 /**
- * Check if a user's extension is connected (with heartbeat freshness check)
+ * Check if a user's extension is connected.
+ *
+ * We treat an active extension socket as connected and do not hard-fail on
+ * heartbeat freshness here. In MV3 service workers, heartbeat timers can pause
+ * during background suspension, which caused false "offline" states in the
+ * dashboard even when the extension was still connected.
  */
 export function isExtensionConnected(userId: string): boolean {
   const sockets = extensionSockets.get(userId);
   if (!sockets || sockets.size === 0) return false;
-
-  const lastBeat = lastHeartbeat.get(userId);
-  if (lastBeat && Date.now() - lastBeat > HEARTBEAT_TIMEOUT) {
-    return false;
-  }
 
   return true;
 }

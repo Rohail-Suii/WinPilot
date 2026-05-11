@@ -1,6 +1,6 @@
 ﻿import type { Metadata } from "next";
 import Link from "next/link";
-import { Zap, ArrowRight } from "lucide-react";
+import { ArrowRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
 export const metadata: Metadata = {
@@ -20,8 +20,10 @@ export default function PrivacyPage() {
         <div className="mx-auto max-w-6xl px-6 pt-4">
           <div className="flex items-center justify-between rounded-2xl border border-white/10 bg-[#0A0F1C]/80 backdrop-blur-2xl px-6 py-3">
             <Link href="/" className="flex items-center gap-3">
-              <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-blue-600 shadow-lg shadow-blue-600/25">
-                <Zap className="h-5 w-5 text-white" />
+               <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-br from-[#00E5FF] to-[#6366F1] shadow-lg shadow-[#00E5FF]/25">
+                <svg viewBox="0 0 24 24" fill="none" className="h-5 w-5">
+                  <path d="M13 2L4.5 13H11L10 22L19.5 11H13L13 2Z" fill="white" strokeLinejoin="round" />
+                </svg>
               </div>
               <span className="text-lg font-bold text-white tracking-tight">Winpilot</span>
             </Link>
@@ -155,8 +157,10 @@ export default function PrivacyPage() {
         <div className="mx-auto max-w-6xl px-6">
           <div className="flex flex-col md:flex-row items-center justify-between gap-6">
             <Link href="/" className="flex items-center gap-3">
-              <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-blue-600">
-                <Zap className="h-4 w-4 text-white" />
+              <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-br from-[#00E5FF] to-[#6366F1]">
+                <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">
+                  <path d="M13 2L4.5 13H11L10 22L19.5 11H13L13 2Z" fill="white" strokeLinejoin="round" />
+                </svg>
               </div>
               <span className="text-sm font-semibold text-white">Winpilot</span>
             </Link>

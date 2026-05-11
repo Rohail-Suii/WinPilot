@@ -2,6 +2,8 @@ import mongoose, { Schema, type Document, type Model } from "mongoose";
 
 export interface IScrapedData extends Document {
   userId: mongoose.Types.ObjectId;
+  isGuest: boolean;
+  expiresAt?: Date;
   scraperConfigId?: mongoose.Types.ObjectId;
   type: "post" | "profile" | "company" | "job";
   data: Record<string, unknown>;
@@ -44,10 +46,14 @@ const ScrapedDataSchema = new Schema<IScrapedData>(
         content: String,
       },
     ],
+    isGuest: { type: Boolean, default: false, index: true },
+    expiresAt: { type: Date },
   },
   { timestamps: true }
 );
 
+// Auto-delete guest scraped data after expiresAt
+ScrapedDataSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0, sparse: true });
 ScrapedDataSchema.index({ userId: 1, type: 1 });
 ScrapedDataSchema.index({ "source.scrapedAt": -1 });
 ScrapedDataSchema.index({ userId: 1, tags: 1 });

@@ -1,6 +1,5 @@
 import { NextResponse } from "next/server";
 import mongoose from "mongoose";
-import { auth } from "@/auth";
 import connectDB from "@/lib/db/connection";
 import JobSearch from "@/lib/db/models/job-search";
 import JobApplication from "@/lib/db/models/job-application";
@@ -8,15 +7,17 @@ import type { ApplicationStatus } from "@/lib/db/models/job-application";
 import { jobSearchSchema } from "@/lib/validators";
 import { checkApiRateLimit } from "@/lib/utils/rate-limit";
 import { sanitizeForAI } from "@/lib/utils";
+import { getActorId } from "@/lib/utils/get-actor-id";
 
 export async function GET(req: Request) {
   try {
-    const session = await auth();
-    if (!session?.user?.id) {
+    const actor = await getActorId();
+    if (!actor) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
+    const { id: userId } = actor;
 
-    const rateLimit = await checkApiRateLimit(session.user.id);
+    const rateLimit = await checkApiRateLimit(userId);
     if (!rateLimit.success) {
       return NextResponse.json({ error: "Too many requests" }, { status: 429 });
     }
@@ -31,7 +32,7 @@ export async function GET(req: Request) {
       const search = searchParams.get("search")?.trim();
       const cursor = searchParams.get("cursor"); // cursor-based pagination
       const limit = Math.min(parseInt(searchParams.get("limit") || "20"), 50);
-      const filter: Record<string, unknown> = { userId: session.user.id };
+      const filter: Record<string, unknown> = { userId: userId };
 
       const validStatuses = ["found", "tailoring", "applying", "applied", "failed", "skipped", "interview", "rejected", "offered"];
       if (status && !validStatuses.includes(status)) {
@@ -89,11 +90,11 @@ export async function GET(req: Request) {
 
     if (view === "stats") {
       const { getApplicationStats } = await import("@/lib/services/job-analysis");
-      const stats = await getApplicationStats(session.user.id);
+      const stats = await getApplicationStats(userId);
       return NextResponse.json({ stats });
     }
 
-    const searches = await JobSearch.find({ userId: session.user.id })
+    const searches = await JobSearch.find({ userId: userId })
       .sort({ createdAt: -1 })
       .lean();
 
@@ -106,12 +107,13 @@ export async function GET(req: Request) {
 
 export async function POST(req: Request) {
   try {
-    const session = await auth();
-    if (!session?.user?.id) {
+    const actor = await getActorId();
+    if (!actor) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
+    const { id: userId } = actor;
 
-    const rateLimit = await checkApiRateLimit(session.user.id);
+    const rateLimit = await checkApiRateLimit(userId);
     if (!rateLimit.success) {
       return NextResponse.json({ error: "Too many requests" }, { status: 429 });
     }
@@ -128,7 +130,7 @@ export async function POST(req: Request) {
       if (!parsed.success) {
         return NextResponse.json({ error: parsed.error.issues[0].message }, { status: 400 });
       }
-      const search = await JobSearch.create({ ...parsed.data, userId: session.user.id });
+      const search = await JobSearch.create({ ...parsed.data, userId: userId });
       return NextResponse.json({ search }, { status: 201 });
     }
 
@@ -141,7 +143,7 @@ export async function POST(req: Request) {
       try {
         const { processDiscoveredJobs } = await import("@/lib/services/job-analysis");
         const result = await processDiscoveredJobs(
-          session.user.id,
+          userId,
           jobs,
           jobSearchId,
           minMatchScore ?? 60
@@ -161,7 +163,7 @@ export async function POST(req: Request) {
         return NextResponse.json({ error: "applicationId is required" }, { status: 400 });
       }
       const { prepareJobApplication } = await import("@/lib/services/job-analysis");
-      const result = await prepareJobApplication(session.user.id, applicationId);
+      const result = await prepareJobApplication(userId, applicationId);
       if (!result.success) {
         return NextResponse.json({ error: result.error }, { status: 400 });
       }
@@ -175,7 +177,7 @@ export async function POST(req: Request) {
         return NextResponse.json({ error: "applicationId and success are required" }, { status: 400 });
       }
       const { completeApplication } = await import("@/lib/services/job-analysis");
-      await completeApplication(session.user.id, applicationId, success, notes);
+      await completeApplication(userId, applicationId, success, notes);
       return NextResponse.json({ success: true });
     }
 
@@ -187,7 +189,7 @@ export async function POST(req: Request) {
       }
       const { updateApplicationStatus } = await import("@/lib/services/job-analysis");
       await updateApplicationStatus(
-        session.user.id,
+        userId,
         applicationId,
         status as ApplicationStatus,
         notes
@@ -208,7 +210,7 @@ export async function POST(req: Request) {
 
       try {
         const { answerFormQuestions } = await import("@/lib/services/form-answerer");
-        const answers = await answerFormQuestions(session.user.id, sanitizedQuestions, userPreferences);
+        const answers = await answerFormQuestions(userId, sanitizedQuestions, userPreferences);
         return NextResponse.json({ answers });
       } catch (error) {
         console.error("[Jobs] Failed to answer form questions:", error);
@@ -226,10 +228,11 @@ export async function POST(req: Request) {
 
 export async function DELETE(req: Request) {
   try {
-    const session = await auth();
-    if (!session?.user?.id) {
+    const actor = await getActorId();
+    if (!actor) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
+    const { id: userId } = actor;
 
     const { searchParams } = new URL(req.url);
     const id = searchParams.get("id");
@@ -238,7 +241,7 @@ export async function DELETE(req: Request) {
     }
 
     await connectDB();
-    const search = await JobSearch.findOneAndDelete({ _id: id, userId: session.user.id });
+    const search = await JobSearch.findOneAndDelete({ _id: id, userId: userId });
     if (!search) {
       return NextResponse.json({ error: "Not found" }, { status: 404 });
     }

@@ -31,7 +31,7 @@ export function randomDelay(min, max) {
  */
 export function logMessage(level, ...args) {
   const timestamp = new Date().toISOString();
-  const prefix = `[LinkedBoost ${timestamp}]`;
+  const prefix = `[WinPilot ${timestamp}]`;
 
   switch (level) {
     case "info":

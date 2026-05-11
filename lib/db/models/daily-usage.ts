@@ -2,6 +2,8 @@ import mongoose, { Schema, type Document, type Model } from "mongoose";
 
 export interface IDailyUsage extends Document {
   userId: mongoose.Types.ObjectId;
+  isGuest: boolean;
+  expiresAt?: Date;
   date: string; // YYYY-MM-DD
   actions: {
     applies: number;
@@ -26,8 +28,12 @@ const DailyUsageSchema = new Schema<IDailyUsage>({
     comments: { type: Number, default: 0 },
     connectionRequests: { type: Number, default: 0 },
   },
+  isGuest: { type: Boolean, default: false, index: true },
+  expiresAt: { type: Date },
 });
 
+// Auto-delete guest daily usage after expiresAt
+DailyUsageSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0, sparse: true });
 DailyUsageSchema.index({ userId: 1, date: 1 }, { unique: true });
 
 const DailyUsage: Model<IDailyUsage> =

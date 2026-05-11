@@ -1,5 +1,4 @@
 import { NextResponse } from "next/server";
-import { auth } from "@/auth";
 import connectDB from "@/lib/db/connection";
 import JobApplication from "@/lib/db/models/job-application";
 import Post from "@/lib/db/models/post";
@@ -7,22 +6,22 @@ import ScrapedData from "@/lib/db/models/scraped-data";
 import ActivityLog from "@/lib/db/models/activity-log";
 import DailyUsage from "@/lib/db/models/daily-usage";
 import { checkApiRateLimit } from "@/lib/utils/rate-limit";
+import { getActorId } from "@/lib/utils/get-actor-id";
 
 export async function GET() {
   try {
-    const session = await auth();
-    if (!session?.user?.id) {
+    const actor = await getActorId();
+    if (!actor) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
+    const { id: userId } = actor;
 
-    const rateLimit = await checkApiRateLimit(session.user.id);
+    const rateLimit = await checkApiRateLimit(userId);
     if (!rateLimit.success) {
       return NextResponse.json({ error: "Too many requests" }, { status: 429 });
     }
 
     await connectDB();
-    const userId = session.user.id;
-
     const now = new Date();
     const weekAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
     const today = now.toISOString().split("T")[0];
