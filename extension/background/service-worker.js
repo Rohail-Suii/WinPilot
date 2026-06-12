@@ -4,8 +4,8 @@
 
 import { io } from "./socket.io.esm.min.js";
 
-const DEFAULT_WS_URL = "ws://localhost:3001";
-const DEFAULT_API_URL = "http://localhost:3000";
+const DEFAULT_WS_URL = "wss://winpilot.tech";
+const DEFAULT_API_URL = "https://winpilot.tech";
 const HEARTBEAT_INTERVAL = 30000;
 const RECONNECT_BASE_DELAY = 1000;
 const MAX_RECONNECT_DELAY = 30000;
@@ -157,6 +157,9 @@ function handleServerMessage(message) {
       break;
     case "STOP_LEAD_GEN":
       stopLeadGen();
+      break;
+    case "START_PROFILE_SCRAPE":
+      startProfileScrape();
       break;
     case "SYNC_CONFIG":
       chrome.storage.local.set({ config: message.data });
@@ -1619,11 +1622,106 @@ function reportLeadProgress(event, data) {
  *
  * Anti-detection measures used:
  *   - Gaussian-distributed delays everywhere
- *   - Browsing breaks between actions
- *   - Daily limits enforced (from DailyUsage DB + DAILY_LIMITS)
- *   - Session health checked before each comment
- *   - Human-like typing for comment text (via content script)
  */
+// ─── Profile Scrape: extract user's own LinkedIn profile ────────────────────
+
+async function startProfileScrape() {
+  console.log("[WinPilot] Starting profile scrape...");
+
+  let tab;
+  try {
+    tab = await getLinkedInTab();
+  } catch (e) {
+    sendToServer({
+      type: "PROFILE_SCRAPE_ERROR",
+      error: "Could not find an open LinkedIn tab. Please open LinkedIn first.",
+    });
+    return;
+  }
+
+  if (!tab?.id) {
+    sendToServer({
+      type: "PROFILE_SCRAPE_ERROR",
+      error: "No active LinkedIn tab found. Please open LinkedIn and navigate to your profile.",
+    });
+    return;
+  }
+
+  // Check if the tab is on a /in/ profile page
+  const tabUrl = tab.url || "";
+  if (!tabUrl.includes("linkedin.com/in/")) {
+    // Navigate to the user's own profile
+    console.log("[WinPilot] Not on a profile page, navigating to profile...");
+    try {
+      await sendToContentScript(tab.id, {
+        type: "EXECUTE_ACTION",
+        command: "NAVIGATE",
+        actionId: `profile-nav-${Date.now()}`,
+        url: "https://www.linkedin.com/in/me/",
+      });
+      // Wait for navigation
+      await new Promise((r) => setTimeout(r, 4000));
+      // Re-fetch the tab to get updated URL
+      tab = await getLinkedInTab();
+      if (!tab?.id) {
+        sendToServer({
+          type: "PROFILE_SCRAPE_ERROR",
+          error: "Navigation to LinkedIn profile failed.",
+        });
+        return;
+      }
+    } catch (e) {
+      // Navigation closes the channel — that is expected; just wait and continue
+      await new Promise((r) => setTimeout(r, 4000));
+      tab = await getLinkedInTab();
+      if (!tab?.id) {
+        sendToServer({ type: "PROFILE_SCRAPE_ERROR", error: "Navigation failed." });
+        return;
+      }
+    }
+  }
+
+  // Execute SCRAPE_USER_PROFILE in the content script
+  let result;
+  try {
+    result = await sendToContentScript(tab.id, {
+      type: "EXECUTE_ACTION",
+      command: "SCRAPE_USER_PROFILE",
+      actionId: `profile-scrape-${Date.now()}`,
+    });
+  } catch (e) {
+    sendToServer({
+      type: "PROFILE_SCRAPE_ERROR",
+      error: `Scrape failed: ${e.message}`,
+    });
+    return;
+  }
+
+  if (result?.status !== "success" || !result?.data?.profileData) {
+    sendToServer({
+      type: "PROFILE_SCRAPE_ERROR",
+      error: result?.error || "Profile scrape returned no data.",
+    });
+    return;
+  }
+
+  // POST scraped data to the server
+  try {
+    const response = await apiCall("/api/profile-optimizer?action=scrape-profile", result.data.profileData);
+    sendToServer({
+      type: "PROFILE_SCRAPE_SUCCESS",
+      profileId: response.profileId,
+      profileData: result.data.profileData,
+    });
+    console.log("[WinPilot] Profile scrape complete, profileId:", response.profileId);
+  } catch (e) {
+    sendToServer({
+      type: "PROFILE_SCRAPE_ERROR",
+      error: `Failed to save profile: ${e.message}`,
+    });
+  }
+}
+
 async function startLeadGenAutomation(campaignId, options = {}) {
   if (leadGenRunning) {
     reportLeadProgress("leadgen:error", { message: "Lead generation already running" });
@@ -2167,9 +2265,10 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
 // ─── Initialization ─────────────────────────────────────
 
-chrome.storage.local.get(["authToken", "apiUrl"], (result) => {
+chrome.storage.local.get(["authToken", "apiUrl", "wsUrl"], (result) => {
   if (result.authToken) authToken = result.authToken;
   if (result.apiUrl) apiUrl = result.apiUrl;
+  if (result.wsUrl) wsUrl = result.wsUrl;
   console.log("[WinPilot] Initialized — apiUrl:", apiUrl, "authToken:", authToken ? `${authToken.substring(0, 8)}...` : "NOT SET", "wsUrl:", wsUrl);
   connect();
 });

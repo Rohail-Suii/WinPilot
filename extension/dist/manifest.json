@@ -1,14 +1,12 @@
 {
   "manifest_version": 3,
   "name": "WinPilot",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "LinkedIn automation assistant — auto-apply, post content, and scrape leads",
   "permissions": ["activeTab", "storage", "tabs", "scripting", "alarms"],
   "host_permissions": [
     "https://www.linkedin.com/*",
-    "https://winpilot.tech/*",
-    "http://localhost:3000/*",
-    "http://localhost:3001/*"
+    "https://winpilot.tech/*"
   ],
   "background": {
     "service_worker": "background.js",

@@ -190,6 +190,14 @@ export function initSocketServer(httpServer: HTTPServer): SocketIOServer {
       broadcastToDashboard(userId, data.event, data.payload);
     });
 
+    // Extension profile scrape error — relay to dashboard so the user sees it
+    socket.on("PROFILE_SCRAPE_ERROR", (data: { error?: string }) => {
+      if (!userId) return;
+      broadcastToDashboard(userId, "task:error", {
+        message: data.error || "Profile scrape failed. Please try again.",
+      });
+    });
+
     socket.on("HEARTBEAT", () => {
       if (userId) {
         lastHeartbeat.set(userId, Date.now());

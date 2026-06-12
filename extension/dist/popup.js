@@ -1,6 +1,6 @@
 // WinPilot Popup Script
 
-const DEFAULT_DASHBOARD_BASE_URL = "http://localhost:3000";
+const DEFAULT_DASHBOARD_BASE_URL = "https://winpilot.tech";
 
 const app = document.getElementById("app");
 

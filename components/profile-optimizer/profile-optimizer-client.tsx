@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { toast } from "sonner";
 import {
   UserCheck,
@@ -15,6 +15,15 @@ import {
   BookOpen,
   Briefcase,
   GraduationCap,
+  Download,
+  CheckCircle,
+  XCircle,
+  Zap,
+  FileText,
+  PenLine,
+  TrendingUp,
+  Star,
+  ExternalLink,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -23,6 +32,8 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
+import { useWebSocket } from "@/lib/websocket/client";
+import { useExtensionStore } from "@/lib/hooks/use-stores";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -46,6 +57,31 @@ interface ProfileAnalysis {
 interface HeadlineSuggestion {
   text: string;
   reasoning: string;
+}
+
+// ---------------------------------------------------------------------------
+// Job Optimizer Types
+// ---------------------------------------------------------------------------
+
+interface ProfileSnapshot {
+  headline: string;
+  about: string;
+  skills: string[];
+  experience: { title: string; company: string; duration: string; description: string }[];
+  education: { school: string; degree: string; field: string }[];
+  certifications: { name: string; issuingOrg: string }[];
+  featured: { type: string; title: string }[];
+}
+
+interface JobOptimizationAnalysis {
+  overallFit: number;
+  targetRole: string;
+  headline: { current: string; recommended: string; keywords: string[]; reasoning: string };
+  about: { current: string; recommended: string; keyChanges: string[] };
+  skillsGap: { have: string[]; missing: string[]; quickWins: string[] };
+  postIdeas: { topic: string; angle: string; type: string; hashtags: string[]; whyItHelps: string }[];
+  certificates: { name: string; provider: string; relevance: string; url?: string }[];
+  featuredSuggestions: { type: string; description: string; priority: "high" | "medium" | "low" }[];
 }
 
 // ---------------------------------------------------------------------------
@@ -91,6 +127,716 @@ function ScoreCircle({ score, size = 120, label }: { score: number; size?: numbe
         </div>
       </div>
       {label && <p className="text-sm text-white/50">{label}</p>}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Job Optimizer Tab Component
+// ---------------------------------------------------------------------------
+
+function JobOptimizerTab({ copyToClipboard }: { copyToClipboard: (text: string) => void }) {
+  const STEP_PROFILE = 1;
+  const STEP_JOB = 2;
+  const STEP_RESULTS = 3;
+
+  const { sendCommand } = useWebSocket();
+  const extensionConnected = useExtensionStore((s) => s.isConnected);
+
+  const [step, setStep] = useState(STEP_PROFILE);
+  const [profileData, setProfileData] = useState<Partial<ProfileSnapshot> | null>(null);
+  const [profileId, setProfileId] = useState<string | null>(null);
+  const [importingFromLinkedIn, setImportingFromLinkedIn] = useState(false);
+  const [showManualForm, setShowManualForm] = useState(false);
+  const [jobDescription, setJobDescription] = useState("");
+  const [analyzing, setAnalyzing] = useState(false);
+  const [analysis, setAnalysis] = useState<JobOptimizationAnalysis | null>(null);
+  const [expandedCards, setExpandedCards] = useState<Record<string, boolean>>({});
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const sseRef = useRef<EventSource | null>(null);
+  const importHandledRef = useRef(false);
+
+  // Manual form state
+  const [manualHeadline, setManualHeadline] = useState("");
+  const [manualAbout, setManualAbout] = useState("");
+  const [manualSkills, setManualSkills] = useState("");
+  const [manualExperience, setManualExperience] = useState("");
+
+  const stopPolling = () => {
+    if (pollRef.current) {
+      clearInterval(pollRef.current);
+      pollRef.current = null;
+    }
+    if (sseRef.current) {
+      sseRef.current.close();
+      sseRef.current = null;
+    }
+  };
+
+  // Cleanup on unmount
+  useEffect(() => () => stopPolling(), []);
+
+  // Load last analysis from history on mount so results survive page refresh
+  useEffect(() => {
+    const loadLastAnalysis = async () => {
+      try {
+        const res = await fetch("/api/profile-optimizer?action=job-optimize-history");
+        const data = await res.json();
+        const last = data.history?.[0];
+        if (last?.analysis) {
+          setAnalysis(last.analysis as JobOptimizationAnalysis);
+          setStep(STEP_RESULTS);
+        }
+      } catch {
+        // not critical — user can run a fresh analysis
+      }
+    };
+    loadLastAnalysis();
+  }, []);
+
+  const handleImportFromLinkedIn = async () => {
+    if (!extensionConnected) {
+      toast.error(
+        "Extension not connected. Install WinPilot, open LinkedIn, and try again — or use manual input below."
+      );
+      setShowManualForm(true);
+      return;
+    }
+
+    setImportingFromLinkedIn(true);
+    importHandledRef.current = false;
+    toast.info("Requesting profile from extension… Keep your LinkedIn profile tab open.");
+
+    // Trigger via WebSocket — this is the only way to reach the extension service worker.
+    // BroadcastChannel cannot cross the browser-extension boundary.
+    sendCommand({ type: "START_PROFILE_SCRAPE" });
+
+    // Primary path: SSE event pushed by the server once scrape-profile saves the snapshot
+    const es = new EventSource("/api/sse");
+    sseRef.current = es;
+
+    es.addEventListener("profile:ready", (e) => {
+      if (importHandledRef.current) return;
+      importHandledRef.current = true;
+      stopPolling(); // clears both the interval and this EventSource
+      const payload = JSON.parse(e.data) as { profileId: string };
+      setImportingFromLinkedIn(false);
+      setProfileId(payload.profileId);
+      setProfileData({ headline: "(imported from LinkedIn)" });
+      toast.success("LinkedIn profile imported successfully!");
+      setStep(STEP_JOB);
+    });
+
+    es.addEventListener("error", () => {
+      // SSE unavailable — polling below is the fallback
+      if (sseRef.current === es) {
+        es.close();
+        sseRef.current = null;
+      }
+    });
+
+    // Fallback: poll every 5 s in case SSE is unavailable or the connection dropped
+    const triggerTime = Date.now();
+    let attempts = 0;
+    const MAX_ATTEMPTS = 24; // 2 min
+
+    pollRef.current = setInterval(async () => {
+      if (importHandledRef.current) { stopPolling(); return; }
+      attempts++;
+      try {
+        const res = await fetch("/api/profile-optimizer?action=job-optimize-history");
+        const data = await res.json();
+        const latest = data.history?.[0];
+        // Match a fresh snapshot (no analysis yet) created around the time we triggered
+        if (
+          latest &&
+          !latest.analysis &&
+          new Date(latest.createdAt).getTime() >= triggerTime - 3000
+        ) {
+          if (importHandledRef.current) { stopPolling(); return; }
+          importHandledRef.current = true;
+          stopPolling();
+          setImportingFromLinkedIn(false);
+          setProfileId(latest._id);
+          setProfileData({ headline: "(imported from LinkedIn)" });
+          toast.success("LinkedIn profile imported successfully!");
+          setStep(STEP_JOB);
+          return;
+        }
+      } catch {
+        // silently ignore poll errors
+      }
+
+      if (attempts >= MAX_ATTEMPTS) {
+        stopPolling();
+        setImportingFromLinkedIn(false);
+        toast.error("Could not reach extension. Use manual input below instead.");
+        setShowManualForm(true);
+      }
+    }, 5000);
+  };
+
+  const handleManualImport = () => {
+    const snapshot: Partial<ProfileSnapshot> = {
+      headline: manualHeadline,
+      about: manualAbout,
+      skills: manualSkills ? manualSkills.split(",").map((s) => s.trim()).filter(Boolean) : [],
+      experience: manualExperience
+        ? [{ title: "Experience summary", company: "", duration: "", description: manualExperience }]
+        : [],
+    };
+    setProfileData(snapshot);
+    setProfileId(null);
+    toast.success("Profile data saved");
+    setStep(STEP_JOB);
+  };
+
+  const handleAnalyze = async () => {
+    if (!profileData && !profileId) {
+      toast.error("Please import or enter your profile first");
+      return;
+    }
+    if (!jobDescription.trim()) {
+      toast.error("Please paste a job description");
+      return;
+    }
+
+    try {
+      setAnalyzing(true);
+      const res = await fetch("/api/profile-optimizer?action=job-optimize", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          profileData: profileId ? undefined : profileData,
+          profileId: profileId || undefined,
+          jobDescription,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error);
+      setAnalysis(data.optimization?.analysis || null);
+      setStep(STEP_RESULTS);
+      toast.success("Analysis complete!");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Analysis failed");
+    } finally {
+      setAnalyzing(false);
+    }
+  };
+
+  const toggleCard = (key: string) =>
+    setExpandedCards((prev) => ({ ...prev, [key]: !prev[key] }));
+
+  const priorityColors: Record<string, string> = {
+    high: "text-red-400 border-red-400/30",
+    medium: "text-amber-400 border-amber-400/30",
+    low: "text-emerald-400 border-emerald-400/30",
+  };
+
+  return (
+    <div className="space-y-6">
+      {/* Step indicator */}
+      <div className="flex items-center gap-2 text-sm">
+        {[
+          { id: STEP_PROFILE, label: "Import Profile" },
+          { id: STEP_JOB, label: "Target Job" },
+          { id: STEP_RESULTS, label: "Results" },
+        ].map((s, i) => (
+          <div key={s.id} className="flex items-center gap-2">
+            {i > 0 && <ChevronRight className="h-3 w-3 text-white/20" />}
+            <span
+              className={`px-2 py-0.5 rounded ${
+                step === s.id
+                  ? "bg-blue-600 text-white"
+                  : step > s.id
+                  ? "text-emerald-400"
+                  : "text-white/30"
+              }`}
+            >
+              {step > s.id ? <CheckCircle className="inline h-3 w-3 mr-1" /> : null}
+              {s.label}
+            </span>
+          </div>
+        ))}
+      </div>
+
+      {/* ── Step 1: Import Profile ── */}
+      {step === STEP_PROFILE && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Download className="h-5 w-5 text-blue-400" />
+              Import Your LinkedIn Profile
+            </CardTitle>
+            <CardDescription>
+              We need your current LinkedIn profile to analyze it against the job.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <Button
+              onClick={handleImportFromLinkedIn}
+              disabled={importingFromLinkedIn}
+              className="w-full"
+            >
+              {importingFromLinkedIn ? (
+                <div className="h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent mr-2" />
+              ) : (
+                <Download className="h-4 w-4 mr-2" />
+              )}
+              {importingFromLinkedIn
+                ? "Waiting for extension… (open your LinkedIn profile tab)"
+                : "Import from LinkedIn (via Extension)"}
+            </Button>
+
+            <div className="relative">
+              <div className="absolute inset-0 flex items-center">
+                <span className="w-full border-t border-white/10" />
+              </div>
+              <div className="relative flex justify-center text-xs">
+                <span className="bg-background px-2 text-white/40">or enter manually</span>
+              </div>
+            </div>
+
+            <button
+              type="button"
+              className="w-full flex items-center justify-between text-sm text-white/50 hover:text-white/80 transition-colors"
+              onClick={() => setShowManualForm((v) => !v)}
+            >
+              <span>Manual input</span>
+              {showManualForm ? (
+                <ChevronDown className="h-4 w-4" />
+              ) : (
+                <ChevronRight className="h-4 w-4" />
+              )}
+            </button>
+
+            {showManualForm && (
+              <div className="space-y-3 border border-white/10 rounded-lg p-4">
+                <div className="space-y-1">
+                  <Label>Headline</Label>
+                  <Input
+                    placeholder="Senior Software Engineer | React | TypeScript"
+                    value={manualHeadline}
+                    onChange={(e) => setManualHeadline(e.target.value)}
+                  />
+                </div>
+                <div className="space-y-1">
+                  <Label>About / Summary</Label>
+                  <Textarea
+                    placeholder="Your LinkedIn About section…"
+                    value={manualAbout}
+                    onChange={(e) => setManualAbout(e.target.value)}
+                    className="min-h-[80px]"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <Label>Skills (comma-separated)</Label>
+                  <Input
+                    placeholder="React, Node.js, TypeScript, AWS…"
+                    value={manualSkills}
+                    onChange={(e) => setManualSkills(e.target.value)}
+                  />
+                </div>
+                <div className="space-y-1">
+                  <Label>Experience summary</Label>
+                  <Textarea
+                    placeholder="e.g., 4 years full-stack development, built e-commerce platform for 500k users…"
+                    value={manualExperience}
+                    onChange={(e) => setManualExperience(e.target.value)}
+                    className="min-h-[60px]"
+                  />
+                </div>
+                <Button onClick={handleManualImport} className="w-full">
+                  <CheckCircle className="h-4 w-4 mr-2" />
+                  Use This Profile
+                </Button>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      )}
+
+      {/* ── Step 2: Target Job ── */}
+      {step === STEP_JOB && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <FileText className="h-5 w-5 text-blue-400" />
+              Paste the Job Description
+            </CardTitle>
+            <CardDescription>
+              {profileId
+                ? "Profile imported from LinkedIn."
+                : profileData?.headline
+                ? `Profile loaded: "${profileData.headline}"`
+                : "Profile loaded."}
+              {" "}Now paste the job description you want to target.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <Label>Job Description</Label>
+                <span className="text-xs text-white/30">{jobDescription.length}/5000</span>
+              </div>
+              <Textarea
+                placeholder="Paste the full job description here — include responsibilities, requirements, and skills…"
+                value={jobDescription}
+                onChange={(e) => setJobDescription(e.target.value.slice(0, 5000))}
+                className="min-h-[200px]"
+              />
+            </div>
+            <div className="flex gap-2">
+              <Button
+                variant="ghost"
+                onClick={() => setStep(STEP_PROFILE)}
+                className="shrink-0"
+              >
+                Back
+              </Button>
+              <Button
+                onClick={handleAnalyze}
+                disabled={analyzing || !jobDescription.trim()}
+                className="flex-1"
+              >
+                {analyzing ? (
+                  <div className="h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent mr-2" />
+                ) : (
+                  <Sparkles className="h-4 w-4 mr-2" />
+                )}
+                {analyzing ? "Analyzing…" : "Optimize for this Job"}
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* ── Step 3: Results ── */}
+      {step === STEP_RESULTS && analysis && (
+        <div className="space-y-4">
+          {/* Header controls */}
+          <div className="flex items-center justify-between">
+            <h3 className="text-white font-medium">
+              Optimization results for: <span className="text-blue-400">{analysis.targetRole}</span>
+            </h3>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => { setStep(STEP_JOB); setAnalysis(null); }}
+            >
+              <RefreshCw className="h-4 w-4 mr-1" /> Re-analyze
+            </Button>
+          </div>
+
+          {/* Overall fit score */}
+          <Card>
+            <CardContent className="p-6">
+              <div className="flex flex-col md:flex-row items-center gap-8">
+                <ScoreCircle score={analysis.overallFit} size={120} label="Job Fit Score" />
+                <div className="flex-1">
+                  <h4 className="text-white font-medium mb-2">Profile-to-Job Match</h4>
+                  <p className="text-white/50 text-sm">
+                    {analysis.overallFit >= 80
+                      ? "Strong match. Make the targeted tweaks below to lock it in."
+                      : analysis.overallFit >= 55
+                      ? "Decent fit. Filling the skills gap and updating your headline will significantly improve your chances."
+                      : "Gap is large but bridgeable. Follow all recommendations, especially the skills and certifications."}
+                  </p>
+                  <div className="flex flex-wrap gap-2 mt-3">
+                    {analysis.headline.keywords.slice(0, 6).map((kw, i) => (
+                      <Badge key={i} variant="info">{kw}</Badge>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* Headline card */}
+          <Card>
+            <CardContent className="p-0">
+              <button
+                className="w-full flex items-center justify-between p-4 text-left"
+                onClick={() => toggleCard("headline")}
+              >
+                <div className="flex items-center gap-3">
+                  <PenLine className="h-4 w-4 text-blue-400" />
+                  <span className="text-white font-medium">Headline</span>
+                </div>
+                {expandedCards.headline ? (
+                  <ChevronDown className="h-4 w-4 text-white/40" />
+                ) : (
+                  <ChevronRight className="h-4 w-4 text-white/40" />
+                )}
+              </button>
+              {expandedCards.headline && (
+                <div className="px-4 pb-4 border-t border-white/5 pt-4 space-y-4">
+                  <div className="grid md:grid-cols-2 gap-4">
+                    <div className="space-y-1">
+                      <p className="text-xs text-white/40">Current</p>
+                      <p className="text-sm text-white/60 bg-white/5 rounded p-2">
+                        {analysis.headline.current || "(not provided)"}
+                      </p>
+                    </div>
+                    <div className="space-y-1">
+                      <p className="text-xs text-emerald-400">Recommended</p>
+                      <div className="flex items-start gap-2 bg-emerald-500/10 rounded p-2">
+                        <p className="text-sm text-white flex-1">{analysis.headline.recommended}</p>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="shrink-0"
+                          onClick={() => copyToClipboard(analysis.headline.recommended)}
+                        >
+                          <Copy className="h-3 w-3 text-white/40" />
+                        </Button>
+                      </div>
+                    </div>
+                  </div>
+                  <p className="text-xs text-white/40">{analysis.headline.reasoning}</p>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
+          {/* About/Summary card */}
+          <Card>
+            <CardContent className="p-0">
+              <button
+                className="w-full flex items-center justify-between p-4 text-left"
+                onClick={() => toggleCard("about")}
+              >
+                <div className="flex items-center gap-3">
+                  <BookOpen className="h-4 w-4 text-purple-400" />
+                  <span className="text-white font-medium">About / Summary</span>
+                </div>
+                {expandedCards.about ? (
+                  <ChevronDown className="h-4 w-4 text-white/40" />
+                ) : (
+                  <ChevronRight className="h-4 w-4 text-white/40" />
+                )}
+              </button>
+              {expandedCards.about && (
+                <div className="px-4 pb-4 border-t border-white/5 pt-4 space-y-4">
+                  <div className="flex items-start justify-between gap-2 bg-emerald-500/10 rounded p-3">
+                    <p className="text-sm text-white/80 whitespace-pre-wrap flex-1">
+                      {analysis.about.recommended}
+                    </p>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="shrink-0"
+                      onClick={() => copyToClipboard(analysis.about.recommended)}
+                    >
+                      <Copy className="h-3 w-3 text-white/40" />
+                    </Button>
+                  </div>
+                  {analysis.about.keyChanges.length > 0 && (
+                    <div>
+                      <p className="text-xs text-white/40 mb-2">Key changes made</p>
+                      <ul className="space-y-1">
+                        {analysis.about.keyChanges.map((c, i) => (
+                          <li key={i} className="flex items-start gap-2 text-xs text-white/50">
+                            <span className="text-blue-400 mt-0.5">→</span> {c}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
+          {/* Skills Gap card */}
+          <Card>
+            <CardContent className="p-0">
+              <button
+                className="w-full flex items-center justify-between p-4 text-left"
+                onClick={() => toggleCard("skills")}
+              >
+                <div className="flex items-center gap-3">
+                  <Lightbulb className="h-4 w-4 text-amber-400" />
+                  <span className="text-white font-medium">Skills Gap</span>
+                  <Badge variant="warning">{analysis.skillsGap.missing.length} missing</Badge>
+                </div>
+                {expandedCards.skills ? (
+                  <ChevronDown className="h-4 w-4 text-white/40" />
+                ) : (
+                  <ChevronRight className="h-4 w-4 text-white/40" />
+                )}
+              </button>
+              {expandedCards.skills && (
+                <div className="px-4 pb-4 border-t border-white/5 pt-4">
+                  <div className="grid md:grid-cols-3 gap-4">
+                    <div>
+                      <p className="text-xs text-emerald-400 mb-2 flex items-center gap-1">
+                        <CheckCircle className="h-3 w-3" /> You have
+                      </p>
+                      <div className="flex flex-wrap gap-1">
+                        {analysis.skillsGap.have.map((s, i) => (
+                          <Badge key={i} variant="success">{s}</Badge>
+                        ))}
+                        {analysis.skillsGap.have.length === 0 && (
+                          <p className="text-xs text-white/30">None matched</p>
+                        )}
+                      </div>
+                    </div>
+                    <div>
+                      <p className="text-xs text-red-400 mb-2 flex items-center gap-1">
+                        <XCircle className="h-3 w-3" /> Missing
+                      </p>
+                      <div className="flex flex-wrap gap-1">
+                        {analysis.skillsGap.missing.map((s, i) => (
+                          <Badge key={i} variant="error">{s}</Badge>
+                        ))}
+                        {analysis.skillsGap.missing.length === 0 && (
+                          <p className="text-xs text-white/30">None!</p>
+                        )}
+                      </div>
+                    </div>
+                    <div>
+                      <p className="text-xs text-amber-400 mb-2 flex items-center gap-1">
+                        <Zap className="h-3 w-3" /> Quick wins
+                      </p>
+                      <div className="flex flex-wrap gap-1">
+                        {analysis.skillsGap.quickWins.map((s, i) => (
+                          <Badge key={i} variant="warning">{s}</Badge>
+                        ))}
+                        {analysis.skillsGap.quickWins.length === 0 && (
+                          <p className="text-xs text-white/30">None</p>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
+          {/* Post Ideas card */}
+          <Card>
+            <CardContent className="p-0">
+              <button
+                className="w-full flex items-center justify-between p-4 text-left"
+                onClick={() => toggleCard("posts")}
+              >
+                <div className="flex items-center gap-3">
+                  <TrendingUp className="h-4 w-4 text-blue-400" />
+                  <span className="text-white font-medium">Post Ideas</span>
+                  <Badge variant="info">{analysis.postIdeas.length} ideas</Badge>
+                </div>
+                {expandedCards.posts ? (
+                  <ChevronDown className="h-4 w-4 text-white/40" />
+                ) : (
+                  <ChevronRight className="h-4 w-4 text-white/40" />
+                )}
+              </button>
+              {expandedCards.posts && (
+                <div className="px-4 pb-4 border-t border-white/5 pt-4 space-y-3">
+                  {analysis.postIdeas.map((idea, i) => (
+                    <div key={i} className="border border-white/10 rounded-lg p-3 space-y-2">
+                      <div className="flex items-start justify-between gap-2">
+                        <div>
+                          <p className="text-sm text-white font-medium">{idea.topic}</p>
+                          <p className="text-xs text-white/50 mt-0.5">{idea.angle}</p>
+                        </div>
+                        <Badge variant="info">{idea.type}</Badge>
+                      </div>
+                      <p className="text-xs text-emerald-400">{idea.whyItHelps}</p>
+                      <div className="flex flex-wrap gap-1">
+                        {idea.hashtags.map((h, j) => (
+                          <span key={j} className="text-xs text-blue-400/70">#{h}</span>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
+          {/* Certificates & Featured combined card */}
+          <Card>
+            <CardContent className="p-0">
+              <button
+                className="w-full flex items-center justify-between p-4 text-left"
+                onClick={() => toggleCard("certs")}
+              >
+                <div className="flex items-center gap-3">
+                  <Award className="h-4 w-4 text-yellow-400" />
+                  <span className="text-white font-medium">Certifications & Featured</span>
+                </div>
+                {expandedCards.certs ? (
+                  <ChevronDown className="h-4 w-4 text-white/40" />
+                ) : (
+                  <ChevronRight className="h-4 w-4 text-white/40" />
+                )}
+              </button>
+              {expandedCards.certs && (
+                <div className="px-4 pb-4 border-t border-white/5 pt-4 space-y-5">
+                  {/* Certificates */}
+                  <div>
+                    <p className="text-xs text-white/40 mb-3 uppercase tracking-wide">
+                      Recommended Certifications
+                    </p>
+                    <div className="space-y-2">
+                      {analysis.certificates.map((cert, i) => (
+                        <div key={i} className="flex items-start gap-3 border border-white/10 rounded-lg p-3">
+                          <Star className="h-4 w-4 text-yellow-400 shrink-0 mt-0.5" />
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <p className="text-sm text-white font-medium">{cert.name}</p>
+                              <p className="text-xs text-white/40">{cert.provider}</p>
+                            </div>
+                            <p className="text-xs text-white/50 mt-0.5">{cert.relevance}</p>
+                          </div>
+                          {cert.url && (
+                            <a
+                              href={cert.url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="shrink-0 text-blue-400 hover:text-blue-300"
+                            >
+                              <ExternalLink className="h-4 w-4" />
+                            </a>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Featured suggestions */}
+                  <div>
+                    <p className="text-xs text-white/40 mb-3 uppercase tracking-wide">
+                      Featured Section Suggestions
+                    </p>
+                    <div className="space-y-2">
+                      {analysis.featuredSuggestions.map((sug, i) => (
+                        <div
+                          key={i}
+                          className={`flex items-start gap-3 border rounded-lg p-3 ${priorityColors[sug.priority]}`}
+                        >
+                          <Target className="h-4 w-4 shrink-0 mt-0.5" />
+                          <div className="flex-1">
+                            <div className="flex items-center gap-2">
+                              <Badge variant="info">{sug.type}</Badge>
+                              <span className={`text-xs capitalize font-medium ${priorityColors[sug.priority].split(" ")[0]}`}>
+                                {sug.priority} priority
+                              </span>
+                            </div>
+                            <p className="text-sm text-white/70 mt-1">{sug.description}</p>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </div>
+      )}
     </div>
   );
 }
@@ -262,6 +1008,7 @@ export function ProfileOptimizerClient() {
           <TabsTrigger value="analyze">Analyze</TabsTrigger>
           <TabsTrigger value="headline">Headline</TabsTrigger>
           <TabsTrigger value="summary">Summary</TabsTrigger>
+          <TabsTrigger value="job-optimizer">Job Optimizer</TabsTrigger>
         </TabsList>
 
         {/* Overview Tab */}
@@ -641,6 +1388,11 @@ export function ProfileOptimizerClient() {
               )}
             </CardContent>
           </Card>
+        </TabsContent>
+
+        {/* Job Optimizer Tab */}
+        <TabsContent value="job-optimizer">
+          <JobOptimizerTab copyToClipboard={copyToClipboard} />
         </TabsContent>
       </Tabs>
     </div>

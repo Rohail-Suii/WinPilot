@@ -52,3 +52,10 @@ export type { IMarketInsight, MarketInsightType } from "./market-insight";
 
 export { default as LeadGenCampaign } from "./lead-gen-campaign";
 export type { ILeadGenCampaign, CampaignStatus, ILeadComment } from "./lead-gen-campaign";
+
+export { default as LinkedInJobOptimization } from "./linkedin-job-optimization";
+export type {
+  ILinkedInJobOptimization,
+  IProfileSnapshot,
+  IJobOptimizationAnalysis,
+} from "./linkedin-job-optimization";

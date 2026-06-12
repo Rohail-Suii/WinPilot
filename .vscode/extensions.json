@@ -1,0 +1,77 @@
+{
+  "recommendations": [
+
+    // ── UI Design & Frontend ──────────────────────────────────────────────────
+
+    // Figma design sync & live preview inside VS Code
+    "figma.figma-vscode-extension",
+
+    // Tailwind CSS v4 — autocomplete, hover previews, class conflict detection
+    // (This project uses Tailwind v4 — industry standard at 12M+ installs)
+    "bradlc.vscode-tailwindcss",
+
+    // Axe accessibility linter — WCAG 2.1/2.2 violations inline as you type
+    // Powered by Deque axe-core (used in 50%+ of enterprise a11y audits)
+    "deque-systems.vscode-axe-linter",
+
+    // PostCSS language support (required for Tailwind v4's @import "tailwindcss")
+    "csstools.postcss",
+
+    // ESLint — this project already has eslint.config.mjs
+    "dbaeumer.vscode-eslint",
+
+    // Prettier code formatter
+    "esbenp.prettier-vscode",
+
+    // Auto-rename paired HTML/JSX tags
+    "formulahendry.auto-rename-tag",
+
+    // Import cost — shows bundle size of each import inline
+    "wix.vscode-import-cost",
+
+    // Color highlight — shows hex/rgb colors inline in CSS/TSX
+    "naumovs.color-highlight",
+
+    // ── Enterprise Architecture ───────────────────────────────────────────────
+
+    // Architecture View for NestJS-style modules — dependency graph in sidebar
+    // (10.8K installs, 5-star, best module visualizer for this stack)
+    "archsense.architecture-view-nestjs",
+
+    // PlantUML — draw sequence/component/deployment diagrams from text
+    "jebbs.plantuml",
+
+    // Draw.io integration — architecture diagrams as .drawio files in the repo
+    "hediet.vscode-drawio",
+
+    // MongoDB for VS Code — query collections and inspect schemas directly
+    // (This project uses MongoDB/Mongoose)
+    "mongodb.mongodb-vscode",
+
+    // REST Client — test API routes without leaving VS Code
+    // (.http files for testing this project's /api/* endpoints)
+    "humao.rest-client",
+
+    // GitLens — git blame, PR diffs, branch history visualization
+    "eamodio.gitlens",
+
+    // GitHub Actions — syntax validation and live workflow status
+    "github.vscode-github-actions",
+
+    // Docker — Dockerfile syntax, compose validation, container management
+    // (This project has Dockerfile + docker-compose.yml)
+    "ms-azuretools.vscode-docker",
+
+    // Error Lens — inline error/warning display (replaces Problems panel scanning)
+    "usernamehw.errorlens",
+
+    // Path Intellisense — autocomplete for @/ aliases in this Next.js project
+    "christian-kohler.path-intellisense",
+
+    // TypeScript + JavaScript nightly — latest TS language features
+    "ms-vscode.vscode-typescript-next",
+
+    // Vitest — test runner UI (this project uses vitest)
+    "vitest.explorer"
+  ]
+}

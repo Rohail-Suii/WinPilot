@@ -14,3 +14,4 @@ export {
   buildCompanyResearchPrompt,
 } from "./interview-prep";
 export { buildMarketAnalysisPrompt } from "./market-insights";
+export { buildLinkedInJobOptimizerPrompt } from "./linkedin-job-optimizer";

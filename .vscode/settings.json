@@ -1,0 +1,105 @@
+{
+  // ─────────────────────────────────────────────────────────────────────────────
+  // VS Code workspace settings — InPilot / WinPilot
+  // Optimized for: Next.js 16 · TypeScript · Tailwind v4 · MongoDB · NextAuth v5
+  // ─────────────────────────────────────────────────────────────────────────────
+
+  // ── Editor ───────────────────────────────────────────────────────────────────
+  "editor.defaultFormatter": "esbenp.prettier-vscode",
+  "editor.formatOnSave": true,
+  "editor.codeActionsOnSave": {
+    "source.fixAll.eslint": "explicit",
+    "source.organizeImports": "explicit"
+  },
+  "editor.tabSize": 2,
+  "editor.insertSpaces": true,
+  "editor.wordWrap": "on",
+  "editor.bracketPairColorization.enabled": true,
+  "editor.guides.bracketPairs": "active",
+  "editor.inlineSuggest.enabled": true,
+  "editor.suggestSelection": "first",
+
+  // ── TypeScript ───────────────────────────────────────────────────────────────
+  "typescript.preferences.importModuleSpecifier": "non-relative",
+  "typescript.suggest.autoImports": true,
+  "typescript.updateImportsOnFileMove.enabled": "always",
+  "typescript.tsdk": "node_modules/typescript/lib",
+
+  // ── Tailwind CSS v4 ───────────────────────────────────────────────────────────
+  "tailwindCSS.includeLanguages": {
+    "typescript": "html",
+    "typescriptreact": "html"
+  },
+  "tailwindCSS.experimental.classRegex": [
+    ["cva\\(([^)]*)\\)", "[\"'`]([^\"'`]*).*?[\"'`]"],
+    ["cx\\(([^)]*)\\)", "(?:'|\"|`)([^']*)(?:'|\"|`)"],
+    ["cn\\(([^)]*)\\)", "(?:'|\"|`)([^']*)(?:'|\"|`)"]
+  ],
+  "editor.quickSuggestions": {
+    "strings": "on"
+  },
+
+  // ── ESLint ────────────────────────────────────────────────────────────────────
+  "eslint.validate": [
+    "javascript",
+    "javascriptreact",
+    "typescript",
+    "typescriptreact"
+  ],
+  "eslint.useFlatConfig": true,
+
+  // ── Files ──────────────────────────────────────────────────────────────────
+  "files.associations": {
+    "*.css": "tailwindcss"
+  },
+  "files.exclude": {
+    "**/.next": true,
+    "**/node_modules": true,
+    "**/.git": true
+  },
+  "search.exclude": {
+    "**/.next": true,
+    "**/node_modules": true,
+    "**/dist": true
+  },
+
+  // ── Path aliases (@/) ────────────────────────────────────────────────────────
+  "path-intellisense.mappings": {
+    "@": "${workspaceFolder}"
+  },
+
+  // ── Test Explorer (Vitest) ───────────────────────────────────────────────────
+  "vitest.enable": true,
+  "vitest.commandLine": "npx vitest",
+
+  // ── GitHub Copilot ───────────────────────────────────────────────────────────
+  "github.copilot.enable": {
+    "*": true,
+    "plaintext": false,
+    "markdown": true
+  },
+  "chat.mcp.discovery.enabled": {
+    "claude-desktop": true,
+    "windsurf": true,
+    "cursor-global": true,
+    "cursor-workspace": true
+  },
+
+  // ── Terminal ──────────────────────────────────────────────────────────────────
+  "terminal.integrated.defaultProfile.windows": "PowerShell",
+  "terminal.integrated.env.windows": {
+    // These env vars are picked up by mcp.json server definitions.
+    // Set actual values in Windows System Environment Variables,
+    // NOT here — this file is committed to source control.
+    "FIGMA_API_KEY": "",
+    "GITHUB_PERSONAL_ACCESS_TOKEN": ""
+  },
+
+  // ── Error Lens ───────────────────────────────────────────────────────────────
+  "errorLens.enabledDiagnosticLevels": ["error", "warning"],
+  "errorLens.excludeBySource": ["ts(2307)"],
+
+  // ── MongoDB ───────────────────────────────────────────────────────────────────
+  "mdb.connectionSaving.defaultConnectionSavingLocation": "Workspace",
+  "chat.mcp.access": "all"
+}

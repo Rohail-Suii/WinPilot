@@ -780,6 +780,46 @@
           return { status: "success", actionId: action.actionId };
         }
 
+        // ─── Profile Optimizer: scrape user's own LinkedIn profile ────────
+        case "SCRAPE_USER_PROFILE": {
+          console.log("[WinPilot CS] SCRAPE_USER_PROFILE: Starting user profile scrape");
+
+          // Navigate to the user's own profile if not already there
+          if (!window.location.pathname.startsWith("/in/")) {
+            console.log("[WinPilot CS] SCRAPE_USER_PROFILE: Not on a profile page, navigating...");
+            return {
+              status: "error",
+              actionId: action.actionId,
+              error: "Please navigate to your LinkedIn profile page (/in/your-name) first.",
+            };
+          }
+
+          try {
+            // Wait for the main profile content to load
+            await waitForElement(
+              ".text-heading-xlarge, h1.text-heading-xlarge, [data-generated-suggestion-target]",
+              10000
+            );
+          } catch (e) {
+            console.warn("[WinPilot CS] SCRAPE_USER_PROFILE: Profile header not found within timeout");
+          }
+
+          await new Promise((r) => setTimeout(r, 1000));
+
+          const profileData = scrapeUserProfile();
+          console.log("[WinPilot CS] SCRAPE_USER_PROFILE: Scraped profile:", JSON.stringify({
+            headline: profileData.headline,
+            skillsCount: profileData.skills.length,
+            experienceCount: profileData.experience.length,
+          }));
+
+          return {
+            status: "success",
+            actionId: action.actionId,
+            data: { profileData },
+          };
+        }
+
         default:
           return {
             status: "error",
@@ -794,6 +834,128 @@
         error: e.message,
       };
     }
+  }
+
+  // --- Profile Optimizer: Scrape the user's own LinkedIn profile ---
+
+  function scrapeUserProfile() {
+    // Headline
+    const headlineEl = document.querySelector(
+      ".text-heading-xlarge, h1.text-heading-xlarge"
+    );
+    const headline = headlineEl?.textContent?.trim() || "";
+
+    // About / Summary
+    const aboutEl = document.querySelector(
+      "#about ~ .pvs-list__outer-container .visually-hidden, " +
+      "section[data-member-id] .pv-about-section .pv-about__summary-text, " +
+      ".pv-about-section span[aria-hidden='false'], " +
+      "[data-field='summary'] .pvs-multiline-text, " +
+      ".inline-show-more-text--is-collapsed, .inline-show-more-text"
+    );
+    const about = aboutEl?.textContent?.trim() || "";
+
+    // Skills
+    const skillEls = document.querySelectorAll(
+      ".pvs-list__item--line-separated .t-bold span[aria-hidden='true'], " +
+      "[data-field='skill_card_skill_topic'] .t-bold span[aria-hidden='true'], " +
+      "li.pvs-list__paged-list-item .display-flex .t-bold span[aria-hidden='true']"
+    );
+    const skillsSet = new Set<string>();
+    skillEls.forEach((el) => {
+      const text = el.textContent?.trim();
+      if (text && text.length < 60) skillsSet.add(text);
+    });
+    const skills = [...skillsSet].slice(0, 30);
+
+    // Experience
+    const experience: { title: string; company: string; duration: string; description: string }[] = [];
+    const expSection = document.querySelector(
+      "#experience ~ .pvs-list__outer-container, section[id='experience-section']"
+    );
+    if (expSection) {
+      const expItems = expSection.querySelectorAll("li.pvs-list__paged-list-item");
+      for (const item of Array.from(expItems).slice(0, 10)) {
+        const spans = item.querySelectorAll("span[aria-hidden='true']");
+        const texts = Array.from(spans)
+          .map((s) => s.textContent?.trim())
+          .filter(Boolean) as string[];
+        if (texts.length >= 2) {
+          experience.push({
+            title: texts[0] || "",
+            company: texts[1] || "",
+            duration: texts[2] || "",
+            description: texts.slice(4).join(" ").substring(0, 300),
+          });
+        }
+      }
+    }
+
+    // Education
+    const education: { school: string; degree: string; field: string }[] = [];
+    const eduSection = document.querySelector(
+      "#education ~ .pvs-list__outer-container, section[id='education-section']"
+    );
+    if (eduSection) {
+      const eduItems = eduSection.querySelectorAll("li.pvs-list__paged-list-item");
+      for (const item of Array.from(eduItems).slice(0, 5)) {
+        const spans = item.querySelectorAll("span[aria-hidden='true']");
+        const texts = Array.from(spans)
+          .map((s) => s.textContent?.trim())
+          .filter(Boolean) as string[];
+        if (texts.length >= 1) {
+          education.push({
+            school: texts[0] || "",
+            degree: texts[1] || "",
+            field: texts[2] || "",
+          });
+        }
+      }
+    }
+
+    // Certifications / Licenses
+    const certifications: { name: string; issuingOrg: string }[] = [];
+    const certSection = document.querySelector(
+      "#licenses_and_certifications ~ .pvs-list__outer-container, " +
+      "#certifications ~ .pvs-list__outer-container"
+    );
+    if (certSection) {
+      const certItems = certSection.querySelectorAll("li.pvs-list__paged-list-item");
+      for (const item of Array.from(certItems).slice(0, 10)) {
+        const spans = item.querySelectorAll("span[aria-hidden='true']");
+        const texts = Array.from(spans)
+          .map((s) => s.textContent?.trim())
+          .filter(Boolean) as string[];
+        if (texts.length >= 1) {
+          certifications.push({
+            name: texts[0] || "",
+            issuingOrg: texts[1] || "",
+          });
+        }
+      }
+    }
+
+    // Featured
+    const featured: { type: string; title: string }[] = [];
+    const featuredSection = document.querySelector(
+      "#featured ~ .pvs-list__outer-container"
+    );
+    if (featuredSection) {
+      const featuredItems = featuredSection.querySelectorAll("li.pvs-list__paged-list-item");
+      for (const item of Array.from(featuredItems).slice(0, 6)) {
+        const titleEl = item.querySelector(".t-bold span[aria-hidden='true']");
+        const typeEl = item.querySelector(".t-14 span[aria-hidden='true']");
+        const title = titleEl?.textContent?.trim() || "";
+        if (title) {
+          featured.push({
+            type: typeEl?.textContent?.trim() || "item",
+            title,
+          });
+        }
+      }
+    }
+
+    return { headline, about, skills, experience, education, certifications, featured };
   }
 
   // --- Phase 2: Job Scraping Helpers ---

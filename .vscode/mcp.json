@@ -1,0 +1,110 @@
+{
+  // ─────────────────────────────────────────────────────────────────────────────
+  // MCP Servers for GitHub Copilot — InPilot / WinPilot workspace
+  // Project: Next.js 16 · TypeScript · Tailwind v4 · MongoDB · NextAuth v5
+  //
+  // UI Design & Frontend:
+  //   • figma          — Pixel-perfect design → code from Figma files
+  //   • playwright     — Live browser automation, accessibility tree, visual debug
+  //   • context7       — Real-time docs for Next.js, React, Tailwind, Radix UI, etc.
+  //
+  // Enterprise Architecture:
+  //   • sequential-thinking — Structured step-by-step reasoning for ADRs, trade-offs
+  //   • memory              — Persistent knowledge graph across all sessions
+  //   • github              — Full GitHub API: PRs, issues, branches, code search
+  //   • filesystem          — Secure scoped file I/O within this project only
+  //
+  // Windows note: npx commands require the "cmd /c" wrapper shown below.
+  // ─────────────────────────────────────────────────────────────────────────────
+  "servers": {
+
+    // ── UI Design & Frontend ──────────────────────────────────────────────────
+
+    "figma": {
+      // Pipes Figma design tokens + layout into Copilot for one-shot pixel-perfect
+      // component generation. Requires a Figma Personal Access Token:
+      // https://help.figma.com/hc/en-us/articles/8085703771159
+      "command": "cmd",
+      "args": [
+        "/c", "npx", "-y", "figma-developer-mcp",
+        "--figma-api-key=${env:FIGMA_API_KEY}",
+        "--stdio"
+      ],
+      "env": {
+        // Set FIGMA_API_KEY in your system environment variables or a .env.local file.
+        // Never hard-code the key here — this file is committed to source control.
+      }
+    },
+
+    "playwright": {
+      // Microsoft-official browser automation MCP (32.5k ⭐).
+      // Provides accessibility tree snapshots, visual debugging, and UI regression
+      // testing without requiring vision models.
+      // Optional caps: --caps=vision,devtools for screenshot + DevTools access.
+      "command": "cmd",
+      "args": [
+        "/c", "npx", "@playwright/mcp@latest",
+        "--viewport-size=1440x900",
+        "--test-id-attribute=data-testid"
+      ]
+    },
+
+    "context7": {
+      // Injects fresh, version-specific docs for Next.js, React 19, Tailwind v4,
+      // Radix UI, Framer Motion, Zod, NextAuth v5, MongoDB, and 9000+ more libs.
+      // Usage: append "use context7" to any Copilot prompt.
+      "command": "cmd",
+      "args": ["/c", "npx", "-y", "@upstash/context7-mcp"]
+    },
+
+    // ── Enterprise Architecture ───────────────────────────────────────────────
+
+    "sequential-thinking": {
+      // Anthropic official reference server. Forces structured multi-step reasoning
+      // — use for architecture decisions, scalability trade-offs, DB schema design,
+      // and production refactoring planning.
+      "command": "cmd",
+      "args": [
+        "/c", "npx", "-y",
+        "@modelcontextprotocol/server-sequential-thinking"
+      ]
+    },
+
+    "memory": {
+      // Anthropic official knowledge-graph memory server. Persists entities,
+      // relationships, and project constraints across all Copilot sessions —
+      // essential for large codebases with complex domain models.
+      "command": "cmd",
+      "args": [
+        "/c", "npx", "-y",
+        "@modelcontextprotocol/server-memory"
+      ]
+    },
+
+    "github": {
+      // Official GitHub MCP — exposes repos, issues, PRs, Actions, code search,
+      // and branch management. Required for enterprise CI/CD workflow automation.
+      // Set GITHUB_PERSONAL_ACCESS_TOKEN in your system environment variables.
+      "command": "cmd",
+      "args": [
+        "/c", "npx", "-y",
+        "@modelcontextprotocol/server-github"
+      ],
+      "env": {
+        "GITHUB_PERSONAL_ACCESS_TOKEN": "${env:GITHUB_PERSONAL_ACCESS_TOKEN}"
+      }
+    },
+
+    "filesystem": {
+      // Anthropic official secure file I/O — scoped to this project root only.
+      // Allows Copilot to read/write specs, configs, OpenAPI contracts, and
+      // migration scripts without unrestricted disk access.
+      "command": "cmd",
+      "args": [
+        "/c", "npx", "-y",
+        "@modelcontextprotocol/server-filesystem",
+        "${workspaceFolder}"
+      ]
+    }
+  }
+}
