@@ -2,6 +2,7 @@ import mongoose, { Schema, type Document, type Model } from "mongoose";
 
 export interface IActivityLog extends Document {
   userId: mongoose.Types.ObjectId;
+  isGuest: boolean;
   action: string;
   module: "jobs" | "hero" | "scraper";
   details: Record<string, unknown>;
@@ -26,6 +27,7 @@ const ActivityLogSchema = new Schema<IActivityLog>({
   },
   linkedinUrl: String,
   timestamp: { type: Date, default: Date.now },
+  isGuest: { type: Boolean, default: false, index: true },
 });
 
 // Auto-delete logs after 90 days

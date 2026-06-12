@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { auth } from "@/auth";
+import { getActorId } from "@/lib/utils/get-actor-id";
 import connectDB from "@/lib/db/connection";
 import InterviewPrep from "@/lib/db/models/interview-prep";
 import JobApplication from "@/lib/db/models/job-application";
@@ -12,12 +12,13 @@ const generatePrepSchema = z.object({
 
 export async function GET(req: Request) {
   try {
-    const session = await auth();
-    if (!session?.user?.id) {
+    const actor = await getActorId();
+    if (!actor) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
+    const { id: userId } = actor;
 
-    const rateLimit = await checkApiRateLimit(session.user.id);
+    const rateLimit = await checkApiRateLimit(userId);
     if (!rateLimit.success) {
       return NextResponse.json({ error: "Too many requests" }, { status: 429 });
     }
@@ -29,7 +30,7 @@ export async function GET(req: Request) {
 
     if (jobApplicationId) {
       const prep = await InterviewPrep.findOne({
-        userId: session.user.id,
+        userId: userId,
         jobApplicationId,
       }).lean();
 
@@ -37,7 +38,7 @@ export async function GET(req: Request) {
     }
 
     // Return all interview preps for the user
-    const preps = await InterviewPrep.find({ userId: session.user.id })
+    const preps = await InterviewPrep.find({ userId: userId })
       .sort({ createdAt: -1 })
       .limit(20)
       .lean();
@@ -51,12 +52,13 @@ export async function GET(req: Request) {
 
 export async function POST(req: Request) {
   try {
-    const session = await auth();
-    if (!session?.user?.id) {
+    const actor = await getActorId();
+    if (!actor) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
+    const { id: userId } = actor;
 
-    const rateLimit = await checkApiRateLimit(session.user.id);
+    const rateLimit = await checkApiRateLimit(userId);
     if (!rateLimit.success) {
       return NextResponse.json({ error: "Too many requests" }, { status: 429 });
     }
@@ -70,7 +72,7 @@ export async function POST(req: Request) {
     await connectDB();
 
     const { getUserAIProvider } = await import("@/lib/ai/key-manager");
-    const aiProvider = await getUserAIProvider(session.user.id);
+    const aiProvider = await getUserAIProvider(userId);
     if (!aiProvider) {
       return NextResponse.json(
         { error: "No AI API key configured. Please add one in Settings." },
@@ -81,7 +83,7 @@ export async function POST(req: Request) {
     // Get job application details
     const application = await JobApplication.findOne({
       _id: parsed.data.jobApplicationId,
-      userId: session.user.id,
+      userId: userId,
     }).lean();
 
     if (!application) {
@@ -126,7 +128,7 @@ export async function POST(req: Request) {
     // Upsert the interview prep
     const prep = await InterviewPrep.findOneAndUpdate(
       {
-        userId: session.user.id,
+        userId: userId,
         jobApplicationId: parsed.data.jobApplicationId,
       },
       {
@@ -150,10 +152,11 @@ export async function POST(req: Request) {
 
 export async function DELETE(req: Request) {
   try {
-    const session = await auth();
-    if (!session?.user?.id) {
+    const actor = await getActorId();
+    if (!actor) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
+    const { id: userId } = actor;
 
     const { searchParams } = new URL(req.url);
     const id = searchParams.get("id");
@@ -166,7 +169,7 @@ export async function DELETE(req: Request) {
 
     const prep = await InterviewPrep.findOneAndDelete({
       _id: id,
-      userId: session.user.id,
+      userId: userId,
     });
 
     if (!prep) {

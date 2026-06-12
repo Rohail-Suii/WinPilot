@@ -1,10 +1,10 @@
 import { NextResponse } from "next/server";
-import { auth } from "@/auth";
 import connectDB from "@/lib/db/connection";
 import User from "@/lib/db/models/user";
 import bcrypt from "bcryptjs";
 import { z } from "zod";
 import { checkApiRateLimit } from "@/lib/utils/rate-limit";
+import { getActorId } from "@/lib/utils/get-actor-id";
 
 const updateProfileSchema = z.object({
   name: z.string().min(2).max(50).optional(),
@@ -19,18 +19,24 @@ const updateProfileSchema = z.object({
 
 export async function GET() {
   try {
-    const session = await auth();
-    if (!session?.user?.id) {
+    const actor = await getActorId();
+    if (!actor) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
+    const { id: userId, isGuest } = actor;
 
-    const rateLimit = await checkApiRateLimit(session.user.id);
+    // Guests have no User document — return empty profile
+    if (isGuest) {
+      return NextResponse.json({ name: null, email: null, image: null, settings: null, createdAt: null });
+    }
+
+    const rateLimit = await checkApiRateLimit(userId);
     if (!rateLimit.success) {
       return NextResponse.json({ error: "Too many requests" }, { status: 429 });
     }
 
     await connectDB();
-    const user = await User.findById(session.user.id).lean();
+    const user = await User.findById(userId).lean();
     if (!user) {
       return NextResponse.json({ error: "User not found" }, { status: 404 });
     }
@@ -50,12 +56,21 @@ export async function GET() {
 
 export async function PATCH(req: Request) {
   try {
-    const session = await auth();
-    if (!session?.user?.id) {
+    const actor = await getActorId();
+    if (!actor) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
+    const { id: userId, isGuest } = actor;
 
-    const rateLimit = await checkApiRateLimit(session.user.id);
+    // Guests cannot change profile settings
+    if (isGuest) {
+      return NextResponse.json(
+        { error: "Create a free account to save profile settings", requiresAuth: true },
+        { status: 403 }
+      );
+    }
+
+    const rateLimit = await checkApiRateLimit(userId);
     if (!rateLimit.success) {
       return NextResponse.json({ error: "Too many requests" }, { status: 429 });
     }
@@ -74,7 +89,7 @@ export async function PATCH(req: Request) {
         return NextResponse.json({ error: "Current password is required" }, { status: 400 });
       }
 
-      const user = await User.findById(session.user.id).select("+hashedPassword");
+      const user = await User.findById(userId).select("+hashedPassword");
       if (!user?.hashedPassword) {
         return NextResponse.json({ error: "Cannot change password for OAuth accounts" }, { status: 400 });
       }
@@ -88,7 +103,7 @@ export async function PATCH(req: Request) {
       if (name) user.name = name;
       await user.save();
     } else if (name) {
-      await User.findByIdAndUpdate(session.user.id, { name });
+      await User.findByIdAndUpdate(userId, { name });
     }
 
     return NextResponse.json({ success: true });

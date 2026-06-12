@@ -140,6 +140,9 @@ export function JobsClient() {
   const [loadingKeys, setLoadingKeys] = useState(true);
   const [addKeyOpen, setAddKeyOpen] = useState(false);
   const [preferredProvider, setPreferredProvider] = useState("");
+  const [preferredOpenRouterModel, setPreferredOpenRouterModel] = useState(
+    "meta-llama/llama-3.3-70b-instruct:free"
+  );
   const [automationSettings, setAutomationSettings] = useState<AutomationSettings | null>(null);
 
   const { isConnected, currentTask, lastTaskError, aiQuotaStatus, automationRunning, automationLogs, clearLogs, setAutomationRunning } = useExtensionStore();
@@ -242,6 +245,9 @@ export function JobsClient() {
         const data = await res.json();
         setApiKeys(data.keys || []);
         setPreferredProvider(data.preferredProvider || "");
+        setPreferredOpenRouterModel(
+          data.preferredOpenRouterModel || "meta-llama/llama-3.3-70b-instruct:free"
+        );
       }
     } catch { /* */ }
     setLoadingKeys(false);
@@ -819,6 +825,8 @@ export function JobsClient() {
                 onRefresh={fetchApiKeys}
                 preferredProvider={preferredProvider}
                 setPreferredProvider={setPreferredProvider}
+                preferredOpenRouterModel={preferredOpenRouterModel}
+                setPreferredOpenRouterModel={setPreferredOpenRouterModel}
               />
             )}
 

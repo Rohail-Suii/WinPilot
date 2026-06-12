@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { auth } from "@/auth";
+import { getActorId } from "@/lib/utils/get-actor-id";
 import connectDB from "@/lib/db/connection";
 import bcrypt from "bcryptjs";
 import User from "@/lib/db/models/user";
@@ -15,18 +15,23 @@ import { checkApiRateLimit } from "@/lib/utils/rate-limit";
 
 export async function GET() {
   try {
-    const session = await auth();
-    if (!session?.user?.id) {
+    const actor = await getActorId();
+    if (!actor) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
+    const { id: userId, isGuest } = actor;
 
-    const rateLimit = await checkApiRateLimit(session.user.id);
+    // Guest data export is not supported
+    if (isGuest) {
+      return NextResponse.json({ error: "Create a free account to export your data", requiresAuth: true }, { status: 403 });
+    }
+
+    const rateLimit = await checkApiRateLimit(userId);
     if (!rateLimit.success) {
       return NextResponse.json({ error: "Too many requests" }, { status: 429 });
     }
 
     await connectDB();
-    const userId = session.user.id;
 
     const MAX_RECORDS = 500;
 
@@ -82,12 +87,17 @@ export async function GET() {
 
 export async function DELETE(req: Request) {
   try {
-    const session = await auth();
-    if (!session?.user?.id) {
+    const actor = await getActorId();
+    if (!actor) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
+    const { id: userId, isGuest } = actor;
 
-    const rateLimit = await checkApiRateLimit(session.user.id);
+    if (isGuest) {
+      return NextResponse.json({ error: "Create a free account to delete exported data", requiresAuth: true }, { status: 403 });
+    }
+
+    const rateLimit = await checkApiRateLimit(userId);
     if (!rateLimit.success) {
       return NextResponse.json({ error: "Too many requests" }, { status: 429 });
     }
@@ -100,9 +110,8 @@ export async function DELETE(req: Request) {
     }
 
     await connectDB();
-    const userId = session.user.id;
 
-    const user = await User.findById(session.user.id).select("+hashedPassword");
+    const user = await User.findById(userId).select("+hashedPassword");
     if (!user?.hashedPassword) {
       return NextResponse.json({ error: "Cannot verify password for OAuth accounts" }, { status: 400 });
     }

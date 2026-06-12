@@ -526,6 +526,9 @@ export default function Home() {
             <Link href="/register" className={styles.mobilePrimaryCta} onClick={() => setMobileMenuOpen(false)}>
               Get started free
             </Link>
+            <Link href="/dashboard" className={styles.mobileSecondaryCta} onClick={() => setMobileMenuOpen(false)}>
+              Let&apos;s Start →
+            </Link>
           </div>
         </div>
       )}
@@ -582,9 +585,9 @@ export default function Home() {
                   <Link href="/register" className={`${styles.ctaButton} ${styles.ctaPrimary}`}>
                     Start automating →
                   </Link>
-                  <a href="#quickstart" className={`${styles.ctaButton} ${styles.ctaGhost}`}>
-                    View docs
-                  </a>
+                  <Link href="/dashboard" className={`${styles.ctaButton} ${styles.ctaGhost}`}>
+                    Let&apos;s Start →
+                  </Link>
                 </div>
 
                 <div className={styles.socialProof}>
@@ -872,9 +875,9 @@ export default function Home() {
               <Link href="/register" className={`${styles.ctaButton} ${styles.ctaPrimary}`}>
                 Get started free →
               </Link>
-              <a href="/about" className={`${styles.ctaButton} ${styles.ctaGhost}`}>
-                Talk to a founder
-              </a>
+              <Link href="/dashboard" className={`${styles.ctaButton} ${styles.ctaGhost}`}>
+                Let&apos;s Start →
+              </Link>
             </div>
 
             <p className={styles.finalCtaMeta}>No credit card required · Cancel anytime · Open API</p>

@@ -5,50 +5,23 @@
  */
 
 import { NextResponse } from "next/server";
-import { auth } from "@/auth";
+import { getActorId } from "@/lib/utils/get-actor-id";
+import { registerSseStream, unregisterSseStream } from "@/lib/sse";
 
-// userId -> Set of AbortControllers for active SSE connections
-const activeStreams = new Map<string, Set<ReadableStreamDefaultController>>();
-
-/**
- * Push an event to all active SSE streams for a user.
- * Can be called from other API routes or the WebSocket server.
- */
-export function pushSseEvent(
-  userId: string,
-  event: string,
-  data: Record<string, unknown>
-) {
-  const controllers = activeStreams.get(userId);
-  if (!controllers || controllers.size === 0) return;
-
-  const payload = `event: ${event}\ndata: ${JSON.stringify(data)}\nid: ${Date.now()}\n\n`;
-  const encoded = new TextEncoder().encode(payload);
-
-  for (const controller of controllers) {
-    try {
-      controller.enqueue(encoded);
-    } catch {
-      // Controller closed, will be cleaned up on stream cancel
-    }
-  }
-}
+// Re-export so existing callers that imported from this path still work
+export { pushSseEvent } from "@/lib/sse";
 
 export async function GET() {
-  const session = await auth();
-  if (!session?.user?.id) {
+  const actor = await getActorId();
+  if (!actor) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const userId = session.user.id;
+  const { id: userId } = actor;
 
   const stream = new ReadableStream({
     start(controller) {
-      // Register this controller
-      if (!activeStreams.has(userId)) {
-        activeStreams.set(userId, new Set());
-      }
-      activeStreams.get(userId)!.add(controller);
+      registerSseStream(userId, controller);
 
       // Send initial connection event
       const connectMsg = `event: connected\ndata: ${JSON.stringify({ userId, timestamp: Date.now() })}\n\n`;
@@ -64,20 +37,10 @@ export async function GET() {
         }
       }, 30_000);
 
-      // Cleanup when stream is cancelled (client disconnects)
-      const cleanup = () => {
+      (controller as unknown as Record<string, () => void>).__cleanup = () => {
         clearInterval(heartbeatInterval);
-        const controllers = activeStreams.get(userId);
-        if (controllers) {
-          controllers.delete(controller);
-          if (controllers.size === 0) {
-            activeStreams.delete(userId);
-          }
-        }
+        unregisterSseStream(userId, controller);
       };
-
-      // Store cleanup function for use in cancel
-      (controller as unknown as Record<string, () => void>).__cleanup = cleanup;
     },
     cancel(controller) {
       const cleanup = (controller as unknown as Record<string, () => void>).__cleanup;

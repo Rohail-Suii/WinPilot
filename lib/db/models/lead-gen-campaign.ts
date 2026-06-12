@@ -12,6 +12,8 @@ export interface ILeadComment {
 
 export interface ILeadGenCampaign extends Document {
   userId: mongoose.Types.ObjectId;
+  isGuest: boolean;
+  expiresAt?: Date;
   name: string;
   keywords: string[];
   /** Handlebars-style templates, e.g. "Hey {authorName}, saw your post about needing a website..." */
@@ -72,11 +74,15 @@ const LeadGenCampaignSchema = new Schema<ILeadGenCampaign>(
     },
     alreadyCommentedUrls: { type: [String], default: [] },
     recentComments: { type: [LeadCommentSchema], default: [] },
+    isGuest: { type: Boolean, default: false, index: true },
+    expiresAt: { type: Date },
   },
   { timestamps: true }
 );
 
 // Indexes
+// Auto-delete guest campaigns after expiresAt
+LeadGenCampaignSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0, sparse: true });
 LeadGenCampaignSchema.index({ userId: 1 });
 LeadGenCampaignSchema.index({ userId: 1, status: 1 });
 

@@ -22,6 +22,7 @@ import {
   Target,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { useGuest } from "@/components/dashboard/dashboard-shell";
 import { useSidebarStore } from "@/lib/hooks/use-stores";
 import { Button } from "@/components/ui/button";
 
@@ -86,6 +87,7 @@ const navItems = [
 export function Sidebar() {
   const pathname = usePathname();
   const { data: session } = useSession();
+  const isGuest = useGuest();
   const { isCollapsed, isMobileOpen, toggle, setMobileOpen } =
     useSidebarStore();
 
@@ -211,48 +213,94 @@ export function Sidebar() {
 
         {/* User profile */}
         <div className="border-t border-[#1A1A1A] p-3">
-          <div className="flex items-center gap-3 rounded-lg px-2 py-2">
-            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[#1A1A1A] border border-[#222222]">
-              {session?.user?.image ? (
-                // eslint-disable-next-line @next/next/no-img-element
-                <img
-                  src={session.user.image}
-                  alt=""
-                  className="h-8 w-8 rounded-full"
-                />
-              ) : (
-                <User className="h-4 w-4 text-[#888888]" />
+          {isGuest ? (
+            <div className="flex flex-col gap-2">
+              <div className="flex items-center gap-3 rounded-lg px-2 py-2">
+                <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[#1A1A1A] border border-[#222222]">
+                  <User className="h-4 w-4 text-[#888888]" />
+                </div>
+                <AnimatePresence>
+                  {!isCollapsed && (
+                    <motion.div
+                      initial={{ opacity: 0, width: 0 }}
+                      animate={{ opacity: 1, width: "auto" }}
+                      exit={{ opacity: 0, width: 0 }}
+                      className="flex-1 overflow-hidden"
+                    >
+                      <p className="truncate text-sm font-medium text-white">Guest</p>
+                      <p className="truncate text-xs text-[#444444]">Data expires in 48h</p>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+              </div>
+              <AnimatePresence>
+                {!isCollapsed && (
+                  <motion.div
+                    initial={{ opacity: 0, height: 0 }}
+                    animate={{ opacity: 1, height: "auto" }}
+                    exit={{ opacity: 0, height: 0 }}
+                    className="overflow-hidden"
+                  >
+                    <Link
+                      href="/login"
+                      className="flex w-full items-center justify-center gap-2 rounded-lg px-3 py-2.5 text-sm font-semibold text-white bg-gradient-to-r from-[#00E5FF] to-[#6366F1] hover:opacity-90 transition-opacity"
+                    >
+                      Sign In to Save Progress
+                    </Link>
+                    <Link
+                      href="/register"
+                      className="flex w-full items-center justify-center mt-1.5 text-xs text-[#888888] hover:text-white transition-colors"
+                    >
+                      Create account →
+                    </Link>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </div>
+          ) : (
+            <div className="flex items-center gap-3 rounded-lg px-2 py-2">
+              <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[#1A1A1A] border border-[#222222]">
+                {session?.user?.image ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img
+                    src={session.user.image}
+                    alt=""
+                    className="h-8 w-8 rounded-full"
+                  />
+                ) : (
+                  <User className="h-4 w-4 text-[#888888]" />
+                )}
+              </div>
+              <AnimatePresence>
+                {!isCollapsed && (
+                  <motion.div
+                    initial={{ opacity: 0, width: 0 }}
+                    animate={{ opacity: 1, width: "auto" }}
+                    exit={{ opacity: 0, width: 0 }}
+                    className="flex-1 overflow-hidden"
+                  >
+                    <p className="truncate text-sm font-medium text-white">
+                      {session?.user?.name || "User"}
+                    </p>
+                    <p className="truncate text-xs text-[#444444]">
+                      {session?.user?.email}
+                    </p>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+              {!isCollapsed && (
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onClick={() => signOut({ callbackUrl: "/login" })}
+                  className="shrink-0"
+                  aria-label="Sign out"
+                >
+                  <LogOut className="h-4 w-4 text-[#444444]" />
+                </Button>
               )}
             </div>
-            <AnimatePresence>
-              {!isCollapsed && (
-                <motion.div
-                  initial={{ opacity: 0, width: 0 }}
-                  animate={{ opacity: 1, width: "auto" }}
-                  exit={{ opacity: 0, width: 0 }}
-                  className="flex-1 overflow-hidden"
-                >
-                  <p className="truncate text-sm font-medium text-white">
-                    {session?.user?.name || "User"}
-                  </p>
-                  <p className="truncate text-xs text-[#444444]">
-                    {session?.user?.email}
-                  </p>
-                </motion.div>
-              )}
-            </AnimatePresence>
-            {!isCollapsed && (
-              <Button
-                variant="ghost"
-                size="icon"
-                onClick={() => signOut({ callbackUrl: "/login" })}
-                className="shrink-0"
-                aria-label="Sign out"
-              >
-                <LogOut className="h-4 w-4 text-[#444444]" />
-              </Button>
-            )}
-          </div>
+          )}
         </div>
       </aside>
     </>

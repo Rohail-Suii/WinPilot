@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
-import { auth } from "@/auth";
 import { getUserAIProvider } from "@/lib/ai/key-manager";
 import { checkApiRateLimit } from "@/lib/utils/rate-limit";
+import { getActorId } from "@/lib/utils/get-actor-id";
 
 /**
  * AI Field Correction API Endpoint
@@ -10,12 +10,13 @@ import { checkApiRateLimit } from "@/lib/utils/rate-limit";
  * and uses AI to generate a corrected field value that will pass validation.
  */
 export async function POST(req: Request) {
-  const session = await auth();
-  if (!session?.user?.id) {
+  const actor = await getActorId();
+  if (!actor) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
+  const { id: userId } = actor;
 
-  const rateLimit = await checkApiRateLimit(session.user.id);
+  const rateLimit = await checkApiRateLimit(userId);
   if (!rateLimit.success) {
     return NextResponse.json({ error: "Too many requests" }, { status: 429 });
   }
@@ -30,7 +31,7 @@ export async function POST(req: Request) {
     );
   }
 
-  const ai = await getUserAIProvider(session.user.id);
+  const ai = await getUserAIProvider(userId);
   if (!ai) {
     return NextResponse.json(
       { error: "No AI API key configured. Add one in Settings → AI Keys." },

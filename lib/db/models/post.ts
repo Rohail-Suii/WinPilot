@@ -5,6 +5,8 @@ export type PostStatus = "draft" | "scheduled" | "posting" | "posted" | "failed"
 
 export interface IPost extends Document {
   userId: mongoose.Types.ObjectId;
+  isGuest: boolean;
+  expiresAt?: Date;
   heroProfileId?: mongoose.Types.ObjectId;
   content: string;
   type: PostType;
@@ -52,10 +54,14 @@ const PostSchema = new Schema<IPost>(
       impressions: { type: Number, default: 0 },
     },
     linkedinPostUrl: String,
+    isGuest: { type: Boolean, default: false, index: true },
+    expiresAt: { type: Date },
   },
   { timestamps: true }
 );
 
+// Auto-delete guest posts after expiresAt
+PostSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0, sparse: true });
 PostSchema.index({ userId: 1, status: 1 });
 PostSchema.index({ userId: 1, scheduledFor: 1 });
 

@@ -19,6 +19,7 @@ export interface IUser extends Document {
     isValid: boolean;
   }[];
   preferredAIProvider?: string;
+  preferredOpenRouterModel?: string;
   settings: {
     timezone: string;
     language: string;
@@ -66,6 +67,10 @@ const UserSchema = new Schema<IUser>(
       },
     ],
     preferredAIProvider: { type: String, default: "" },
+    preferredOpenRouterModel: {
+      type: String,
+      default: "meta-llama/llama-3.3-70b-instruct:free",
+    },
     settings: {
       timezone: { type: String, default: "UTC" },
       language: { type: String, default: "en" },

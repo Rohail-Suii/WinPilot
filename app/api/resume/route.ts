@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { auth } from "@/auth";
+import { getActorId } from "@/lib/utils/get-actor-id";
 import { checkApiRateLimit } from "@/lib/utils/rate-limit";
 import { sanitizeForAI } from "@/lib/utils";
 import {
@@ -12,17 +12,18 @@ import {
 
 export async function GET() {
   try {
-    const session = await auth();
-    if (!session?.user?.id) {
+    const actor = await getActorId();
+    if (!actor) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
+    const { id: userId } = actor;
 
-    const rateLimit = await checkApiRateLimit(session.user.id);
+    const rateLimit = await checkApiRateLimit(userId);
     if (!rateLimit.success) {
       return NextResponse.json({ error: "Too many requests" }, { status: 429 });
     }
 
-    const resumes = await getUserResumes(session.user.id);
+    const resumes = await getUserResumes(userId);
     return NextResponse.json({ resumes });
   } catch (error) {
     console.error("[Resume] Error:", error);
@@ -32,12 +33,13 @@ export async function GET() {
 
 export async function POST(req: Request) {
   try {
-    const session = await auth();
-    if (!session?.user?.id) {
+    const actor = await getActorId();
+    if (!actor) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
+    const { id: userId } = actor;
 
-    const rateLimit = await checkApiRateLimit(session.user.id);
+    const rateLimit = await checkApiRateLimit(userId);
     if (!rateLimit.success) {
       return NextResponse.json({ error: "Too many requests" }, { status: 429 });
     }
@@ -64,7 +66,7 @@ export async function POST(req: Request) {
       const sanitizedRawText = sanitizeForAI(rawText);
 
       try {
-        const parsed = await parseResumeWithAI(session.user.id, sanitizedRawText);
+        const parsed = await parseResumeWithAI(userId, sanitizedRawText);
         return NextResponse.json({ parsed, rawText, name: name || "My Resume" }, { status: 200 });
       } catch (error) {
         console.error("[Resume] Failed to parse resume:", error);
@@ -85,7 +87,7 @@ export async function POST(req: Request) {
 
       try {
         const resume = await saveResume(
-          session.user.id,
+          userId,
           name,
           parsed,
           originalText || "",
@@ -110,7 +112,7 @@ export async function POST(req: Request) {
 
       try {
         const resume = await saveResume(
-          session.user.id,
+          userId,
           name,
           { contactInfo: contactInfo || {}, summary: summary || "", experience: experience || [], education: education || [], skills: skills || [], certifications: certifications || [], projects: projects || [] },
           "",
@@ -133,10 +135,11 @@ export async function POST(req: Request) {
 
 export async function PATCH(req: Request) {
   try {
-    const session = await auth();
-    if (!session?.user?.id) {
+    const actor = await getActorId();
+    if (!actor) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
+    const { id: userId } = actor;
 
     const { searchParams } = new URL(req.url);
     const id = searchParams.get("id");
@@ -155,7 +158,7 @@ export async function PATCH(req: Request) {
     if (Object.keys(updates).length === 0) {
       return NextResponse.json({ error: "No valid fields to update" }, { status: 400 });
     }
-    const resume = await updateResume(session.user.id, id, updates);
+    const resume = await updateResume(userId, id, updates);
 
     if (!resume) {
       return NextResponse.json({ error: "Resume not found" }, { status: 404 });
@@ -170,10 +173,11 @@ export async function PATCH(req: Request) {
 
 export async function DELETE(req: Request) {
   try {
-    const session = await auth();
-    if (!session?.user?.id) {
+    const actor = await getActorId();
+    if (!actor) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
+    const { id: userId } = actor;
 
     const { searchParams } = new URL(req.url);
     const id = searchParams.get("id");
@@ -181,7 +185,7 @@ export async function DELETE(req: Request) {
       return NextResponse.json({ error: "Resume ID is required" }, { status: 400 });
     }
 
-    await deleteResume(session.user.id, id);
+    await deleteResume(userId, id);
     return NextResponse.json({ success: true });
   } catch (error) {
     console.error("[Resume] Error:", error);

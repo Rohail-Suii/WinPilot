@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { auth } from "@/auth";
+import { getActorId } from "@/lib/utils/get-actor-id";
 import { getUserAIProvider } from "@/lib/ai/key-manager";
 import { checkApiRateLimit } from "@/lib/utils/rate-limit";
 import {
@@ -11,14 +11,33 @@ import {
   buildResumeTailoringPrompt,
   buildResumeParsingPrompt,
 } from "@/lib/ai/prompts";
+import { buildAIMetadata, saveAIUsageLog } from "@/lib/ai/usage-history";
+
+async function responseWithAI(params: {
+  content: unknown;
+  ai: Awaited<ReturnType<typeof getUserAIProvider>>;
+  userId: string;
+  isGuest: boolean;
+}) {
+  const metadata = buildAIMetadata(params.ai);
+  await saveAIUsageLog({
+    userId: params.userId,
+    isGuest: params.isGuest,
+    endpoint: "/api/ai/generate",
+    metadata,
+  });
+
+  return NextResponse.json({ content: params.content, ai: metadata });
+}
 
 export async function POST(req: Request) {
-  const session = await auth();
-  if (!session?.user?.id) {
+  const actor = await getActorId();
+  if (!actor) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
+  const { id: userId, isGuest } = actor;
 
-  const rateLimit = await checkApiRateLimit(session.user.id);
+  const rateLimit = await checkApiRateLimit(userId);
   if (!rateLimit.success) {
     return NextResponse.json({ error: "Too many requests" }, { status: 429 });
   }
@@ -29,7 +48,7 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "Type is required" }, { status: 400 });
   }
 
-  const ai = await getUserAIProvider(session.user.id);
+  const ai = await getUserAIProvider(userId);
   if (!ai) {
     return NextResponse.json(
       { error: "No AI API key configured. Add one in Settings → AI Keys." },
@@ -52,7 +71,7 @@ export async function POST(req: Request) {
           contentPillars || []
         );
         const result = await ai.generateJSON(messages);
-        return NextResponse.json({ content: result });
+        return responseWithAI({ content: result, ai, userId, isGuest });
       }
 
       case "linkedin-comment": {
@@ -62,7 +81,7 @@ export async function POST(req: Request) {
         }
         const messages = buildLinkedInCommentPrompt(postContent, niche || "general", voiceTone || "professional");
         const result = await ai.generateJSON(messages);
-        return NextResponse.json({ content: result });
+        return responseWithAI({ content: result, ai, userId, isGuest });
       }
 
       case "form-answer": {
@@ -72,7 +91,7 @@ export async function POST(req: Request) {
         }
         const messages = buildFormAnswerPrompt(question, resumeContext || "", userPreferences);
         const result = await ai.generateJSON(messages);
-        return NextResponse.json({ content: result });
+        return responseWithAI({ content: result, ai, userId, isGuest });
       }
 
       case "outreach-message": {
@@ -85,7 +104,7 @@ export async function POST(req: Request) {
           value || "professional expertise"
         );
         const result = await ai.generateJSON(messages);
-        return NextResponse.json({ content: result });
+        return responseWithAI({ content: result, ai, userId, isGuest });
       }
 
       case "job-match": {
@@ -95,7 +114,7 @@ export async function POST(req: Request) {
         }
         const messages = buildJobMatchScoringPrompt(resumeText, jobDescription);
         const result = await ai.generateJSON(messages);
-        return NextResponse.json({ content: result });
+        return responseWithAI({ content: result, ai, userId, isGuest });
       }
 
       case "resume-tailor": {
@@ -105,7 +124,7 @@ export async function POST(req: Request) {
         }
         const messages = buildResumeTailoringPrompt(resumeData, jobDescription, customPrompt);
         const result = await ai.generateJSON(messages);
-        return NextResponse.json({ content: result });
+        return responseWithAI({ content: result, ai, userId, isGuest });
       }
 
       case "resume-parse": {
@@ -115,7 +134,7 @@ export async function POST(req: Request) {
         }
         const messages = buildResumeParsingPrompt(rawText);
         const result = await ai.generateJSON(messages);
-        return NextResponse.json({ content: result });
+        return responseWithAI({ content: result, ai, userId, isGuest });
       }
 
       default: {
@@ -128,7 +147,7 @@ export async function POST(req: Request) {
           { role: "system", content: "You are a helpful AI assistant for LinkedIn automation." },
           { role: "user", content: prompt },
         ]);
-        return NextResponse.json({ content: result });
+        return responseWithAI({ content: result, ai, userId, isGuest });
       }
     }
   } catch (error) {

@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { auth } from "@/auth";
+import { getActorId } from "@/lib/utils/get-actor-id";
 import { decrypt } from "@/lib/utils/encryption";
 import connectDB from "@/lib/db/connection";
 import User from "@/lib/db/models/user";
@@ -25,13 +25,18 @@ export interface ProviderCreditsResult {
 
 export async function GET() {
   try {
-    const session = await auth();
-    if (!session?.user?.id) {
+    const actor = await getActorId();
+    if (!actor) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+    const { id: userId, isGuest } = actor;
+
+    if (isGuest) {
+      return NextResponse.json({ credits: [] });
     }
 
     await connectDB();
-    const user = await User.findById(session.user.id).lean();
+    const user = await User.findById(userId).lean();
 
     if (!user?.aiApiKeys?.length) {
       return NextResponse.json({ credits: [] });

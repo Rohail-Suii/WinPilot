@@ -11,8 +11,10 @@ import {
   ChevronDown,
   ChevronUp,
   ArrowRight,
+  UserPlus,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { useGuest } from "@/components/dashboard/dashboard-shell";
 
 const steps = [
   {
@@ -48,6 +50,7 @@ const steps = [
 export function GettingStarted() {
   const [isOpen, setIsOpen] = useState(true);
   const [completedSteps, setCompletedSteps] = useState(new Set<number>());
+  const isGuest = useGuest();
 
   useEffect(() => {
     Promise.all([
@@ -103,6 +106,21 @@ export function GettingStarted() {
       </div>
       {isOpen && (
         <div className="px-6 pb-6">
+          {isGuest && (
+            <Link
+              href="/register"
+              className="flex items-center gap-3 rounded-lg px-4 py-3 mb-2 bg-gradient-to-r from-[#00E5FF]/10 to-[#6366F1]/10 border border-[#00E5FF]/20 hover:border-[#00E5FF]/50 transition-all duration-200 group"
+            >
+              <div className="shrink-0 flex h-5 w-5 items-center justify-center rounded-full border border-[#00E5FF]/40 group-hover:border-[#00E5FF]">
+                <UserPlus className="h-3 w-3 text-[#00E5FF]" />
+              </div>
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-semibold text-[#00E5FF]">Create a free account to keep your progress</p>
+                <p className="text-xs text-[#555555] mt-0.5">Guest data expires in 48h · sign up and we&apos;ll save everything</p>
+              </div>
+              <ArrowRight className="h-4 w-4 shrink-0 text-[#00E5FF]/50 group-hover:text-[#00E5FF] transition-colors" />
+            </Link>
+          )}
           <div className="space-y-2">
             {steps.map((step, index) => {
               const isDone = completedSteps.has(step.id);

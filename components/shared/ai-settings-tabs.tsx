@@ -68,6 +68,33 @@ export interface ApiKeyInfo {
   maskedKey: string;
 }
 
+export interface OpenRouterModelOption {
+  id: string;
+  name: string;
+  description?: string;
+  contextLength?: number;
+}
+
+export interface AIUsageHistoryItem {
+  id: string;
+  provider: string;
+  model: string;
+  endpoint: string;
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
+  costUsd: number;
+  createdAt: string;
+}
+
+export interface AIUsageSummaryItem {
+  provider: string;
+  model: string;
+  calls: number;
+  totalTokens: number;
+  totalCostUsd: number;
+}
+
 export interface AutomationSettings {
   timezone: string;
   language: string;
@@ -251,6 +278,8 @@ export function AIKeysTab({
   onRefresh,
   preferredProvider,
   setPreferredProvider,
+  preferredOpenRouterModel,
+  setPreferredOpenRouterModel,
 }: {
   apiKeys: ApiKeyInfo[];
   loading: boolean;
@@ -259,6 +288,8 @@ export function AIKeysTab({
   onRefresh: () => void;
   preferredProvider: string;
   setPreferredProvider: (p: string) => void;
+  preferredOpenRouterModel: string;
+  setPreferredOpenRouterModel: (model: string) => void;
 }) {
   const [addingKey, setAddingKey] = useState(false);
   const [deletingProvider, setDeletingProvider] = useState<string | null>(null);
@@ -266,11 +297,84 @@ export function AIKeysTab({
   const [credits, setCredits] = useState<ProviderCreditsResult[]>([]);
   const [fetchingCredits, setFetchingCredits] = useState(false);
   const [savingPreferred, setSavingPreferred] = useState(false);
+  const [openRouterModels, setOpenRouterModels] = useState<OpenRouterModelOption[]>([]);
+  const [loadingOpenRouterModels, setLoadingOpenRouterModels] = useState(false);
+  const [savingOpenRouterModel, setSavingOpenRouterModel] = useState(false);
+  const [selectedOpenRouterModel, setSelectedOpenRouterModel] = useState("");
+  const [usageHistory, setUsageHistory] = useState<AIUsageHistoryItem[]>([]);
+  const [usageSummary, setUsageSummary] = useState<AIUsageSummaryItem[]>([]);
+  const [loadingUsageHistory, setLoadingUsageHistory] = useState(false);
   const { register, handleSubmit, reset, setValue, watch } = useForm({
     defaultValues: { provider: "gemini", apiKey: "" },
   });
   const watchedProvider = watch("provider");
   const selectedProviderInfo = providers.find((p) => p.value === watchedProvider);
+  const hasValidOpenRouterKey = apiKeys.some((k) => k.provider === "openrouter" && k.isValid);
+
+  const fetchOpenRouterModels = useCallback(async () => {
+    if (!hasValidOpenRouterKey) {
+      setOpenRouterModels([]);
+      return;
+    }
+
+    setLoadingOpenRouterModels(true);
+    try {
+      const res = await fetch("/api/settings/api-keys/openrouter-models");
+      const data = await res.json();
+      if (res.ok) {
+        setOpenRouterModels(data.models ?? []);
+        const savedModel = data.preferredOpenRouterModel || preferredOpenRouterModel;
+        setSelectedOpenRouterModel(savedModel);
+        setPreferredOpenRouterModel(savedModel);
+      } else {
+        toast.error(data.error || "Failed to fetch OpenRouter models");
+      }
+    } catch {
+      toast.error("Network error while fetching OpenRouter models");
+    }
+    setLoadingOpenRouterModels(false);
+  }, [hasValidOpenRouterKey, preferredOpenRouterModel, setPreferredOpenRouterModel]);
+
+  useEffect(() => {
+    if (hasValidOpenRouterKey) {
+      fetchOpenRouterModels();
+    } else {
+      setOpenRouterModels([]);
+      setSelectedOpenRouterModel("");
+    }
+  }, [hasValidOpenRouterKey, fetchOpenRouterModels]);
+
+  useEffect(() => {
+    if (preferredOpenRouterModel) {
+      setSelectedOpenRouterModel(preferredOpenRouterModel);
+    }
+  }, [preferredOpenRouterModel]);
+
+  const saveOpenRouterModel = async () => {
+    if (!selectedOpenRouterModel) {
+      toast.error("Select an OpenRouter model first");
+      return;
+    }
+
+    setSavingOpenRouterModel(true);
+    try {
+      const res = await fetch("/api/settings/api-keys", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ preferredOpenRouterModel: selectedOpenRouterModel }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setPreferredOpenRouterModel(selectedOpenRouterModel);
+        toast.success("OpenRouter model updated for testing");
+      } else {
+        toast.error(data.error || "Failed to save OpenRouter model");
+      }
+    } catch {
+      toast.error("Network error while saving model");
+    }
+    setSavingOpenRouterModel(false);
+  };
 
   const fetchCredits = async () => {
     setFetchingCredits(true);
@@ -365,6 +469,29 @@ export function AIKeysTab({
     setSavingPreferred(false);
   };
 
+  const fetchUsageHistory = useCallback(async () => {
+    setLoadingUsageHistory(true);
+    try {
+      const res = await fetch("/api/settings/ai-usage-history");
+      const data = await res.json();
+      if (res.ok) {
+        setUsageHistory(data.history ?? []);
+        setUsageSummary(data.summary ?? []);
+      } else {
+        toast.error(data.error || "Failed to fetch AI usage history");
+      }
+    } catch {
+      toast.error("Network error while fetching AI usage history");
+    }
+    setLoadingUsageHistory(false);
+  }, []);
+
+  useEffect(() => {
+    if (apiKeys.length > 0) {
+      fetchUsageHistory();
+    }
+  }, [apiKeys.length, fetchUsageHistory]);
+
   return (
     <div className="space-y-6">
       {/* ── API Keys Card ── */}
@@ -403,6 +530,62 @@ export function AIKeysTab({
           </div>
         </CardHeader>
         <CardContent>
+          {hasValidOpenRouterKey && (
+            <div className="mb-4 rounded-lg border border-white/10 bg-white/[0.02] p-3 space-y-2">
+              <div className="flex items-center justify-between gap-2">
+                <div>
+                  <p className="text-sm font-medium text-white">OpenRouter Test Model</p>
+                  <p className="text-xs text-white/40">Switch free models anytime for testing.</p>
+                </div>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={fetchOpenRouterModels}
+                  disabled={loadingOpenRouterModels}
+                  title="Refresh free model list"
+                >
+                  {loadingOpenRouterModels ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <RefreshCw className="h-4 w-4" />
+                  )}
+                </Button>
+              </div>
+              <div className="flex flex-col sm:flex-row gap-2">
+                <Select
+                  value={selectedOpenRouterModel}
+                  onChange={(e) => setSelectedOpenRouterModel(e.target.value)}
+                  className="flex-1"
+                >
+                  <option value="">Select a model</option>
+                  {openRouterModels.map((model) => (
+                    <option key={model.id} value={model.id}>
+                      {model.name} ({model.id})
+                    </option>
+                  ))}
+                </Select>
+                <Button
+                  onClick={saveOpenRouterModel}
+                  disabled={savingOpenRouterModel || !selectedOpenRouterModel}
+                >
+                  {savingOpenRouterModel ? (
+                    <>
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                      Saving...
+                    </>
+                  ) : (
+                    "Save Model"
+                  )}
+                </Button>
+              </div>
+              {preferredOpenRouterModel && (
+                <p className="text-xs text-white/40">
+                  Current: <span className="text-white/70 font-mono">{preferredOpenRouterModel}</span>
+                </p>
+              )}
+            </div>
+          )}
+
           {loading ? (
             <div className="animate-pulse space-y-3">
               {[1, 2].map((i) => (
@@ -521,6 +704,74 @@ export function AIKeysTab({
                   </div>
                 );
               })}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <div className="flex items-center justify-between">
+            <div>
+              <CardTitle>AI Usage History</CardTitle>
+              <CardDescription>
+                Compare test models by calls, tokens, and total cost.
+              </CardDescription>
+            </div>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={fetchUsageHistory}
+              disabled={loadingUsageHistory}
+            >
+              {loadingUsageHistory ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <RefreshCw className="h-4 w-4" />
+              )}
+              Refresh
+            </Button>
+          </div>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          {usageSummary.length === 0 ? (
+            <p className="text-sm text-white/40">
+              No AI usage yet. Run a few model tests and refresh to compare.
+            </p>
+          ) : (
+            <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+              {usageSummary.map((row) => (
+                <div key={`${row.provider}-${row.model}`} className="rounded-lg border border-white/10 bg-white/[0.02] p-3">
+                  <p className="text-xs text-white/50 uppercase tracking-wider">{row.provider}</p>
+                  <p className="text-sm text-white font-medium truncate" title={row.model}>{row.model}</p>
+                  <p className="text-xs text-white/40 mt-1">Calls: {row.calls}</p>
+                  <p className="text-xs text-white/40">Tokens: {row.totalTokens.toLocaleString()}</p>
+                  <p className="text-xs text-white/40">Cost: ${row.totalCostUsd.toFixed(6)}</p>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {usageHistory.length > 0 && (
+            <div className="rounded-lg border border-white/10 overflow-hidden">
+              <div className="max-h-72 overflow-auto divide-y divide-white/10">
+                {usageHistory.map((row) => (
+                  <div key={row.id} className="p-3 bg-white/[0.02]">
+                    <div className="flex items-center justify-between gap-2">
+                      <p className="text-xs text-white/70">
+                        {row.provider} · <span className="font-mono">{row.model}</span>
+                      </p>
+                      <p className="text-xs text-white/40">
+                        {new Date(row.createdAt).toLocaleString()}
+                      </p>
+                    </div>
+                    <p className="text-xs text-white/40 mt-1">{row.endpoint}</p>
+                    <p className="text-xs text-white/50 mt-1">
+                      prompt {row.promptTokens.toLocaleString()} · completion {row.completionTokens.toLocaleString()} · total {row.totalTokens.toLocaleString()} · ${row.costUsd.toFixed(6)}
+                    </p>
+                  </div>
+                ))}
+              </div>
             </div>
           )}
         </CardContent>

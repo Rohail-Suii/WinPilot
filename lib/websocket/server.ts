@@ -190,6 +190,14 @@ export function initSocketServer(httpServer: HTTPServer): SocketIOServer {
       broadcastToDashboard(userId, data.event, data.payload);
     });
 
+    // Extension profile scrape error — relay to dashboard so the user sees it
+    socket.on("PROFILE_SCRAPE_ERROR", (data: { error?: string }) => {
+      if (!userId) return;
+      broadcastToDashboard(userId, "task:error", {
+        message: data.error || "Profile scrape failed. Please try again.",
+      });
+    });
+
     socket.on("HEARTBEAT", () => {
       if (userId) {
         lastHeartbeat.set(userId, Date.now());
@@ -418,16 +426,16 @@ export function sendToExtension(userId: string, action: Record<string, unknown>)
 }
 
 /**
- * Check if a user's extension is connected (with heartbeat freshness check)
+ * Check if a user's extension is connected.
+ *
+ * We treat an active extension socket as connected and do not hard-fail on
+ * heartbeat freshness here. In MV3 service workers, heartbeat timers can pause
+ * during background suspension, which caused false "offline" states in the
+ * dashboard even when the extension was still connected.
  */
 export function isExtensionConnected(userId: string): boolean {
   const sockets = extensionSockets.get(userId);
   if (!sockets || sockets.size === 0) return false;
-
-  const lastBeat = lastHeartbeat.get(userId);
-  if (lastBeat && Date.now() - lastBeat > HEARTBEAT_TIMEOUT) {
-    return false;
-  }
 
   return true;
 }

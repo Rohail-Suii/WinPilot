@@ -1,4 +1,10 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 48 48">
-    <rect width="48" height="48" rx="7.199999999999999" fill="#3B82F6"/>
-    <text x="50%" y="55%" text-anchor="middle" dominant-baseline="middle" fill="white" font-size="24" font-family="system-ui" font-weight="bold">⚡</text>
-  </svg>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" width="48" height="48">
+  <defs>
+    <linearGradient id="g48" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#00E5FF"/>
+      <stop offset="100%" stop-color="#6366F1"/>
+    </linearGradient>
+  </defs>
+  <rect width="48" height="48" rx="7" ry="7" fill="url(#g48)"/>
+  <path d="M26,8L12,26H22L21,40L36,22H26Z" fill="white"/>
+</svg>

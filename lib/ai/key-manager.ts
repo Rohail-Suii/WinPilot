@@ -8,7 +8,15 @@ import { encrypt, decrypt } from "@/lib/utils/encryption";
 import connectDB from "@/lib/db/connection";
 import User from "@/lib/db/models/user";
 
-export function createAIProvider(provider: AIProviderName, apiKey: string): AIProvider | null {
+interface CreateAIProviderOptions {
+  openRouterModel?: string;
+}
+
+export function createAIProvider(
+  provider: AIProviderName,
+  apiKey: string,
+  options?: CreateAIProviderOptions
+): AIProvider | null {
   switch (provider) {
     case "gemini":
       return new GeminiProvider(apiKey);
@@ -19,7 +27,7 @@ export function createAIProvider(provider: AIProviderName, apiKey: string): AIPr
     case "anthropic":
       return new AnthropicProvider(apiKey);
     case "openrouter":
-      return new OpenRouterProvider(apiKey);
+      return new OpenRouterProvider(apiKey, options?.openRouterModel);
     default:
       return null;
   }
@@ -83,6 +91,8 @@ export async function getUserAIProvider(userId: string): Promise<AIProvider | nu
 
   // Respect user's preferred provider if set
   const preferred = (user as unknown as { preferredAIProvider?: string }).preferredAIProvider;
+  const preferredOpenRouterModel = (user as unknown as { preferredOpenRouterModel?: string })
+    .preferredOpenRouterModel;
   let keyEntry = preferred
     ? user.aiApiKeys.find((k) => k.provider === preferred && k.isValid)
     : null;
@@ -94,7 +104,9 @@ export async function getUserAIProvider(userId: string): Promise<AIProvider | nu
   if (!keyEntry) return null;
 
   const decryptedKey = decrypt(keyEntry.encryptedKey);
-  const provider = createAIProvider(keyEntry.provider as AIProviderName, decryptedKey);
+  const provider = createAIProvider(keyEntry.provider as AIProviderName, decryptedKey, {
+    openRouterModel: preferredOpenRouterModel,
+  });
   return provider;
 }
 

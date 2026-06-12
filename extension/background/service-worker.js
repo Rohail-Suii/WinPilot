@@ -1,11 +1,11 @@
-// LinkedBoost Background Service Worker
+// WinPilot Background Service Worker
 // Handles WebSocket connection to the web app, relays commands to content scripts,
 // and drives the full job automation loop.
 
 import { io } from "./socket.io.esm.min.js";
 
-const DEFAULT_WS_URL = "ws://localhost:3001";
-const DEFAULT_API_URL = "http://localhost:3000";
+const DEFAULT_WS_URL = "wss://winpilot.tech";
+const DEFAULT_API_URL = "https://winpilot.tech";
 const HEARTBEAT_INTERVAL = 30000;
 const RECONNECT_BASE_DELAY = 1000;
 const MAX_RECONNECT_DELAY = 30000;
@@ -51,7 +51,7 @@ function connect() {
     });
 
     socket.on("connect", () => {
-      console.log("[LinkedBoost] WebSocket connected to", normalizeWsUrl(wsUrl));
+      console.log("[WinPilot] WebSocket connected to", normalizeWsUrl(wsUrl));
       reconnectAttempts = 0;
       if (reconnectTimer) {
         clearTimeout(reconnectTimer);
@@ -61,10 +61,10 @@ function connect() {
       startHeartbeat();
 
       if (authToken) {
-        console.log("[LinkedBoost] Authenticating with token:", authToken.substring(0, 8) + "...");
+        console.log("[WinPilot] Authenticating with token:", authToken.substring(0, 8) + "...");
         socket.emit("AUTH", { token: authToken });
       } else {
-        console.warn("[LinkedBoost] No authToken set — cannot authenticate");
+        console.warn("[WinPilot] No authToken set — cannot authenticate");
       }
 
       while (commandQueue.length > 0) {
@@ -94,20 +94,20 @@ function connect() {
     });
 
     socket.on("disconnect", () => {
-      console.log("[LinkedBoost] WebSocket disconnected");
+      console.log("[WinPilot] WebSocket disconnected");
       updateConnectionStatus(false);
       stopHeartbeat();
       scheduleReconnect();
     });
 
     socket.on("connect_error", (error) => {
-      console.error("[LinkedBoost] WebSocket error:", error);
+      console.error("[WinPilot] WebSocket error:", error);
       updateConnectionStatus(false);
       stopHeartbeat();
       scheduleReconnect();
     });
   } catch (e) {
-    console.error("[LinkedBoost] Failed to create WebSocket:", e);
+    console.error("[WinPilot] Failed to create WebSocket:", e);
     scheduleReconnect();
   }
 }
@@ -141,7 +141,7 @@ function stopHeartbeat() {
 // ─── Message Handling ───────────────────────────────────
 
 function handleServerMessage(message) {
-  console.log("[LinkedBoost] Server message received:", message.type, message.searchId ? `searchId=${message.searchId}` : "");
+  console.log("[WinPilot] Server message received:", message.type, message.searchId ? `searchId=${message.searchId}` : "");
   switch (message.type) {
     case "EXECUTE_ACTION":
       forwardToContentScript(message);
@@ -158,14 +158,17 @@ function handleServerMessage(message) {
     case "STOP_LEAD_GEN":
       stopLeadGen();
       break;
+    case "START_PROFILE_SCRAPE":
+      startProfileScrape();
+      break;
     case "SYNC_CONFIG":
       chrome.storage.local.set({ config: message.data });
       break;
     case "AUTH_SUCCESS":
-      console.log("[LinkedBoost] Authenticated successfully");
+      console.log("[WinPilot] Authenticated successfully");
       break;
     case "AUTH_FAILURE":
-      console.error("[LinkedBoost] Authentication failed");
+      console.error("[WinPilot] Authentication failed");
       authToken = null;
       chrome.storage.local.remove("authToken");
       break;
@@ -201,7 +204,7 @@ function ensureLinkedInTab() {
 function sendToContentScript(tabId, message) {
   return new Promise((resolve, reject) => {
     const cmd = message.command || message.type;
-    console.log(`[LinkedBoost] -> Content script (tab ${tabId}):`, cmd);
+    console.log(`[WinPilot] -> Content script (tab ${tabId}):`, cmd);
     emitLog("info", "content-script", `-> ${cmd}`, `tab ${tabId}`);
     chrome.tabs.sendMessage(tabId, message, (response) => {
       if (chrome.runtime.lastError) {
@@ -215,7 +218,7 @@ function sendToContentScript(tabId, message) {
 
         if (isExpectedNavigationClose) {
           console.warn(
-            `[LinkedBoost] <- Content script channel closed during ${message.command}; treating as navigation success`
+            `[WinPilot] <- Content script channel closed during ${message.command}; treating as navigation success`
           );
           emitLog("warn", "content-script", `<- Channel closed during ${message.command}; treating as navigation success`);
 
@@ -244,11 +247,11 @@ function sendToContentScript(tabId, message) {
           return;
         }
 
-        console.error(`[LinkedBoost] <- Content script error (tab ${tabId}):`, errMessage);
+        console.error(`[WinPilot] <- Content script error (tab ${tabId}):`, errMessage);
         emitLog("error", "content-script", `<- Error (tab ${tabId}): ${errMessage}`);
         reject(new Error(errMessage));
       } else {
-        console.log(`[LinkedBoost] <- Content script (tab ${tabId}): status=${response?.status}`);
+        console.log(`[WinPilot] <- Content script (tab ${tabId}): status=${response?.status}`);
         emitLog("info", "content-script", `<- status=${response?.status}`, `tab ${tabId}, cmd=${cmd}`);
         resolve(response);
       }
@@ -273,7 +276,7 @@ async function forwardToContentScript(message) {
       });
     }
   } catch (e) {
-    console.error("[LinkedBoost] Failed to forward to content script:", e);
+    console.error("[WinPilot] Failed to forward to content script:", e);
   }
 }
 
@@ -298,7 +301,7 @@ function sendToServer(message) {
 
 async function apiCall(endpoint, body) {
   const url = `${apiUrl}${endpoint}`;
-  console.log(`[LinkedBoost API] >> ${url}`, { authToken: authToken ? `${authToken.substring(0, 8)}...` : "NONE", body });
+  console.log(`[WinPilot API] >> ${url}`, { authToken: authToken ? `${authToken.substring(0, 8)}...` : "NONE", body });
   emitLog("info", "api", `>> ${endpoint}`);
 
   let res;
@@ -312,18 +315,18 @@ async function apiCall(endpoint, body) {
       body: JSON.stringify(body),
     });
   } catch (fetchErr) {
-    console.error(`[LinkedBoost API] Network error calling ${url}:`, fetchErr.message);
-    console.error(`[LinkedBoost API] Check: Is the server running at ${apiUrl}? Is the extension authorized for this host?`);
+    console.error(`[WinPilot API] Network error calling ${url}:`, fetchErr.message);
+    console.error(`[WinPilot API] Check: Is the server running at ${apiUrl}? Is the extension authorized for this host?`);
     emitLog("error", "api", `Network error: ${fetchErr.message}`, url);
     throw new Error(`Network error: ${fetchErr.message} (URL: ${url})`);
   }
 
-  console.log(`[LinkedBoost API] << ${url} status=${res.status}`);
+  console.log(`[WinPilot API] << ${url} status=${res.status}`);
   emitLog("info", "api", `<< ${endpoint} status=${res.status}`);
 
   if (!res.ok) {
     const err = await res.json().catch(() => ({ error: res.statusText }));
-    console.error(`[LinkedBoost API] Error response from ${url}:`, err);
+    console.error(`[WinPilot API] Error response from ${url}:`, err);
 
     if (err?.code === "GEMINI_QUOTA_EXCEEDED" || err?.ai?.provider === "gemini") {
       const retrySeconds = Number(err?.ai?.retryAfterSeconds || 0);
@@ -363,7 +366,7 @@ async function apiCall(endpoint, body) {
   }
 
   const data = await res.json();
-  console.log(`[LinkedBoost API] << ${url} response:`, JSON.stringify(data).substring(0, 200));
+  console.log(`[WinPilot API] << ${url} response:`, JSON.stringify(data).substring(0, 200));
   return data;
 }
 
@@ -395,7 +398,7 @@ async function checkLinkedInSession(tabId) {
     });
     return result?.data || null;
   } catch (err) {
-    console.warn("[LinkedBoost] Session check failed:", err.message);
+    console.warn("[WinPilot] Session check failed:", err.message);
     return null;
   }
 }
@@ -826,7 +829,7 @@ async function ensureContentScriptReady(tabId, maxRetries = 3) {
       });
       if (response?.status === "success") return true;
     } catch (err) {
-      console.warn(`[LinkedBoost] Content script not ready (attempt ${attempt + 1}): ${err.message}`);
+      console.warn(`[WinPilot] Content script not ready (attempt ${attempt + 1}): ${err.message}`);
       if (attempt < maxRetries - 1) {
         // Try to inject the content script manually
         try {
@@ -835,7 +838,7 @@ async function ensureContentScriptReady(tabId, maxRetries = 3) {
             files: ["content.js"],
           });
         } catch (injectErr) {
-          console.warn(`[LinkedBoost] Could not inject content script: ${injectErr.message}`);
+          console.warn(`[WinPilot] Could not inject content script: ${injectErr.message}`);
         }
         await new Promise((r) => setTimeout(r, 2000 * (attempt + 1)));
       }
@@ -899,12 +902,12 @@ async function startAutomation(searchId, options = {}) {
   const normalizedOptions = normalizeAutomationOptions(options);
   let useAI = normalizedOptions.useAI;
 
-  console.log(`[LinkedBoost] ====== STARTING AUTOMATION ======`);
-  console.log(`[LinkedBoost] searchId: ${searchId}`);
-  console.log(`[LinkedBoost] apiUrl: ${apiUrl}`);
-  console.log(`[LinkedBoost] authToken: ${authToken ? `${authToken.substring(0, 8)}...` : "NOT SET"}`);
-  console.log(`[LinkedBoost] wsUrl: ${wsUrl}`);
-  console.log(`[LinkedBoost] useAI: ${useAI}`);
+  console.log(`[WinPilot] ====== STARTING AUTOMATION ======`);
+  console.log(`[WinPilot] searchId: ${searchId}`);
+  console.log(`[WinPilot] apiUrl: ${apiUrl}`);
+  console.log(`[WinPilot] authToken: ${authToken ? `${authToken.substring(0, 8)}...` : "NOT SET"}`);
+  console.log(`[WinPilot] wsUrl: ${wsUrl}`);
+  console.log(`[WinPilot] useAI: ${useAI}`);
   emitLog("info", "system", "====== STARTING AUTOMATION ======", `searchId=${searchId}, useAI=${useAI}`);
 
   automationRunning = true;
@@ -921,10 +924,10 @@ async function startAutomation(searchId, options = {}) {
 
   try {
     // Step 1: Get search config and navigate to LinkedIn Jobs
-    console.log(`[LinkedBoost] Step 1: Fetching search configuration...`);
+    console.log(`[WinPilot] Step 1: Fetching search configuration...`);
     reportProgress("task:progress", { message: "Fetching search configuration..." });
     const startData = await apiCall(`/api/jobs/automate?step=start`, { searchId });
-    console.log(`[LinkedBoost] Step 1 result:`, JSON.stringify(startData).substring(0, 300));
+    console.log(`[WinPilot] Step 1 result:`, JSON.stringify(startData).substring(0, 300));
     emitLog("info", "extension", "Search configuration received", `URL: ${startData.url || "none"}, remaining: ${startData.remaining || "?"}`);
 
     if (!startData.url) {
@@ -936,14 +939,14 @@ async function startAutomation(searchId, options = {}) {
     });
 
     // Navigate to search URL
-    console.log(`[LinkedBoost] Step 1b: Navigating to ${startData.url}`);
+    console.log(`[WinPilot] Step 1b: Navigating to ${startData.url}`);
     const tab = await ensureLinkedInTab();
-    console.log(`[LinkedBoost] Got LinkedIn tab: id=${tab.id}, url=${tab.url}`);
+    console.log(`[WinPilot] Got LinkedIn tab: id=${tab.id}, url=${tab.url}`);
     await chrome.tabs.update(tab.id, { url: startData.url, active: true });
     await waitForTabLoad(tab.id);
     await randomDelay(4000, 7000); // Longer initial load wait
     const csReady = await ensureContentScriptReady(tab.id);
-    console.log(`[LinkedBoost] Content script ready: ${csReady}`);
+    console.log(`[WinPilot] Content script ready: ${csReady}`);
 
     // Session health check before starting
     if (!(await ensureSessionHealthy(tab.id))) {
@@ -985,7 +988,7 @@ async function startAutomation(searchId, options = {}) {
 
       // Navigate to the correct page (only if pageNum > 1 or first time)
       if (pageNum > 1) {
-        console.log(`[LinkedBoost] Navigating to page ${pageNum}: ${currentPageUrl}`);
+        console.log(`[WinPilot] Navigating to page ${pageNum}: ${currentPageUrl}`);
 
         // Take a longer break between pages (natural behavior)
         emitLog("info", "extension", `Taking a break before navigating to page ${pageNum}...`);
@@ -1000,11 +1003,11 @@ async function startAutomation(searchId, options = {}) {
         }
       }
 
-      console.log(`[LinkedBoost] ====== Processing Page ${pageNum}/${MAX_PAGES} ======`);
+      console.log(`[WinPilot] ====== Processing Page ${pageNum}/${MAX_PAGES} ======`);
       reportProgress("task:progress", { message: `Processing page ${pageNum}...` });
 
       // Step 2: Scrape job listings for current page
-      console.log(`[LinkedBoost] Step 2: Scraping job listings on page ${pageNum}...`);
+      console.log(`[WinPilot] Step 2: Scraping job listings on page ${pageNum}...`);
       reportProgress("task:progress", { message: `Scraping job listings on page ${pageNum}...` });
       // Simulate browsing the listings page first
       await randomDelay(2500, 5000);
@@ -1016,18 +1019,18 @@ async function startAutomation(searchId, options = {}) {
       });
 
       const scrapedJobs = scrapeResult?.data?.jobs || [];
-      console.log(`[LinkedBoost] Page ${pageNum}: ${scrapedJobs.length} jobs found`);
+      console.log(`[WinPilot] Page ${pageNum}: ${scrapedJobs.length} jobs found`);
       emitLog("info", "extension", `Page ${pageNum}: ${scrapedJobs.length} jobs found`);
       if (scrapedJobs.length > 0) {
-        console.log(`[LinkedBoost] First job:`, JSON.stringify(scrapedJobs[0]));
+        console.log(`[WinPilot] First job:`, JSON.stringify(scrapedJobs[0]));
       }
 
       if (scrapedJobs.length === 0) {
         if (pageNum === 1) {
-          console.error(`[LinkedBoost] Step 2 FAILED: scrapeResult =`, JSON.stringify(scrapeResult));
+          console.error(`[WinPilot] Step 2 FAILED: scrapeResult =`, JSON.stringify(scrapeResult));
           throw new Error("No jobs found on the search results page");
         } else {
-          console.log(`[LinkedBoost] No more jobs found on page ${pageNum}, finishing pagination`);
+          console.log(`[WinPilot] No more jobs found on page ${pageNum}, finishing pagination`);
           break pageLoop;
         }
       }
@@ -1048,12 +1051,12 @@ async function startAutomation(searchId, options = {}) {
       const easyApplyDetectedCount = scrapedJobs.filter((job) => job?.easyApply !== false).length;
 
       console.log(
-        `[LinkedBoost] Page ${pageNum} eligibility: total=${scrapedJobs.length}, easyApply=${easyApplyDetectedCount}, alreadyApplied=${skippedAppliedCount}, eligible=${dedupedEligibleJobs.length}`
+        `[WinPilot] Page ${pageNum} eligibility: total=${scrapedJobs.length}, easyApply=${easyApplyDetectedCount}, alreadyApplied=${skippedAppliedCount}, eligible=${dedupedEligibleJobs.length}`
       );
       emitLog("info", "extension", `Page ${pageNum} eligibility: total=${scrapedJobs.length}, easyApply=${easyApplyDetectedCount}, alreadyApplied=${skippedAppliedCount}, eligible=${dedupedEligibleJobs.length}`);
 
       if (dedupedEligibleJobs.length === 0) {
-        console.log(`[LinkedBoost] No new eligible jobs on page ${pageNum}, trying next page...`);
+        console.log(`[WinPilot] No new eligible jobs on page ${pageNum}, trying next page...`);
         continue;
       }
 
@@ -1068,7 +1071,7 @@ async function startAutomation(searchId, options = {}) {
       const jobsToProcessOnThisPage = Math.min(dedupedEligibleJobs.length, remainingQuota, 25);
 
       if (jobsToProcessOnThisPage <= 0) {
-        console.log(`[LinkedBoost] Reached max jobs limit (${MAX_JOBS_PER_RUN}), stopping`);
+        console.log(`[WinPilot] Reached max jobs limit (${MAX_JOBS_PER_RUN}), stopping`);
         break pageLoop;
       }
 
@@ -1104,12 +1107,12 @@ async function startAutomation(searchId, options = {}) {
         }
 
         try {
-          console.log(`[LinkedBoost] Processing job ${jobIndex + 1}/${jobsToProcessOnThisPage} (page ${pageNum}): ${candidateJob.title}`);
+          console.log(`[WinPilot] Processing job ${jobIndex + 1}/${jobsToProcessOnThisPage} (page ${pageNum}): ${candidateJob.title}`);
           emitLog("info", "extension", `Processing job ${jobIndex + 1}/${jobsToProcessOnThisPage} (page ${pageNum}): ${candidateJob.title}`);
 
           // Navigate back to the CORRECT page if we navigated away (e.g., after applying)
           if (needsReturnToSearchPage) {
-            console.log(`[LinkedBoost] Returning to search results page ${pageNum}...`);
+            console.log(`[WinPilot] Returning to search results page ${pageNum}...`);
             await navigateAndWait(tab.id, currentPageUrl);
             await randomDelay(900, 1500);
             needsReturnToSearchPage = false;
@@ -1123,7 +1126,7 @@ async function startAutomation(searchId, options = {}) {
           });
           const currentTabUrl = pageInfoCheck?.data?.url || "";
           if (!currentTabUrl.includes("/jobs/search") && !currentTabUrl.includes("/jobs/collection")) {
-            console.log(`[LinkedBoost] Not on search results page (url=${currentTabUrl}), navigating back...`);
+            console.log(`[WinPilot] Not on search results page (url=${currentTabUrl}), navigating back...`);
             await navigateAndWait(tab.id, currentPageUrl);
             await randomDelay(900, 1500);
           }
@@ -1171,7 +1174,7 @@ async function startAutomation(searchId, options = {}) {
             qualification.text ||
             String(qualification.status || "unknown").replace(/_/g, " ");
 
-          console.log(`[LinkedBoost] Qualification check: status="${qualification.status}", matched=${qualification.matched}, shouldSkip=${shouldSkipJob}, text="${qualification.text || ""}"`);
+          console.log(`[WinPilot] Qualification check: status="${qualification.status}", matched=${qualification.matched}, shouldSkip=${shouldSkipJob}, text="${qualification.text || ""}"`);
           emitLog("info", "extension", `Qualification check: status="${qualification.status}", matched=${qualification.matched}, shouldSkip=${shouldSkipJob}`, qualification.text || "");
 
           if (shouldSkipJob) {
@@ -1185,7 +1188,7 @@ async function startAutomation(searchId, options = {}) {
             continue;
           }
 
-          console.log(`[LinkedBoost] Proceeding with application for ${candidateJob.title}...`);
+          console.log(`[WinPilot] Proceeding with application for ${candidateJob.title}...`);
           emitLog("info", "extension", `Proceeding with application for ${candidateJob.title}`);
 
           // Simulate reading the job description (human-like pause before scraping)
@@ -1281,7 +1284,7 @@ async function startAutomation(searchId, options = {}) {
 
           if (!easyApplyResult?.data?.clicked) {
             // If Easy Apply button wasn't found on side panel, navigate to the job page
-            console.log(`[LinkedBoost] Easy Apply not found on side panel, navigating to job page...`);
+            console.log(`[WinPilot] Easy Apply not found on side panel, navigating to job page...`);
             await navigateAndWait(tab.id, targetApp.jobUrl);
             needsReturnToSearchPage = true;
 
@@ -1485,7 +1488,7 @@ async function startAutomation(searchId, options = {}) {
             await apiCall(`/api/jobs/automate?step=complete`, {
               applicationId: targetApp._id,
               success: true,
-              notes: "Auto-applied via LinkedBoost",
+              notes: "Auto-applied via WinPilot",
             });
           }
 
@@ -1520,12 +1523,12 @@ async function startAutomation(searchId, options = {}) {
       // Update total skipped count
       totalSkippedQualificationCount += pageSkippedQualificationCount;
 
-      console.log(`[LinkedBoost] Page ${pageNum} complete: Applied=${pageAppliedCount}, Failed=${pageFailedCount}, Skipped=${pageSkippedQualificationCount}`);
+      console.log(`[WinPilot] Page ${pageNum} complete: Applied=${pageAppliedCount}, Failed=${pageFailedCount}, Skipped=${pageSkippedQualificationCount}`);
       emitLog("info", "extension", `Page ${pageNum} complete: Applied=${pageAppliedCount}, Failed=${pageFailedCount}, Skipped=${pageSkippedQualificationCount}`);
 
       // Check if we should continue to the next page
       if (totalAppliedCount + totalFailedCount >= MAX_JOBS_PER_RUN) {
-        console.log(`[LinkedBoost] Reached max jobs limit (${MAX_JOBS_PER_RUN}), stopping pagination`);
+        console.log(`[WinPilot] Reached max jobs limit (${MAX_JOBS_PER_RUN}), stopping pagination`);
         break pageLoop;
       }
     } // End of pageLoop
@@ -1539,10 +1542,10 @@ async function startAutomation(searchId, options = {}) {
     });
     return cleanup();
   } catch (err) {
-    console.error("[LinkedBoost] ====== AUTOMATION FAILED ======");
-    console.error("[LinkedBoost] Error:", err.message);
-    console.error("[LinkedBoost] Stack:", err.stack);
-    console.error("[LinkedBoost] apiUrl:", apiUrl, "authToken:", authToken ? `${authToken.substring(0, 8)}...` : "NOT SET");
+    console.error("[WinPilot] ====== AUTOMATION FAILED ======");
+    console.error("[WinPilot] Error:", err.message);
+    console.error("[WinPilot] Stack:", err.stack);
+    console.error("[WinPilot] apiUrl:", apiUrl, "authToken:", authToken ? `${authToken.substring(0, 8)}...` : "NOT SET");
     emitLog("error", "system", `AUTOMATION FAILED: ${err.message}`);
     reportProgress("task:error", {
       message: `Automation failed: ${err.message}`,
@@ -1619,11 +1622,106 @@ function reportLeadProgress(event, data) {
  *
  * Anti-detection measures used:
  *   - Gaussian-distributed delays everywhere
- *   - Browsing breaks between actions
- *   - Daily limits enforced (from DailyUsage DB + DAILY_LIMITS)
- *   - Session health checked before each comment
- *   - Human-like typing for comment text (via content script)
  */
+// ─── Profile Scrape: extract user's own LinkedIn profile ────────────────────
+
+async function startProfileScrape() {
+  console.log("[WinPilot] Starting profile scrape...");
+
+  let tab;
+  try {
+    tab = await getLinkedInTab();
+  } catch (e) {
+    sendToServer({
+      type: "PROFILE_SCRAPE_ERROR",
+      error: "Could not find an open LinkedIn tab. Please open LinkedIn first.",
+    });
+    return;
+  }
+
+  if (!tab?.id) {
+    sendToServer({
+      type: "PROFILE_SCRAPE_ERROR",
+      error: "No active LinkedIn tab found. Please open LinkedIn and navigate to your profile.",
+    });
+    return;
+  }
+
+  // Check if the tab is on a /in/ profile page
+  const tabUrl = tab.url || "";
+  if (!tabUrl.includes("linkedin.com/in/")) {
+    // Navigate to the user's own profile
+    console.log("[WinPilot] Not on a profile page, navigating to profile...");
+    try {
+      await sendToContentScript(tab.id, {
+        type: "EXECUTE_ACTION",
+        command: "NAVIGATE",
+        actionId: `profile-nav-${Date.now()}`,
+        url: "https://www.linkedin.com/in/me/",
+      });
+      // Wait for navigation
+      await new Promise((r) => setTimeout(r, 4000));
+      // Re-fetch the tab to get updated URL
+      tab = await getLinkedInTab();
+      if (!tab?.id) {
+        sendToServer({
+          type: "PROFILE_SCRAPE_ERROR",
+          error: "Navigation to LinkedIn profile failed.",
+        });
+        return;
+      }
+    } catch (e) {
+      // Navigation closes the channel — that is expected; just wait and continue
+      await new Promise((r) => setTimeout(r, 4000));
+      tab = await getLinkedInTab();
+      if (!tab?.id) {
+        sendToServer({ type: "PROFILE_SCRAPE_ERROR", error: "Navigation failed." });
+        return;
+      }
+    }
+  }
+
+  // Execute SCRAPE_USER_PROFILE in the content script
+  let result;
+  try {
+    result = await sendToContentScript(tab.id, {
+      type: "EXECUTE_ACTION",
+      command: "SCRAPE_USER_PROFILE",
+      actionId: `profile-scrape-${Date.now()}`,
+    });
+  } catch (e) {
+    sendToServer({
+      type: "PROFILE_SCRAPE_ERROR",
+      error: `Scrape failed: ${e.message}`,
+    });
+    return;
+  }
+
+  if (result?.status !== "success" || !result?.data?.profileData) {
+    sendToServer({
+      type: "PROFILE_SCRAPE_ERROR",
+      error: result?.error || "Profile scrape returned no data.",
+    });
+    return;
+  }
+
+  // POST scraped data to the server
+  try {
+    const response = await apiCall("/api/profile-optimizer?action=scrape-profile", result.data.profileData);
+    sendToServer({
+      type: "PROFILE_SCRAPE_SUCCESS",
+      profileId: response.profileId,
+      profileData: result.data.profileData,
+    });
+    console.log("[WinPilot] Profile scrape complete, profileId:", response.profileId);
+  } catch (e) {
+    sendToServer({
+      type: "PROFILE_SCRAPE_ERROR",
+      error: `Failed to save profile: ${e.message}`,
+    });
+  }
+}
+
 async function startLeadGenAutomation(campaignId, options = {}) {
   if (leadGenRunning) {
     reportLeadProgress("leadgen:error", { message: "Lead generation already running" });
@@ -1640,8 +1738,8 @@ async function startLeadGenAutomation(campaignId, options = {}) {
   leadGenAborted = false;
   chrome.storage.local.set({ leadGenRunning: true, leadGenCampaignId: campaignId });
 
-  console.log("[LinkedBoost] ====== STARTING LEAD GEN AUTOMATION ======");
-  console.log("[LinkedBoost] campaignId:", campaignId);
+  console.log("[WinPilot] ====== STARTING LEAD GEN AUTOMATION ======");
+  console.log("[WinPilot] campaignId:", campaignId);
 
   try {
     // ── Load campaign ────────────────────────────────────────────────────────
@@ -1937,7 +2035,7 @@ async function startLeadGenAutomation(campaignId, options = {}) {
       campaignId,
     });
   } catch (err) {
-    console.error("[LinkedBoost] Lead gen error:", err);
+    console.error("[WinPilot] Lead gen error:", err);
     emitLeadLog("error", "system", `Lead gen error: ${err.message}`);
     reportLeadProgress("leadgen:error", { message: err.message });
   } finally {
@@ -2089,7 +2187,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   switch (message.type) {
     case "SET_AUTH_TOKEN":
       authToken = message.token;
-      console.log("[LinkedBoost] Auth token set:", message.token ? `${message.token.substring(0, 8)}...` : "CLEARED");
+      console.log("[WinPilot] Auth token set:", message.token ? `${message.token.substring(0, 8)}...` : "CLEARED");
       chrome.storage.local.set({ authToken: message.token });
       if (socket && socket.connected) {
         socket.emit("AUTH", { token: authToken });
@@ -2099,7 +2197,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
     case "SET_WS_URL":
       wsUrl = message.url;
-      console.log("[LinkedBoost] WS URL set to:", message.url);
+      console.log("[WinPilot] WS URL set to:", message.url);
       chrome.storage.local.set({ wsUrl: message.url });
       if (socket) socket.disconnect();
       reconnectAttempts = 0;
@@ -2109,7 +2207,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
     case "SET_API_URL":
       apiUrl = message.url;
-      console.log("[LinkedBoost] API URL set to:", message.url);
+      console.log("[WinPilot] API URL set to:", message.url);
       chrome.storage.local.set({ apiUrl: message.url });
       sendResponse({ success: true });
       break;
@@ -2167,10 +2265,11 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
 // ─── Initialization ─────────────────────────────────────
 
-chrome.storage.local.get(["authToken", "apiUrl"], (result) => {
+chrome.storage.local.get(["authToken", "apiUrl", "wsUrl"], (result) => {
   if (result.authToken) authToken = result.authToken;
   if (result.apiUrl) apiUrl = result.apiUrl;
-  console.log("[LinkedBoost] Initialized — apiUrl:", apiUrl, "authToken:", authToken ? `${authToken.substring(0, 8)}...` : "NOT SET", "wsUrl:", wsUrl);
+  if (result.wsUrl) wsUrl = result.wsUrl;
+  console.log("[WinPilot] Initialized — apiUrl:", apiUrl, "authToken:", authToken ? `${authToken.substring(0, 8)}...` : "NOT SET", "wsUrl:", wsUrl);
   connect();
 });
 

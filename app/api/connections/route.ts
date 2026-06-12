@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import mongoose from "mongoose";
 import { z } from "zod";
-import { auth } from "@/auth";
+import { getActorId } from "@/lib/utils/get-actor-id";
 import connectDB from "@/lib/db/connection";
 import ConnectionRequest from "@/lib/db/models/connection-request";
 import { checkApiRateLimit } from "@/lib/utils/rate-limit";
@@ -20,12 +20,13 @@ const updateStatusSchema = z.object({
 
 export async function GET(req: Request) {
   try {
-    const session = await auth();
-    if (!session?.user?.id) {
+    const actor = await getActorId();
+    if (!actor) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
+    const { id: userId } = actor;
 
-    const rateLimit = await checkApiRateLimit(session.user.id);
+    const rateLimit = await checkApiRateLimit(userId);
     if (!rateLimit.success) {
       return NextResponse.json({ error: "Too many requests" }, { status: 429 });
     }
@@ -37,7 +38,7 @@ export async function GET(req: Request) {
 
     await connectDB();
 
-    const filter: Record<string, unknown> = { userId: session.user.id };
+    const filter: Record<string, unknown> = { userId: userId };
     const validStatuses = ["pending", "sent", "accepted", "ignored"];
 
     if (status && !validStatuses.includes(status)) {
@@ -58,7 +59,7 @@ export async function GET(req: Request) {
         .limit(limit + 1)
         .lean(),
       ConnectionRequest.aggregate([
-        { $match: { userId: new mongoose.Types.ObjectId(session.user.id) } },
+        { $match: { userId: new mongoose.Types.ObjectId(userId) } },
         {
           $group: {
             _id: "$status",
@@ -99,12 +100,13 @@ export async function GET(req: Request) {
 
 export async function POST(req: Request) {
   try {
-    const session = await auth();
-    if (!session?.user?.id) {
+    const actor = await getActorId();
+    if (!actor) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
+    const { id: userId } = actor;
 
-    const rateLimit = await checkApiRateLimit(session.user.id);
+    const rateLimit = await checkApiRateLimit(userId);
     if (!rateLimit.success) {
       return NextResponse.json({ error: "Too many requests" }, { status: 429 });
     }
@@ -123,7 +125,7 @@ export async function POST(req: Request) {
 
       const connection = await ConnectionRequest.create({
         ...parsed.data,
-        userId: session.user.id,
+        userId: userId,
         status: "pending",
       });
 
@@ -145,10 +147,11 @@ export async function POST(req: Request) {
 
 export async function PATCH(req: Request) {
   try {
-    const session = await auth();
-    if (!session?.user?.id) {
+    const actor = await getActorId();
+    if (!actor) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
+    const { id: userId } = actor;
 
     const body = await req.json();
     const parsed = updateStatusSchema.safeParse(body);
@@ -163,7 +166,7 @@ export async function PATCH(req: Request) {
     if (parsed.data.status === "accepted") update.acceptedAt = new Date();
 
     const connection = await ConnectionRequest.findOneAndUpdate(
-      { _id: parsed.data.id, userId: session.user.id },
+      { _id: parsed.data.id, userId: userId },
       { $set: update },
       { returnDocument: "after" }
     );
@@ -181,10 +184,11 @@ export async function PATCH(req: Request) {
 
 export async function DELETE(req: Request) {
   try {
-    const session = await auth();
-    if (!session?.user?.id) {
+    const actor = await getActorId();
+    if (!actor) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
+    const { id: userId } = actor;
 
     const { searchParams } = new URL(req.url);
     const id = searchParams.get("id");
@@ -197,7 +201,7 @@ export async function DELETE(req: Request) {
 
     const connection = await ConnectionRequest.findOneAndDelete({
       _id: id,
-      userId: session.user.id,
+      userId: userId,
     });
 
     if (!connection) {

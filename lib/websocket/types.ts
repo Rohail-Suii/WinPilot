@@ -328,6 +328,7 @@ export type SseEventType =
   | "leadgen:complete"
   | "leadgen:error"
   | "heartbeat:ack"
+  | "profile:ready"
   | "notification";
 
 export interface SseMessage {

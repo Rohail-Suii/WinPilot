@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import mongoose from "mongoose";
-import { auth } from "@/auth";
+import { getActorId } from "@/lib/utils/get-actor-id";
 import connectDB from "@/lib/db/connection";
 import HeroProfile from "@/lib/db/models/hero-profile";
 import Post from "@/lib/db/models/post";
@@ -12,12 +12,13 @@ import { sanitizeForAI } from "@/lib/utils";
 
 export async function GET(req: Request) {
   try {
-    const session = await auth();
-    if (!session?.user?.id) {
+    const actor = await getActorId();
+    if (!actor) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
+    const { id: userId } = actor;
 
-    const rateLimit = await checkApiRateLimit(session.user.id);
+    const rateLimit = await checkApiRateLimit(userId);
     if (!rateLimit.success) {
       return NextResponse.json({ error: "Too many requests" }, { status: 429 });
     }
@@ -29,7 +30,7 @@ export async function GET(req: Request) {
 
     if (view === "posts") {
       const status = searchParams.get("status");
-      const filter: Record<string, unknown> = { userId: session.user.id };
+      const filter: Record<string, unknown> = { userId: userId };
       if (status) filter.status = status;
 
       const posts = await Post.find(filter).sort({ createdAt: -1 }).limit(50).lean();
@@ -42,11 +43,11 @@ export async function GET(req: Request) {
       const monthAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
 
       const [totalPosts, thisWeek, thisMonth, engagementStats] = await Promise.all([
-        Post.countDocuments({ userId: session.user.id }),
-        Post.countDocuments({ userId: session.user.id, createdAt: { $gte: weekAgo } }),
-        Post.countDocuments({ userId: session.user.id, createdAt: { $gte: monthAgo } }),
+        Post.countDocuments({ userId: userId }),
+        Post.countDocuments({ userId: userId, createdAt: { $gte: weekAgo } }),
+        Post.countDocuments({ userId: userId, createdAt: { $gte: monthAgo } }),
         Post.aggregate([
-          { $match: { userId: new mongoose.Types.ObjectId(session.user.id), status: "posted" } },
+          { $match: { userId: new mongoose.Types.ObjectId(userId), status: "posted" } },
           {
             $group: {
               _id: null,
@@ -78,7 +79,7 @@ export async function GET(req: Request) {
 
     if (view === "scheduled") {
       const scheduled = await Post.find({
-        userId: session.user.id,
+        userId: userId,
         status: "scheduled",
         scheduledFor: { $gte: new Date() },
       })
@@ -87,7 +88,7 @@ export async function GET(req: Request) {
       return NextResponse.json({ posts: scheduled });
     }
 
-    const profile = await HeroProfile.findOne({ userId: session.user.id }).lean();
+    const profile = await HeroProfile.findOne({ userId: userId }).lean();
     return NextResponse.json({ profile });
   } catch (error) {
     console.error("[Hero] Error:", error);
@@ -97,12 +98,13 @@ export async function GET(req: Request) {
 
 export async function POST(req: Request) {
   try {
-    const session = await auth();
-    if (!session?.user?.id) {
+    const actor = await getActorId();
+    if (!actor) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
+    const { id: userId } = actor;
 
-    const rateLimit = await checkApiRateLimit(session.user.id);
+    const rateLimit = await checkApiRateLimit(userId);
     if (!rateLimit.success) {
       return NextResponse.json({ error: "Too many requests" }, { status: 429 });
     }
@@ -121,8 +123,8 @@ export async function POST(req: Request) {
       }
 
       const profile = await HeroProfile.findOneAndUpdate(
-        { userId: session.user.id },
-        { ...parsed.data, userId: session.user.id },
+        { userId: userId },
+        { ...parsed.data, userId: userId },
         { upsert: true, returnDocument: "after" }
       );
       return NextResponse.json({ profile });
@@ -132,13 +134,13 @@ export async function POST(req: Request) {
     if (action === "generate") {
       const { topic } = body;
       const sanitizedTopic = sanitizeForAI(topic || "Create a post based on my content pillars");
-      const profile = await HeroProfile.findOne({ userId: session.user.id }).lean();
+      const profile = await HeroProfile.findOne({ userId: userId }).lean();
       if (!profile) {
         return NextResponse.json({ error: "Set up your hero profile first" }, { status: 400 });
       }
 
       const { getUserAIProvider } = await import("@/lib/ai/key-manager");
-      const ai = await getUserAIProvider(session.user.id);
+      const ai = await getUserAIProvider(userId);
       if (!ai) {
         return NextResponse.json({ error: "No AI API key configured" }, { status: 400 });
       }
@@ -177,9 +179,9 @@ export async function POST(req: Request) {
 
       const sanitizedContent = sanitizeForAI(postContent);
 
-      const profile = await HeroProfile.findOne({ userId: session.user.id }).lean();
+      const profile = await HeroProfile.findOne({ userId: userId }).lean();
       const { getUserAIProvider } = await import("@/lib/ai/key-manager");
-      const ai = await getUserAIProvider(session.user.id);
+      const ai = await getUserAIProvider(userId);
       if (!ai) {
         return NextResponse.json({ error: "No AI API key configured" }, { status: 400 });
       }
@@ -210,15 +212,15 @@ export async function POST(req: Request) {
       const sanitizedPostContent = sanitizeForAI(content);
 
       // Check rate limits for posts
-      const { allowed } = await canPerformAction(session.user.id, "posts");
+      const { allowed } = await canPerformAction(userId, "posts");
       if (!allowed && !scheduledFor) {
         return NextResponse.json({ error: "Daily post limit reached" }, { status: 429 });
       }
 
-      const profile = await HeroProfile.findOne({ userId: session.user.id }).lean();
+      const profile = await HeroProfile.findOne({ userId: userId }).lean();
 
       const post = await Post.create({
-        userId: session.user.id,
+        userId: userId,
         heroProfileId: profile?._id,
         content: sanitizedPostContent,
         type: type || "text",
@@ -239,15 +241,15 @@ export async function POST(req: Request) {
       }
 
       const post = await Post.findOneAndUpdate(
-        { _id: postId, userId: session.user.id },
+        { _id: postId, userId: userId },
         { status: "posted", postedAt: new Date(), linkedinPostUrl },
         { returnDocument: "after" }
       );
 
       if (post) {
-        await incrementUsage(session.user.id, "posts");
+        await incrementUsage(userId, "posts");
         await ActivityLog.create({
-          userId: session.user.id,
+          userId: userId,
           action: "post_published",
           module: "hero",
           details: { postId, linkedinPostUrl },
@@ -267,7 +269,7 @@ export async function POST(req: Request) {
       }
 
       const post = await Post.findOneAndUpdate(
-        { _id: postId, userId: session.user.id },
+        { _id: postId, userId: userId },
         { $set: { engagement } },
         { returnDocument: "after" }
       );
@@ -282,7 +284,7 @@ export async function POST(req: Request) {
       }
 
       const profile = await HeroProfile.findOneAndUpdate(
-        { userId: session.user.id },
+        { userId: userId },
         { $set: { groups } },
         { returnDocument: "after" }
       );
@@ -297,7 +299,7 @@ export async function POST(req: Request) {
       }
 
       const profile = await HeroProfile.findOneAndUpdate(
-        { userId: session.user.id },
+        { userId: userId },
         {
           $push: {
             contentQueue: {
@@ -321,10 +323,11 @@ export async function POST(req: Request) {
 
 export async function PATCH(req: Request) {
   try {
-    const session = await auth();
-    if (!session?.user?.id) {
+    const actor = await getActorId();
+    if (!actor) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
+    const { id: userId } = actor;
 
     const { searchParams } = new URL(req.url);
     const id = searchParams.get("id");
@@ -349,7 +352,7 @@ export async function PATCH(req: Request) {
     }
 
     const post = await Post.findOneAndUpdate(
-      { _id: id, userId: session.user.id },
+      { _id: id, userId: userId },
       { $set: updates },
       { returnDocument: "after" }
     );
@@ -367,10 +370,11 @@ export async function PATCH(req: Request) {
 
 export async function DELETE(req: Request) {
   try {
-    const session = await auth();
-    if (!session?.user?.id) {
+    const actor = await getActorId();
+    if (!actor) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
+    const { id: userId } = actor;
 
     const { searchParams } = new URL(req.url);
     const id = searchParams.get("id");
@@ -383,7 +387,7 @@ export async function DELETE(req: Request) {
     await connectDB();
 
     if (type === "post") {
-      await Post.findOneAndDelete({ _id: id, userId: session.user.id });
+      await Post.findOneAndDelete({ _id: id, userId: userId });
     }
 
     return NextResponse.json({ success: true });
