@@ -39,6 +39,19 @@ export interface IJobApplication extends Document {
     highlights?: string[];
     matchExplanation?: string;
     keywordsUsed?: string[];
+    detectedRole?: string;
+    source?: "resume" | "data";
+    experience?: {
+      company?: string;
+      title?: string;
+      description?: string;
+      highlights?: string[];
+    }[];
+    projects?: {
+      name?: string;
+      description?: string;
+      tech?: string[];
+    }[];
   };
   matchBreakdown?: IMatchBreakdown;
   formAnswers: {
@@ -83,6 +96,23 @@ const JobApplicationSchema = new Schema<IJobApplication>(
       highlights: [String],
       matchExplanation: String,
       keywordsUsed: [String],
+      detectedRole: String,
+      source: { type: String, enum: ["resume", "data"] },
+      experience: [
+        {
+          company: String,
+          title: String,
+          description: String,
+          highlights: [String],
+        },
+      ],
+      projects: [
+        {
+          name: String,
+          description: String,
+          tech: [String],
+        },
+      ],
     },
     matchBreakdown: {
       skillsMatch: Number,

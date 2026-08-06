@@ -297,7 +297,10 @@ export function useWebSocket() {
     }
   }, []);
 
-  const startAutomation = useCallback((searchId: string, options?: { useAI?: boolean; useJobMatching?: boolean }) => {
+  const startAutomation = useCallback((
+    searchId: string,
+    options?: { useAI?: boolean; useJobMatching?: boolean; useAIFormFilling?: boolean }
+  ) => {
     if (sharedSocket?.connected) {
       sharedSocket.emit("EXECUTE_ACTION", { type: "START_AUTOMATION", searchId, options: options || {} });
     }

@@ -18,6 +18,7 @@ const automationSettingsSchema = z.object({
     extension: z.boolean(),
   }).optional(),
   useAIFormFilling: z.boolean().optional(),
+  resumeTailoringSource: z.enum(["resume", "data"]).optional(),
 });
 
 export async function GET() {
@@ -36,6 +37,7 @@ export async function GET() {
           language: "en",
           notificationPrefs: { email: true, inApp: true, extension: true },
           dailyLimits: { applies: 15, posts: 2, scrapes: 50 },
+          resumeTailoringSource: "resume",
         },
       });
     }
@@ -98,6 +100,9 @@ export async function PATCH(req: Request) {
     }
     if (parsed.data.useAIFormFilling !== undefined) {
       update["settings.useAIFormFilling"] = parsed.data.useAIFormFilling;
+    }
+    if (parsed.data.resumeTailoringSource !== undefined) {
+      update["settings.resumeTailoringSource"] = parsed.data.resumeTailoringSource;
     }
 
     await User.findByIdAndUpdate(userId, { $set: update });

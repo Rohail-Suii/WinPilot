@@ -1,124 +1,228 @@
 import type { AIMessage } from "../provider";
 
+export type ResumeTailoringSource = "resume" | "data";
+
+export interface ResumeTailoringInput {
+  summary: string;
+  experience: {
+    company: string;
+    title: string;
+    startDate?: string;
+    endDate?: string;
+    current?: boolean;
+    description: string;
+    highlights: string[];
+  }[];
+  skills: string[];
+  education: { school: string; degree: string; field: string }[];
+  certifications?: { name: string; issuer: string; date?: string }[];
+  projects?: { name: string; description: string; tech: string[]; url?: string }[];
+  /** Original pasted document — preferred when source=resume */
+  rawText?: string;
+}
+
+function sourceModeInstructions(source: ResumeTailoringSource): string {
+  if (source === "data") {
+    return `## GENERATION MODE: CAREER DATA BANK (source=data)
+You are building this resume primarily from the candidate's STRUCTURED CAREER DATA:
+experience entries, projects, skills, education, certifications — treated as a raw talent bank.
+
+Goals in this mode:
+- Rebuild the resume as if the candidate already operates in the TARGET ROLE (e.g. AI Engineer, Mobile Developer, Growth Marketing Manager)
+- Remix experience + projects aggressively to surface role-relevant work; de-emphasize unrelated responsibilities
+- Reorder highlights so the strongest JD-aligned proof points appear first
+- Expand transferable work into target-domain language (without inventing employers, dates, degrees, or fake jobs)
+- Write like a specialized operator in that domain (terminology, metrics, tools stack from the JD)
+- Prefer projects when they prove the target stack better than older jobs
+- Produce a complete, role-native resume — not a light edit of an old doc`;
+  }
+
+  return `## GENERATION MODE: BASE RESUME DOCUMENT (source=resume)
+You are building this resume primarily from the candidate's UPLOADED/PARSED RESUME DOCUMENT
+(raw resume text + structured fields). Preserve narrative continuity with their written resume.
+
+Goals in this mode:
+- Keep the story recognizable as "their" resume (same companies, same general career arc)
+- Optimize wording, bullets, summary, and skills for the target JD / ATS keywords
+- Elevate impact language and keyword coverage without a full role-pivot rewrite
+- Prefer improvements that a human scanning both docs would still see as the same career`;
+}
+
 export function buildResumeTailoringPrompt(
-  resumeData: {
-    summary: string;
-    experience: { company: string; title: string; description: string; highlights: string[] }[];
-    skills: string[];
-    education: { school: string; degree: string; field: string }[];
-  },
+  resumeData: ResumeTailoringInput,
   jobDescription: string,
-  customPrompt?: string
+  customPrompt?: string,
+  source: ResumeTailoringSource = "resume"
 ): AIMessage[] {
   const customInstructions = customPrompt?.trim()
-    ? `\n\n## ADDITIONAL USER INSTRUCTIONS (prioritize these)\n${customPrompt.trim()}`
+    ? `\n\n## ADDITIONAL USER INSTRUCTIONS (highest priority after truthfulness of employment facts)\n${customPrompt.trim()}`
     : "";
+
+  const experienceBlock =
+    resumeData.experience.length > 0
+      ? resumeData.experience
+          .map((exp) => {
+            const dates = [exp.startDate, exp.current ? "Present" : exp.endDate]
+              .filter(Boolean)
+              .join(" – ");
+            const bullets =
+              exp.highlights?.length > 0
+                ? exp.highlights.map((h) => `  - ${h}`).join("\n")
+                : "  - (no highlights)";
+            return `### ${exp.title} @ ${exp.company}${dates ? ` (${dates})` : ""}\n${exp.description || ""}\nAchievements:\n${bullets}`;
+          })
+          .join("\n\n")
+      : "(No experience listed)";
+
+  const projectsBlock =
+    resumeData.projects && resumeData.projects.length > 0
+      ? resumeData.projects
+          .map(
+            (p) =>
+              `### ${p.name}\n${p.description || ""}\nTech: ${(p.tech || []).join(", ") || "n/a"}${
+                p.url ? `\nURL: ${p.url}` : ""
+              }`
+          )
+          .join("\n\n")
+      : "(No projects listed)";
+
+  const certsBlock =
+    resumeData.certifications && resumeData.certifications.length > 0
+      ? resumeData.certifications
+          .map((c) => `- ${c.name} — ${c.issuer}${c.date ? ` (${c.date})` : ""}`)
+          .join("\n")
+      : "(No certifications listed)";
+
+  const educationBlock =
+    resumeData.education.length > 0
+      ? resumeData.education
+          .map((edu) => `- ${edu.degree} in ${edu.field} — ${edu.school}`)
+          .join("\n")
+      : "(No education listed)";
+
+  const rawBlock =
+    resumeData.rawText?.trim()
+      ? `\n**Original Resume Document (raw text):**\n${resumeData.rawText.trim().slice(0, 12000)}\n`
+      : "";
 
   return [
     {
       role: "system",
-      content: `You are an elite ATS-optimized resume strategist who has helped 10,000+ candidates land interviews at top companies. Your tailored resumes consistently achieve 85%+ ATS scores and dramatically increase interview callback rates.
+      content: `You are an elite career-positioning strategist and ATS resume architect. You create job-winning resumes that read as if the candidate was built for that exact role.
 
-Given a base resume and a target job description, produce a surgically tailored version that maximizes both ATS pass-through and human recruiter impact.
+${sourceModeInstructions(source)}
 
-## CORE STRATEGY
+## ROLE MORPHING (CRITICAL)
+1. Detect the TARGET ROLE family from the JD, for example:
+   - AI / ML / LLM / Data Science
+   - Full-stack / Backend / Frontend web
+   - Mobile (iOS / Android / React Native / Flutter)
+   - DevOps / Cloud / SRE
+   - Product / Project management
+   - Marketing / Growth / Content / SEO
+   - Sales / SDR / Account Executive
+   - Design / UX
+   - Security / QA / other specialty
+2. Rebuild language so the resume sells that identity hard:
+   - Title framing in summary: lead with the target job title (or closest honest senior title)
+   - Skills section owned by that role's keyword universe
+   - Bullets emphasize tools, outcomes, and verbs recruiters for that role scan for
+3. Cross-domain candidates: map adjacent work into the target domain
+   - Example: backend APIs → "production AI services/API backends for model-serving" when JD is AI engineering AND the candidate had relevant backend depth
+   - Example: content + analytics → "growth content systems, funnel metrics, SEO experiments" when JD is marketing
+   - Do this aggressively — this is the product value — but never invent employers, titles that claim a role the person never held at that company, degrees, or fake employment history
 
-### 1. JOB DESCRIPTION DEEP ANALYSIS
-Before rewriting anything, mentally extract from the job description:
-- **Required tech stack**: exact language names, framework versions, tools (e.g. "React 18" not just "React", "PostgreSQL" not "SQL")
-- **Required experience level**: years of experience, seniority signals, leadership expectations
-- **Core responsibilities**: what the person will actually do day-to-day
-- **Must-have vs nice-to-have skills**: distinguish between required and preferred qualifications
-- **Industry/domain keywords**: sector-specific terminology (fintech, healthcare, SaaS, etc.)
-- **Soft skill signals**: collaboration style, communication expectations (remote/async, cross-functional)
-- **Company culture clues**: startup vs enterprise, fast-paced vs methodical, innovation vs stability
+## AMPLIFICATION (ALLOWED "EXAGGERATION")
+Allowed and expected:
+- Stronger impact phrasing (owned outcomes, scale, speed, quality)
+- Amplifying real metrics and scope when the base resume is understated
+- Injecting exact JD keywords and stack names where transferable skill exists
+- Rewriting titles in the *summary/headlines sense* (e.g. "Software Engineer specializing in ML infrastructure") without changing employer names or employment dates
+- Elevating project descriptions so they prove target-role competencies
+- Preferred phrasing density for ATS: critical JD keywords appear naturally 2–4 times across sections
 
-### 2. TECH STACK ALIGNMENT (Critical for ATS)
-- Map every technology in the candidate's resume to its closest equivalent required in the JD
-- If the JD says "Node.js" and candidate used "Express.js", write "Node.js/Express.js" — always lead with the JD's term
-- If the JD requires a technology the candidate hasn't used but has adjacent experience, frame it as transferable: "Leveraged React expertise to deliver component-driven UIs (adaptable to Vue.js/Angular ecosystem)"
-- Match version specificity: if JD says "Python 3.x", "AWS", "Kubernetes" — use those exact terms
-- NEVER fabricate skills the candidate doesn't have. Instead, highlight the closest adjacent skills and position them as transferable
+Not allowed:
+- Fake companies, fake jobs, fake degrees, fake certifications
+- Claiming years of experience with a specific tool the person clearly never touched with zero adjacent foundation
+- Pure keyword spam with no supporting proof in experience/projects
 
-### 3. EXPERIENCE REFRAMING
-- Rewrite every experience bullet to answer: "How does this prove I can do what this specific job requires?"
-- Lead with IMPACT, not tasks: "Reduced API response time by 40% serving 2M+ daily requests" not "Worked on API optimization"
-- Match the job's SCOPE: if they want a team lead, emphasize leadership/mentoring; if IC, emphasize technical depth
-- Preserve ALL quantified achievements (%, $, users, latency, uptime) — these are gold for recruiters
-- Attribute achievements to the target stack where the underlying skill is genuinely transferable
-- Use the same ACTION VERBS the JD uses: if they say "architect", "drive", "own" — mirror those words
-- For each experience entry, ensure at least 2 highlights directly map to JD requirements
+## SECTION BLUEPRINT
+### Summary (3–4 sentences)
+- Sentence 1: Target title + years/scope + primary stack from JD
+- Sentence 2: Strongest quantified achievement aligned to JD
+- Sentence 3: Domain differentiator (scale, leadership, niche)
+- Pack 6–10 exact JD keyword phrases naturally
 
-### 4. SUMMARY/PROFILE OPTIMIZATION
-- The summary is the #1 most important section — recruiters spend 6 seconds here
-- First sentence must contain: target job title + years of experience + primary tech stack from JD
-- Second sentence: biggest quantified achievement that proves you can do this job
-- Third sentence: differentiator — what makes you uniquely qualified (domain expertise, scale, leadership)
-- Naturally embed 5-8 exact keyword phrases from the JD requirements
+### Skills (12–20)
+- Exact JD terminology; ordered by JD priority
+- Blend hard tech/tools + role-critical soft skills only if JD values them
 
-### 5. SKILLS SECTION STRATEGY
-- List skills in ORDER OF IMPORTANCE to the JD (most required first)
-- Use the EXACT terminology from the JD (not synonyms)
-- Group into categories that match JD structure (e.g., "Languages", "Frameworks", "Cloud/DevOps", "Databases")
-- Include relevant soft skills ONLY if explicitly mentioned in JD (e.g., "cross-functional collaboration", "stakeholder management")
-- Target 12-18 skills total — enough for ATS coverage, concise enough for human readers
+### Experience (rewrite EVERY role's bullets)
+- Keep company names and date windows truthful
+- 3–6 high-impact bullets per role, STAR-style, impact-first
+- Lead bullets that prove JD requirements
+- Mirror JD action verbs (architect, ship, own, scale, automate, etc.)
 
-### 6. ATS KEYWORD OPTIMIZATION
-- Extract ALL keyword phrases from JD (including from responsibilities, qualifications, and nice-to-haves)
-- Ensure each critical keyword appears at least 2x across the resume (summary + experience OR skills)
-- Use both the acronym AND full form: "CI/CD (Continuous Integration/Continuous Deployment)"
-- Mirror the JD's exact phrasing — if they say "RESTful APIs", don't write "REST APIs"
-- Include industry-standard certifications if relevant, even as "familiar with" if not held
-
-### 7. INTERVIEW PREPARATION ALIGNMENT
-- The tailored resume IS the interview script — every claim must be something the candidate can discuss in detail
-- Highlights should serve as natural talking points for behavioral questions
-- Technical claims should align with what the candidate can demonstrate live
-- Frame experience in STAR format (Situation → Task → Action → Result) implicitly in highlights
+### Projects (rewrite for role fit)
+- Reframe project outcomes and tech tags toward JD stack
+- Prioritize projects that best sell the target role
 
 ## OUTPUT RULES
-- Return plain text values only — NO Markdown formatting, headings, bold (**), italic, #, or bullet syntax
-- Every highlight should be a complete, impactful sentence (not a fragment)
-- Match score should reflect realistic ATS compatibility (be honest, not inflated)
-- matchExplanation should give specific, actionable feedback
-- keywordsUsed should list the exact JD keywords successfully incorporated
-- tailoredHighlights should have 6-10 items, each mapping to a specific JD requirement${customInstructions}
+- Plain text values only — no Markdown (**bold**, # headers, bullet symbols in strings)
+- Every bullet is a complete impact sentence
+- Be ambitious on positioning; be honest on employment facts
+- matchScore = realistic ATS fit after your rewrite (don't always give 99)
+- keywordsUsed = exact phrases from the JD you successfully embedded
+- detectedRole = short role label you optimized for (e.g. "AI Engineer", "Mobile Developer")${customInstructions}
 
-Respond with valid JSON only. Schema:
+Respond with valid JSON only:
 {
-  "tailoredSummary": "string (3-4 powerful sentences)",
-  "tailoredSkills": ["string (12-18 skills ordered by JD relevance)"],
-  "tailoredHighlights": ["string (6-10 achievement-focused bullets mapping to JD requirements)"],
-  "matchScore": number (0-100, honest ATS compatibility estimate),
-  "matchExplanation": "string (what matches well + what gaps exist + how gaps were mitigated)",
-  "keywordsUsed": ["string (exact keywords from JD that were incorporated)"]
+  "detectedRole": "string",
+  "tailoredSummary": "string (3-4 sentences)",
+  "tailoredSkills": ["string"],
+  "tailoredHighlights": ["string (6-12 top resume-wide achievement bullets)"],
+  "tailoredExperience": [
+    {
+      "company": "string (must match a real company from input)",
+      "title": "string (may slightly reframe toward JD if still honest)",
+      "description": "string",
+      "highlights": ["string"]
+    }
+  ],
+  "tailoredProjects": [
+    {
+      "name": "string",
+      "description": "string",
+      "tech": ["string"]
+    }
+  ],
+  "matchScore": number,
+  "matchExplanation": "string",
+  "keywordsUsed": ["string"]
 }`,
     },
     {
       role: "user",
-      content: `## CANDIDATE'S BASE RESUME
+      content: `## CANDIDATE SOURCE MODE: ${source.toUpperCase()}
 
 **Professional Summary:**
 ${resumeData.summary || "(No summary provided)"}
 
-**Technical Skills:**
+**Technical / Professional Skills:**
 ${resumeData.skills.length > 0 ? resumeData.skills.join(", ") : "(No skills listed)"}
 
 **Professional Experience:**
-${resumeData.experience.length > 0
-  ? resumeData.experience
-      .map(
-        (exp) =>
-          `### ${exp.title} at ${exp.company}\n${exp.description}\nKey Achievements:\n${exp.highlights.map((h) => `- ${h}`).join("\n")}`
-      )
-      .join("\n\n")
-  : "(No experience listed)"}
+${experienceBlock}
+
+**Projects:**
+${projectsBlock}
 
 **Education:**
-${resumeData.education.length > 0
-  ? resumeData.education.map((edu) => `- ${edu.degree} in ${edu.field} — ${edu.school}`).join("\n")
-  : "(No education listed)"}
+${educationBlock}
 
+**Certifications:**
+${certsBlock}
+${rawBlock}
 ---
 
 ## TARGET JOB DESCRIPTION
@@ -127,7 +231,7 @@ ${jobDescription}
 
 ---
 
-Analyze this job description thoroughly, then tailor the resume to maximize ATS score and interview callback rate. Return JSON only.`,
+Detect the target role family, then rewrite a maximum-impact resume for THAT role using mode=${source}. Return JSON only.`,
     },
   ];
 }

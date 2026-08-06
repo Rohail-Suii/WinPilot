@@ -4,8 +4,8 @@
 
 import { io } from "./socket.io.esm.min.js";
 
-const DEFAULT_WS_URL = "wss://winpilot.tech";
-const DEFAULT_API_URL = "https://winpilot.tech";
+const DEFAULT_WS_URL = "http://localhost:3001";
+const DEFAULT_API_URL = "http://localhost:3000";
 const HEARTBEAT_INTERVAL = 30000;
 const RECONNECT_BASE_DELAY = 1000;
 const MAX_RECONNECT_DELAY = 30000;
@@ -518,6 +518,9 @@ function normalizeAutomationOptions(options) {
   const source = options && typeof options === "object" ? options : {};
   return {
     useAI: source.useAI !== false,
+    useJobMatching: source.useJobMatching !== false,
+    // Default OFF to preserve rule-based filling unless user opts in
+    useAIFormFilling: source.useAIFormFilling === true,
   };
 }
 
@@ -590,8 +593,16 @@ function normalizeAnswerForField(field, rawAnswer) {
       return "5.0";
     }
 
-    const digitsOnly = text.replace(/\D+/g, "");
-    if (digitsOnly) return digitsOnly;
+    // Prefer first number group so "5 years" → "5" and "50,000-60,000" → "50000"
+    const firstNumber = text.match(/\d[\d,]*(?:\.\d+)?/);
+    if (firstNumber) {
+      const cleaned = firstNumber[0].replace(/,/g, "");
+      // For years/experience prefer integer
+      if (label.includes("year") || label.includes("experience") || label.includes("how many")) {
+        return String(parseInt(cleaned, 10));
+      }
+      return cleaned.replace(/\..*$/, ""); // salary etc. as integer digits
+    }
     if (label.includes("phone")) return "0000000000";
     if (label.includes("salary")) return "5000";
     if (label.includes("year") || label.includes("experience")) return "3";
@@ -628,24 +639,28 @@ function fallbackAnswerForField(field) {
     // Always prefer "Yes" — it keeps doors open
     const yesOpt = options.find((o) => {
       const val = (o?.value || "").toString().trim().toLowerCase();
-      const txt = (o?.text || "").toString().trim().toLowerCase();
+      const txt = (o?.text || o?.label || "").toString().trim().toLowerCase();
       return val === "yes" || txt === "yes";
     });
-    if (yesOpt) return yesOpt.value;
+    if (yesOpt) return yesOpt.value || yesOpt.label || yesOpt.text || "";
     const valid = options.find((o) => {
       const value = (o?.value || "").toString().trim().toLowerCase();
-      const text = (o?.text || "").toString().trim().toLowerCase();
+      const text = (o?.text || o?.label || "").toString().trim().toLowerCase();
       const joined = `${value} ${text}`;
-      return !!value && !/select|choose|please|option|pick one|--/.test(joined);
+      return (!!value || !!text) && !/select|choose|please|option|pick one|--/.test(joined);
     });
-    return valid?.value || options[0]?.value || "";
+    return valid?.value || valid?.label || valid?.text || options[0]?.value || options[0]?.label || "";
   };
 
   if (field.type === "checkbox") return "true";
   if (field.type === "radio") {
     // Prefer "Yes" for radio buttons too
-    const yesRadio = (field.options || []).find((o) => (o.label || "").toLowerCase() === "yes" || (o.value || "").toLowerCase() === "yes");
-    return yesRadio?.value || field.options?.[0]?.value || "Yes";
+    const yesRadio = (field.options || []).find((o) => {
+      const lbl = (o.label || o.text || "").toLowerCase();
+      const val = (o.value || "").toLowerCase();
+      return lbl === "yes" || val === "yes";
+    });
+    return yesRadio?.value || yesRadio?.label || field.options?.[0]?.value || field.options?.[0]?.label || "Yes";
   }
   if (field.type === "select" || field.type === "custom-dropdown") {
     return pickBestSelectOption(field.options || []);
@@ -655,6 +670,117 @@ function fallbackAnswerForField(field) {
   if (label.includes("city")) return "Dubai";
   if (label.includes("country")) return "United Arab Emirates";
   return normalizeAnswerForField(field, "Yes");
+}
+
+function optionTextList(field) {
+  return (field?.options || [])
+    .map((o) => (o?.label || o?.text || o?.value || "").toString().trim())
+    .filter(Boolean);
+}
+
+function inferFieldExpectedFormat(field) {
+  const label = (field?.label || "").toLowerCase();
+  const inputType = (field?.inputType || "").toLowerCase();
+  const maxLength = Number(field?.maxLength || 0);
+
+  if (field?.type === "radio" || field?.type === "select" || field?.type === "custom-dropdown") {
+    const opts = optionTextList(field);
+    if (opts.length <= 4 && opts.some((o) => /^(yes|no)$/i.test(o))) return "yes_no";
+    return "text";
+  }
+  if (field?.type === "textarea" || maxLength > 80) return "long_text";
+  if (inputType === "number" || /salary|compensation|pay|how many|years of|experience|scale|gpa/i.test(label)) {
+    if (/salary|compensation|pay|ctc/.test(label)) return "currency";
+    return "digits";
+  }
+  return "unknown";
+}
+
+function resolveOptionSelector(field, answer) {
+  if (!field || !answer) return field?.selector || null;
+  const options = field.options || [];
+  if (!options.length) return field.selector || null;
+
+  const normalized = String(answer).trim().toLowerCase();
+  const match =
+    options.find((o) => (o.label || "").toString().trim().toLowerCase() === normalized) ||
+    options.find((o) => (o.value || "").toString().trim().toLowerCase() === normalized) ||
+    options.find((o) => (o.text || "").toString().trim().toLowerCase() === normalized) ||
+    options.find((o) => {
+      const lbl = (o.label || o.text || o.value || "").toString().trim().toLowerCase();
+      return lbl && (lbl.includes(normalized) || normalized.includes(lbl));
+    });
+
+  return match?.selector || field.selector || null;
+}
+
+/**
+ * Ask the server AI form-answerer for answers to missing fields.
+ * Returns a Map of field label → answer string.
+ */
+async function getAIFormAnswers(fields, applicationId) {
+  if (!fields.length) return new Map();
+
+  const questions = fields.map((field) => ({
+    label: field.label || field.ariaLabel || "Unknown question",
+    type: field.type || "text",
+    options: optionTextList(field),
+    maxLength: field.maxLength || undefined,
+    expectedFormat: inferFieldExpectedFormat(field),
+  }));
+
+  try {
+    const result = await apiCall(`/api/jobs/automate?step=answer-form`, {
+      applicationId,
+      questions,
+    });
+
+    const map = new Map();
+    for (const item of result?.answers || []) {
+      const key = (item.question || "").toLowerCase().trim();
+      if (key && item.answer) {
+        map.set(key, String(item.answer));
+      }
+    }
+    return map;
+  } catch (err) {
+    console.warn(`[WinPilot] AI form answering failed: ${err.message}`);
+    emitLog("warn", "api", "AI form answering failed — falling back to rules", err.message);
+    return new Map();
+  }
+}
+
+async function answerFieldForForm(field, storedRules, aiAnswers) {
+  const labelKey = (field?.label || "").toLowerCase().trim();
+
+  // Prefer AI answer when available
+  if (aiAnswers && aiAnswers.size > 0) {
+    const aiRaw =
+      aiAnswers.get(labelKey) ||
+      [...aiAnswers.entries()].find(([k]) => labelKey && (labelKey.includes(k) || k.includes(labelKey)))?.[1];
+
+    if (aiRaw) {
+      const chosen = normalizeAnswerForField(field, aiRaw);
+      if (chosen) {
+        // For radio/select, map free-text AI answer onto an option
+        if (field.type === "radio" || field.type === "select" || field.type === "custom-dropdown") {
+          const options = field.options || [];
+          const match = options.find((o) => {
+            const lbl = (o.label || o.text || o.value || "").toString().trim().toLowerCase();
+            const ans = chosen.toLowerCase();
+            return lbl === ans || lbl.includes(ans) || ans.includes(lbl);
+          });
+          if (match) {
+            return match.value || match.label || match.text || chosen;
+          }
+        }
+        return chosen;
+      }
+    }
+  }
+
+  const raw = getRuleBasedAnswer(field, storedRules);
+  return normalizeAnswerForField(field, raw) || fallbackAnswerForField(field);
 }
 
 async function getStoredFormRules() {
@@ -831,14 +957,27 @@ async function ensureContentScriptReady(tabId, maxRetries = 3) {
     } catch (err) {
       console.warn(`[WinPilot] Content script not ready (attempt ${attempt + 1}): ${err.message}`);
       if (attempt < maxRetries - 1) {
-        // Try to inject the content script manually
-        try {
-          await chrome.scripting.executeScript({
-            target: { tabId },
-            files: ["content.js"],
-          });
-        } catch (injectErr) {
-          console.warn(`[WinPilot] Could not inject content script: ${injectErr.message}`);
+        if (attempt === 0) {
+          // First failure: the content script may just not have loaded yet — inject it directly.
+          try {
+            await chrome.scripting.executeScript({
+              target: { tabId },
+              files: ["content.js"],
+            });
+          } catch (injectErr) {
+            console.warn(`[WinPilot] Could not inject content script: ${injectErr.message}`);
+          }
+        } else {
+          // Still failing: the tab's JS context is likely orphaned (e.g. the extension was
+          // reloaded while this tab was already open). A plain injection re-runs in that same
+          // stale context, so force a full reload to get a context tied to the current extension.
+          console.warn(`[WinPilot] Reloading tab ${tabId} to recover a stale content script context`);
+          try {
+            await chrome.tabs.reload(tabId, { bypassCache: true });
+            await waitForTabLoad(tabId);
+          } catch (reloadErr) {
+            console.warn(`[WinPilot] Could not reload tab: ${reloadErr.message}`);
+          }
         }
         await new Promise((r) => setTimeout(r, 2000 * (attempt + 1)));
       }
@@ -901,36 +1040,51 @@ async function startAutomation(searchId, options = {}) {
   let targetApp = null;
   const normalizedOptions = normalizeAutomationOptions(options);
   let useAI = normalizedOptions.useAI;
+  let useJobMatching = normalizedOptions.useJobMatching;
+  let useAIFormFilling = normalizedOptions.useAIFormFilling;
 
   console.log(`[WinPilot] ====== STARTING AUTOMATION ======`);
   console.log(`[WinPilot] searchId: ${searchId}`);
   console.log(`[WinPilot] apiUrl: ${apiUrl}`);
   console.log(`[WinPilot] authToken: ${authToken ? `${authToken.substring(0, 8)}...` : "NOT SET"}`);
   console.log(`[WinPilot] wsUrl: ${wsUrl}`);
-  console.log(`[WinPilot] useAI: ${useAI}`);
-  emitLog("info", "system", "====== STARTING AUTOMATION ======", `searchId=${searchId}, useAI=${useAI}`);
+  console.log(`[WinPilot] useAI: ${useAI}, useJobMatching: ${useJobMatching}, useAIFormFilling: ${useAIFormFilling}`);
+  emitLog(
+    "info",
+    "system",
+    "====== STARTING AUTOMATION ======",
+    `searchId=${searchId}, useAI=${useAI}, useAIFormFilling=${useAIFormFilling}`
+  );
 
   automationRunning = true;
   automationAborted = false;
 
-  chrome.storage.local.set({ automationRunning: true, automationSearchId: searchId });
+  chrome.storage.local.set({
+    automationRunning: true,
+    automationSearchId: searchId,
+    // Keep AI fallback module in sync for post-submit validation fixes
+    useAIFormFilling,
+  });
 
   reportProgress("task:start", { label: "Starting job automation..." });
   reportProgress("task:progress", {
-    message: useAI
-      ? "AI Mode ON: matching and tailored resume generation enabled"
-      : "AI Mode OFF: applying with existing LinkedIn resume (no AI usage)",
+    message: [
+      useAI ? "AI resume ON" : "AI resume OFF",
+      useJobMatching ? "matching ON" : "matching OFF",
+      useAIFormFilling ? "AI form fill ON" : "AI form fill OFF (rules)",
+    ].join(" · "),
   });
 
   try {
-    // Step 1: Get search config and navigate to LinkedIn Jobs
+    // Step 1: Get one search URL per keyword (LinkedIn doesn't handle a comma-separated
+    // multi-phrase keyword string well, so each keyword gets its own search)
     console.log(`[WinPilot] Step 1: Fetching search configuration...`);
     reportProgress("task:progress", { message: "Fetching search configuration..." });
     const startData = await apiCall(`/api/jobs/automate?step=start`, { searchId });
     console.log(`[WinPilot] Step 1 result:`, JSON.stringify(startData).substring(0, 300));
-    emitLog("info", "extension", "Search configuration received", `URL: ${startData.url || "none"}, remaining: ${startData.remaining || "?"}`);
+    emitLog("info", "extension", "Search configuration received", `${startData.searches?.length || 0} keyword(s), remaining: ${startData.remaining || "?"}`);
 
-    if (!startData.url) {
+    if (!startData.searches?.length) {
       throw new Error("No search URL returned");
     }
 
@@ -938,20 +1092,8 @@ async function startAutomation(searchId, options = {}) {
       message: `Navigating to LinkedIn Jobs (${startData.remaining} applications remaining today)...`,
     });
 
-    // Navigate to search URL
-    console.log(`[WinPilot] Step 1b: Navigating to ${startData.url}`);
     const tab = await ensureLinkedInTab();
     console.log(`[WinPilot] Got LinkedIn tab: id=${tab.id}, url=${tab.url}`);
-    await chrome.tabs.update(tab.id, { url: startData.url, active: true });
-    await waitForTabLoad(tab.id);
-    await randomDelay(4000, 7000); // Longer initial load wait
-    const csReady = await ensureContentScriptReady(tab.id);
-    console.log(`[WinPilot] Content script ready: ${csReady}`);
-
-    // Session health check before starting
-    if (!(await ensureSessionHealthy(tab.id))) {
-      return cleanup("Automation stopped: LinkedIn session could not be restored");
-    }
 
     if (automationAborted) return cleanup("Automation stopped by user");
 
@@ -976,15 +1118,43 @@ async function startAutomation(searchId, options = {}) {
     let totalAppliedCount = 0;
     let totalFailedCount = 0;
     let totalSkippedQualificationCount = 0;
-    let currentPage = 1;
+    let totalPagesProcessed = 0;
     const processedJobIds = new Set();
 
-    // Multi-page loop
-    pageLoop: for (let pageNum = 1; pageNum <= MAX_PAGES; pageNum++) {
+    // Search each keyword one at a time
+    keywordLoop: for (const { keyword, url: keywordSearchUrl } of startData.searches) {
       if (automationAborted) return cleanup("Automation stopped by user");
+      if (totalAppliedCount + totalFailedCount >= MAX_JOBS_PER_RUN) break keywordLoop;
 
-      currentPage = pageNum;
-      const currentPageUrl = getSearchUrlForPage(startData.url, pageNum);
+      console.log(`[WinPilot] ====== Searching keyword: "${keyword}" ======`);
+      emitLog("info", "extension", `Searching keyword: "${keyword}"`);
+      reportProgress("task:progress", { message: `Searching for "${keyword}"...` });
+
+      try {
+        await chrome.tabs.update(tab.id, { url: keywordSearchUrl, active: true });
+        await waitForTabLoad(tab.id);
+        await randomDelay(4000, 7000); // Longer initial load wait
+        const csReady = await ensureContentScriptReady(tab.id);
+        console.log(`[WinPilot] Content script ready: ${csReady}`);
+        if (!csReady) {
+          emitLog("warn", "extension", `Skipping "${keyword}": could not connect to the LinkedIn tab's content script`);
+          continue keywordLoop;
+        }
+
+        // Session health check before starting
+        if (!(await ensureSessionHealthy(tab.id))) {
+          return cleanup("Automation stopped: LinkedIn session could not be restored");
+        }
+
+        let currentPage = 1;
+
+        // Multi-page loop
+        pageLoop: for (let pageNum = 1; pageNum <= MAX_PAGES; pageNum++) {
+          if (automationAborted) return cleanup("Automation stopped by user");
+
+          currentPage = pageNum;
+          totalPagesProcessed++;
+          const currentPageUrl = getSearchUrlForPage(keywordSearchUrl, pageNum);
 
       // Navigate to the correct page (only if pageNum > 1 or first time)
       if (pageNum > 1) {
@@ -1035,25 +1205,45 @@ async function startAutomation(searchId, options = {}) {
         }
       }
 
-      // Filter eligible jobs, excluding already processed ones
-      const eligibleJobs = scrapedJobs.filter(
-        (job) => job?.url && !job.applied && job.easyApply !== false && !processedJobIds.has(job.jobId || job.url)
-      );
+      // Process all unapplied jobs with a URL/id. Do NOT gate on list-card Easy Apply badges —
+      // modern LinkedIn often hides them, which previously left eligible=0 on full pages of jobs.
+      // Easy Apply vs external is decided on the detail pane / CLICK_EASY_APPLY.
+      const eligibleJobs = scrapedJobs.filter((job) => {
+        if (job?.applied) return false;
+        const hasTarget = !!(job?.url || job?.jobId);
+        if (!hasTarget) return false;
+        const keys = [job.jobId, job.url].filter(Boolean);
+        if (keys.some((k) => processedJobIds.has(k))) return false;
+        return true;
+      });
       const dedupedEligibleJobs = [];
       const seenJobKeys = new Set();
       for (const job of eligibleJobs) {
+        // Ensure every job has a navigable URL
+        if (!job.url && job.jobId) {
+          job.url = `https://www.linkedin.com/jobs/view/${job.jobId}/`;
+        }
         const key = (job.jobId || job.url || "").trim();
         if (!key || seenJobKeys.has(key) || processedJobIds.has(key)) continue;
         seenJobKeys.add(key);
         dedupedEligibleJobs.push(job);
       }
       const skippedAppliedCount = scrapedJobs.filter((job) => job?.applied).length;
-      const easyApplyDetectedCount = scrapedJobs.filter((job) => job?.easyApply !== false).length;
+      const knownEasyApplyCount = scrapedJobs.filter((job) => job?.easyApply === true).length;
+      const unknownApplyCount = scrapedJobs.filter(
+        (job) => job?.easyApply == null || job?.easyApply === undefined
+      ).length;
+      const externalOnCardCount = scrapedJobs.filter((job) => job?.easyApply === false).length;
+      const missingUrlCount = scrapedJobs.filter((job) => !job?.url && !job?.jobId).length;
 
       console.log(
-        `[WinPilot] Page ${pageNum} eligibility: total=${scrapedJobs.length}, easyApply=${easyApplyDetectedCount}, alreadyApplied=${skippedAppliedCount}, eligible=${dedupedEligibleJobs.length}`
+        `[WinPilot] Page ${pageNum} eligibility: total=${scrapedJobs.length}, easyApplyBadge=${knownEasyApplyCount}, unknown=${unknownApplyCount}, externalCard=${externalOnCardCount}, noUrl=${missingUrlCount}, alreadyApplied=${skippedAppliedCount}, eligible=${dedupedEligibleJobs.length}`
       );
-      emitLog("info", "extension", `Page ${pageNum} eligibility: total=${scrapedJobs.length}, easyApply=${easyApplyDetectedCount}, alreadyApplied=${skippedAppliedCount}, eligible=${dedupedEligibleJobs.length}`);
+      emitLog(
+        "info",
+        "extension",
+        `Page ${pageNum} eligibility: total=${scrapedJobs.length}, easyApplyBadge=${knownEasyApplyCount}, unknown=${unknownApplyCount}, externalCard=${externalOnCardCount}, noUrl=${missingUrlCount}, alreadyApplied=${skippedAppliedCount}, eligible=${dedupedEligibleJobs.length}`
+      );
 
       if (dedupedEligibleJobs.length === 0) {
         console.log(`[WinPilot] No new eligible jobs on page ${pageNum}, trying next page...`);
@@ -1166,10 +1356,11 @@ async function startAutomation(searchId, options = {}) {
           };
 
           // Proceed if matched OR if status is unknown (LinkedIn didn't show qualification info)
-          const shouldSkipJob =
+          const shouldSkipJob = useJobMatching && (
             qualification.status === "missing_required" ||
             qualification.status === "no_match" ||
-            (qualification.matched === false && qualification.status !== "unknown");
+            (qualification.matched === false && qualification.status !== "unknown")
+          );
           const qualificationLabel =
             qualification.text ||
             String(qualification.status || "unknown").replace(/_/g, " ");
@@ -1274,8 +1465,7 @@ async function startAutomation(searchId, options = {}) {
             }
           }
 
-          // Try clicking Easy Apply from the search results side panel first
-          // (avoids navigating away from the search page)
+          // Try Easy Apply from the search results side panel first
           let easyApplyResult = await sendToContentScript(tab.id, {
             type: "EXECUTE_ACTION",
             command: "CLICK_EASY_APPLY",
@@ -1283,12 +1473,11 @@ async function startAutomation(searchId, options = {}) {
           });
 
           if (!easyApplyResult?.data?.clicked) {
-            // If Easy Apply button wasn't found on side panel, navigate to the job page
+            // Side panel miss — open the full job page and retry
             console.log(`[WinPilot] Easy Apply not found on side panel, navigating to job page...`);
             await navigateAndWait(tab.id, targetApp.jobUrl);
             needsReturnToSearchPage = true;
 
-            // Check session after navigation (LinkedIn may redirect to login)
             if (!(await ensureSessionHealthy(tab.id))) {
               return cleanup("Automation stopped: LinkedIn session could not be restored");
             }
@@ -1356,7 +1545,7 @@ async function startAutomation(searchId, options = {}) {
               throw new Error("No form progress detected; skipping this job");
             }
 
-            if (useAI && !uploaded && fields.some((f) => f.type === "file")) {
+            if (useAI && prepData?.resumePdf && !uploaded && fields.some((f) => f.type === "file")) {
               const uploadResult = await sendToContentScript(tab.id, {
                 type: "EXECUTE_ACTION",
                 command: "UPLOAD_RESUME",
@@ -1372,26 +1561,54 @@ async function startAutomation(searchId, options = {}) {
             }
 
             const requiredMissing = fields.filter((f) => f.required && isMissingFieldValue(f));
+
+            // Batch AI answers for this form step when AI Form Filling is enabled
+            let aiAnswers = new Map();
+            if (useAIFormFilling && requiredMissing.length > 0) {
+              reportProgress("task:progress", {
+                message: `AI answering ${requiredMissing.length} form question(s)...`,
+                jobTitle: targetApp.jobTitle || jobWithDetail.title,
+              });
+              try {
+                aiAnswers = await getAIFormAnswers(requiredMissing, targetApp._id);
+                if (aiAnswers.size > 0) {
+                  emitLog("info", "api", `AI form fill returned ${aiAnswers.size} answer(s)`);
+                }
+              } catch (formAiErr) {
+                const formAiMessage = formAiErr?.message || "";
+                if (isGeminiQuotaErrorMessage(formAiMessage)) {
+                  useAIFormFilling = false;
+                  chrome.storage.local.set({ useAIFormFilling: false });
+                  reportProgress("task:error", {
+                    message: `${formAiMessage} Switched AI Form Filling OFF for remaining jobs.`,
+                  });
+                } else {
+                  emitLog("warn", "api", "AI form fill error, using rules", formAiMessage);
+                }
+              }
+            }
+
             for (let i = 0; i < requiredMissing.length; i++) {
               const field = requiredMissing[i];
-              const raw = getRuleBasedAnswer(field, storedRules);
-              const chosen = normalizeAnswerForField(field, raw) || fallbackAnswerForField(field);
+              const chosen = await answerFieldForForm(field, storedRules, useAIFormFilling ? aiAnswers : null);
 
               if (!chosen) {
                 await recordUnknownFieldSituation(field, targetApp.jobTitle);
                 continue;
               }
 
+              const fillSelector = resolveOptionSelector(field, chosen) || field.selector;
+
               await sendToContentScript(tab.id, {
                 type: "EXECUTE_ACTION",
                 command: "FILL_FORM_FIELD",
                 actionId: `fill-${targetApp._id}-${step}-${i}`,
                 fieldIndex: i,
-                selector: field.selector,
+                selector: fillSelector,
                 value: chosen,
                 fieldType: field.type,
+                fieldLabel: field.label,
               });
-              // Human-like pause between form fields
               await randomDelay(800, 2000);
             }
 
@@ -1413,7 +1630,6 @@ async function startAutomation(searchId, options = {}) {
             const navAction = navResult?.data?.action;
             if (navAction === "submitted") {
               submitted = true;
-              // After submission, dismiss the confirmation dialog if present
               await randomDelay(1000, 1500);
               try {
                 await sendToContentScript(tab.id, {
@@ -1426,7 +1642,6 @@ async function startAutomation(searchId, options = {}) {
             }
 
             if (navAction === "next" || navAction === "review") {
-              // Wait for next page to load, then simulate reading
               await randomDelay(1500, 3000);
               continue;
             }
@@ -1531,14 +1746,23 @@ async function startAutomation(searchId, options = {}) {
         console.log(`[WinPilot] Reached max jobs limit (${MAX_JOBS_PER_RUN}), stopping pagination`);
         break pageLoop;
       }
-    } // End of pageLoop
+        } // End of pageLoop
+      } catch (keywordErr) {
+        console.error(`[WinPilot] Keyword "${keyword}" failed: ${keywordErr.message}`);
+        emitLog("warn", "extension", `Search for "${keyword}" failed: ${keywordErr.message}`);
+        reportProgress("task:progress", {
+          message: `No results for "${keyword}" (${keywordErr.message}), trying next keyword...`,
+        });
+        continue keywordLoop;
+      }
+    } // End of keywordLoop
 
     reportProgress("task:complete", {
-      message: `Automation complete. Pages processed: ${currentPage}. Applied: ${totalAppliedCount}, Failed/Skipped: ${totalFailedCount} (${totalSkippedQualificationCount} skipped by LinkedIn qualification signal).`,
+      message: `Automation complete. Keywords searched: ${startData.searches.length}, pages processed: ${totalPagesProcessed}. Applied: ${totalAppliedCount}, Failed/Skipped: ${totalFailedCount} (${totalSkippedQualificationCount} skipped by LinkedIn qualification signal).`,
       appliedCount: totalAppliedCount,
       failedCount: totalFailedCount,
       skippedQualificationCount: totalSkippedQualificationCount,
-      pagesProcessed: currentPage,
+      pagesProcessed: totalPagesProcessed,
     });
     return cleanup();
   } catch (err) {

@@ -861,7 +861,7 @@
       "[data-field='skill_card_skill_topic'] .t-bold span[aria-hidden='true'], " +
       "li.pvs-list__paged-list-item .display-flex .t-bold span[aria-hidden='true']"
     );
-    const skillsSet = new Set<string>();
+    const skillsSet = new Set();
     skillEls.forEach((el) => {
       const text = el.textContent?.trim();
       if (text && text.length < 60) skillsSet.add(text);
@@ -869,7 +869,7 @@
     const skills = [...skillsSet].slice(0, 30);
 
     // Experience
-    const experience: { title: string; company: string; duration: string; description: string }[] = [];
+    const experience = [];
     const expSection = document.querySelector(
       "#experience ~ .pvs-list__outer-container, section[id='experience-section']"
     );
@@ -879,7 +879,7 @@
         const spans = item.querySelectorAll("span[aria-hidden='true']");
         const texts = Array.from(spans)
           .map((s) => s.textContent?.trim())
-          .filter(Boolean) as string[];
+          .filter(Boolean);
         if (texts.length >= 2) {
           experience.push({
             title: texts[0] || "",
@@ -892,7 +892,7 @@
     }
 
     // Education
-    const education: { school: string; degree: string; field: string }[] = [];
+    const education = [];
     const eduSection = document.querySelector(
       "#education ~ .pvs-list__outer-container, section[id='education-section']"
     );
@@ -902,7 +902,7 @@
         const spans = item.querySelectorAll("span[aria-hidden='true']");
         const texts = Array.from(spans)
           .map((s) => s.textContent?.trim())
-          .filter(Boolean) as string[];
+          .filter(Boolean);
         if (texts.length >= 1) {
           education.push({
             school: texts[0] || "",
@@ -914,7 +914,7 @@
     }
 
     // Certifications / Licenses
-    const certifications: { name: string; issuingOrg: string }[] = [];
+    const certifications = [];
     const certSection = document.querySelector(
       "#licenses_and_certifications ~ .pvs-list__outer-container, " +
       "#certifications ~ .pvs-list__outer-container"
@@ -925,7 +925,7 @@
         const spans = item.querySelectorAll("span[aria-hidden='true']");
         const texts = Array.from(spans)
           .map((s) => s.textContent?.trim())
-          .filter(Boolean) as string[];
+          .filter(Boolean);
         if (texts.length >= 1) {
           certifications.push({
             name: texts[0] || "",
@@ -936,7 +936,7 @@
     }
 
     // Featured
-    const featured: { type: string; title: string }[] = [];
+    const featured = [];
     const featuredSection = document.querySelector(
       "#featured ~ .pvs-list__outer-container"
     );
@@ -960,61 +960,187 @@
 
   // --- Phase 2: Job Scraping Helpers ---
 
+  /**
+   * Detect Easy Apply on a search-result card.
+   * Returns true / false / null (unknown). Never default unknown → false or all jobs get filtered out
+   * when Easy Apply-only mode is on (LinkedIn often hides the badge until hover / uses new SDUI markup).
+   */
+  function detectCardEasyApply(card) {
+    if (!card) return null;
+
+    const rawText = `${card.innerText || ""} ${card.textContent || ""}`;
+    const text = rawText.replace(/\u00a0/g, " ").replace(/\s+/g, " ").toLowerCase();
+
+    // Explicit Easy Apply signals (text, aria, icons, LinkedIn apply-method row)
+    if (/\beasy\s*apply\b/.test(text)) return true;
+
+    const easySelectors = [
+      "[data-test-job-card-easy-apply]",
+      "[aria-label*='Easy Apply']",
+      "[aria-label*='easy apply']",
+      "[data-control-name*='easy_apply']",
+      "li-icon[type='linkedin-bug']",
+      "svg[data-test-icon*='linkedin-bug']",
+      "use[*|href*='linkedin-bug']",
+      ".job-card-container__apply-method",
+      ".job-card-list__footer-wrapper .job-card-container__footer-item",
+      "[class*='job-card-container__apply-method']",
+      "[class*='easy-apply']",
+    ];
+    for (const sel of easySelectors) {
+      try {
+        if (card.querySelector(sel)) {
+          // Footer items can be non-Easy-Apply (promoted, etc.) — verify text when present
+          if (sel.includes("footer-item")) {
+            const items = card.querySelectorAll(sel);
+            for (const item of items) {
+              const t = (item.textContent || "").replace(/\s+/g, " ").toLowerCase();
+              if (/\beasy\s*apply\b/.test(t) || item.querySelector("li-icon[type='linkedin-bug']")) {
+                return true;
+              }
+            }
+            continue;
+          }
+          return true;
+        }
+      } catch {
+        /* ignore invalid sel */
+      }
+    }
+
+    // Footer highlighted apply row is almost always Easy Apply on classic layout
+    if (card.querySelector(".job-card-container__footer-item--highlighted")) {
+      const hl = card.querySelector(".job-card-container__footer-item--highlighted");
+      const ht = (hl?.textContent || "").toLowerCase();
+      if (!ht || /\beasy\s*apply\b/.test(ht) || ht.includes("apply")) return true;
+    }
+
+    // Clear external / company-site signals only
+    if (
+      /\bapply\s+on\s+company\b/.test(text) ||
+      text.includes("external apply") ||
+      text.includes("apply on company website") ||
+      text.includes("company website") && text.includes("apply")
+    ) {
+      return false;
+    }
+
+    // Unknown — keep eligible; detail pane + CLICK_EASY_APPLY will save true external jobs
+    return null;
+  }
+
+  function extractJobIdFromCard(card, url) {
+    const fromAttrs =
+      card.getAttribute("data-occludable-job-id") ||
+      card.getAttribute("data-job-id") ||
+      card.getAttribute("data-entity-urn")?.match(/jobPosting:(\d+)/)?.[1] ||
+      card.querySelector("[data-occludable-job-id]")?.getAttribute("data-occludable-job-id") ||
+      card.querySelector("[data-job-id]")?.getAttribute("data-job-id") ||
+      card.querySelector("[data-entity-urn*='jobPosting']")?.getAttribute("data-entity-urn")?.match(/jobPosting:(\d+)/)?.[1];
+    if (fromAttrs) return String(fromAttrs);
+
+    if (url) {
+      const fromUrl =
+        url.match(/\/view\/(\d+)/)?.[1] ||
+        url.match(/currentJobId=(\d+)/)?.[1] ||
+        url.match(/jobPosting[:/](\d+)/)?.[1];
+      if (fromUrl) return String(fromUrl);
+    }
+
+    // Any nested anchor carrying a job id
+    const anchors = card.querySelectorAll("a[href]");
+    for (const a of anchors) {
+      const href = a.href || a.getAttribute("href") || "";
+      const id =
+        href.match(/\/jobs\/view\/(\d+)/)?.[1] ||
+        href.match(/currentJobId=(\d+)/)?.[1];
+      if (id) return String(id);
+    }
+    return "";
+  }
+
   function scrapeJobListings() {
     const jobCards = document.querySelectorAll(
       ".jobs-search-results__list-item, .job-card-container, .scaffold-layout__list-item, " +
       ".jobs-search-results-list__list-item, [data-occludable-job-id], " +
-      "li.jobs-search-results__list-item, .job-card-list"
+      "li.jobs-search-results__list-item, .job-card-list, " +
+      "li[data-occludable-job-id], div[data-job-id], li.scaffold-layout__list-item"
     );
     const jobs = [];
+    const seenIds = new Set();
 
     for (const card of jobCards) {
+      // Prefer the outer list item so we don't double-count nested containers
+      const root =
+        card.closest?.("[data-occludable-job-id], li.jobs-search-results__list-item, li.scaffold-layout__list-item") ||
+        card;
+
       const titleEl =
-        card.querySelector(".job-card-list__title, .job-card-container__link, .job-card-list__title--link") ||
-        card.querySelector("a[data-control-name], a.job-card-container__link, a.job-card-list__title--link") ||
-        card.querySelector("a[href*='/jobs/view/']");
-      const companyEl = card.querySelector(
+        root.querySelector(
+          "a.job-card-list__title--link, a.job-card-container__link, a.job-card-list__title, " +
+          ".job-card-list__title a, .artdeco-entity-lockup__title a, " +
+          "a[href*='/jobs/view/'], a[href*='currentJobId=']"
+        ) ||
+        root.querySelector(".job-card-list__title, .job-card-container__link, strong a, h3 a");
+
+      const companyEl = root.querySelector(
         ".job-card-container__primary-description, .artdeco-entity-lockup__subtitle, " +
         ".job-card-container__company-name, .artdeco-entity-lockup__subtitle span"
       );
-      const locationEl = card.querySelector(
+      const locationEl = root.querySelector(
         ".job-card-container__metadata-item, .artdeco-entity-lockup__caption, " +
         ".job-card-container__metadata-wrapper span"
       );
-      const easyApplyBadge = card.querySelector(
-        ".job-card-container__apply-method, [data-test-job-card-easy-apply], " +
-        ".job-card-container__footer-item--highlighted, " +
-        "li-icon[type='linkedin-bug']"
-      );
-      const easyApplyLabel = card.querySelector(
-        "[aria-label*='Easy Apply'], [data-control-name*='easy_apply'], [class*='apply-method']"
-      );
-      const cardText = (card.textContent || "").toLowerCase();
-      const easyApplyByText = cardText.includes("easy apply");
-      const appliedBadge = card.querySelector(
-        ".job-card-container__footer-item--success, [data-test-job-card-applied], .artdeco-inline-feedback"
+      const cardText = (root.innerText || root.textContent || "").toLowerCase();
+      const easyApplyFlag = detectCardEasyApply(root);
+      const appliedBadge = root.querySelector(
+        ".job-card-container__footer-item--success, [data-test-job-card-applied], .artdeco-inline-feedback--success"
       );
       const alreadyApplied =
         !!appliedBadge ||
-        cardText.includes("applied") ||
-        cardText.includes("application submitted") ||
-        cardText.includes("submitted");
+        /\bapplied\b/.test(cardText) ||
+        cardText.includes("application submitted");
 
-      const title = titleEl?.textContent?.trim() || "";
-      const url = titleEl?.closest("a")?.href || "";
-      const jobId = url.match(/\/view\/(\d+)/)?.[1] || "";
+      const title = (titleEl?.textContent || "").replace(/\s+/g, " ").trim();
+      if (!title) continue;
 
-      if (title) {
-        jobs.push({
-          title,
-          company: companyEl?.textContent?.trim() || "",
-          location: locationEl?.textContent?.trim() || "",
-          easyApply: !!easyApplyBadge || !!easyApplyLabel || easyApplyByText,
-          applied: alreadyApplied,
-          url,
-          jobId,
-        });
+      let url = "";
+      if (titleEl?.href && /jobs|currentJobId/i.test(titleEl.href)) {
+        url = titleEl.href;
+      } else if (titleEl?.closest?.("a")?.href) {
+        url = titleEl.closest("a").href;
+      } else {
+        const anyJobLink =
+          root.querySelector("a[href*='/jobs/view/']") ||
+          root.querySelector("a[href*='currentJobId=']");
+        url = anyJobLink?.href || "";
       }
+
+      let jobId = extractJobIdFromCard(root, url);
+      if (!url && jobId) {
+        url = `https://www.linkedin.com/jobs/view/${jobId}/`;
+      }
+      if (!jobId && url) {
+        jobId = extractJobIdFromCard(root, url);
+      }
+
+      // Need at least a job id or url to process later
+      if (!url && !jobId) continue;
+
+      const dedupeKey = jobId || url || title;
+      if (seenIds.has(dedupeKey)) continue;
+      seenIds.add(dedupeKey);
+
+      jobs.push({
+        title,
+        company: (companyEl?.textContent || "").replace(/\s+/g, " ").trim(),
+        location: (locationEl?.textContent || "").replace(/\s+/g, " ").trim(),
+        // true | false | null (unknown). Background never gates eligibility on this alone.
+        easyApply: easyApplyFlag,
+        applied: alreadyApplied,
+        url,
+        jobId: String(jobId || ""),
+      });
     }
 
     return jobs;
@@ -1440,6 +1566,7 @@
     salary = salaryEl?.textContent?.trim() || "";
 
     const qualification = detectQualificationStatus();
+    const isEasyApply = detectIsEasyApply();
 
     return {
       title,
@@ -1451,42 +1578,99 @@
       qualificationStatus: qualification.status,
       qualificationMatched: qualification.matched,
       qualificationText: qualification.text,
+      isEasyApply,
     };
   }
 
   // --- Phase 2: Easy Apply Helpers ---
+  // User filters Easy Apply on LinkedIn; always attempt the apply button / modal flow.
+
+  function getJobDetailRoot() {
+    return (
+      document.querySelector(".jobs-details") ||
+      document.querySelector(".jobs-search__job-details") ||
+      document.querySelector(".jobs-details__main-content") ||
+      document.querySelector(".job-view-layout") ||
+      document.querySelector(".scaffold-layout__detail") ||
+      document.querySelector(".jobs-unified-top-card")?.closest(
+        ".scaffold-layout__detail, .jobs-search__job-details, main, .jobs-details"
+      ) ||
+      document
+    );
+  }
+
+  function findEasyApplyButton(root = getJobDetailRoot()) {
+    if (!root) root = document;
+
+    // Prefer explicit Easy Apply controls inside the detail pane
+    const candidates = [
+      root.querySelector("a[aria-label*='Easy Apply']"),
+      root.querySelector("button[aria-label*='Easy Apply']"),
+      root.querySelector("[aria-label='Easy Apply to this job']"),
+      root.querySelector("[data-control-name*='easy_apply']"),
+      root.querySelector("button.jobs-apply-button--top-card"),
+      root.querySelector("a.jobs-apply-button--top-card"),
+      root.querySelector("button.jobs-apply-button"),
+      root.querySelector("a.jobs-apply-button"),
+      root.querySelector(".jobs-apply-button"),
+      root.querySelector("[data-control-name='jobdetails_topcard_inapply']"),
+      root.querySelector(".jobs-s-apply button"),
+      root.querySelector(".jobs-s-apply a"),
+    ].filter(Boolean);
+
+    for (const el of candidates) {
+      if (el.offsetParent === null && el.getClientRects?.().length === 0) continue;
+      return el;
+    }
+
+    // Text match within detail root, then document
+    for (const scope of [root, document]) {
+      for (const tag of ["button", "a"]) {
+        const nodes = scope.querySelectorAll(tag);
+        for (const el of nodes) {
+          const t = (el.textContent || "").replace(/\s+/g, " ").trim().toLowerCase();
+          const aria = (el.getAttribute("aria-label") || "").toLowerCase();
+          if (t.includes("easy apply") || aria.includes("easy apply")) return el;
+        }
+      }
+    }
+
+    // Last resort: any visible "Apply" in the detail top card (user guarantees Easy Apply filter)
+    for (const tag of ["button", "a"]) {
+      const nodes = root.querySelectorAll(tag);
+      for (const el of nodes) {
+        const t = (el.textContent || "").replace(/\s+/g, " ").trim().toLowerCase();
+        if (t === "apply" || t.startsWith("apply ")) return el;
+      }
+    }
+
+    return null;
+  }
+
+  function detectIsEasyApply(root = getJobDetailRoot()) {
+    // Always treat as Easy Apply when user filters LinkedIn results; still report button presence.
+    return !!findEasyApplyButton(root);
+  }
 
   async function clickEasyApply() {
-    // SDUI layout uses <a> with aria-label, legacy uses <button>
-    const btn =
-      document.querySelector("a[aria-label*='Easy Apply']") ||
-      document.querySelector("[aria-label='Easy Apply to this job']") ||
-      document.querySelector(".jobs-apply-button") ||
-      document.querySelector("[data-control-name='jobdetails_topcard_inapply']") ||
-      document.querySelector("button.jobs-apply-button--top-card") ||
-      getElementByText("a", "Easy Apply") ||
-      getElementByText("button", "Easy Apply") ||
-      getElementByText("button", "Apply");
+    const root = getJobDetailRoot();
+    const btn = findEasyApplyButton(root);
 
     if (!btn) {
       return { clicked: false, error: "Easy Apply button not found" };
     }
 
-    // Simulate reading the job before clicking apply (human behavior)
     await HumanBehavior.idleScroll();
     await HumanBehavior.sleep(HumanBehavior.clampedGaussian(500, 1500));
 
-    // Check if SDUI Easy Apply link (navigates to apply page instead of modal)
-    const isLink = btn.tagName === "A" && btn.href && btn.href.includes("/apply/");
+    const href = btn.tagName === "A" ? (btn.href || btn.getAttribute("href") || "") : "";
+    const isLink = btn.tagName === "A" && href && href.includes("/apply/");
 
     if (isLink) {
-      // Return immediately so the message channel can respond before navigation unloads the page.
       const urlBefore = window.location.href;
-      const targetUrl = btn.href;
-      // Human-like click on the link
+      const targetUrl = href;
       await dispatchNativeClickAsync(btn);
 
-      // If click doesn't navigate promptly, force it shortly after.
       setTimeout(() => {
         if (window.location.href === urlBefore && targetUrl) {
           window.location.href = targetUrl;
@@ -1498,10 +1682,9 @@
 
     await dispatchNativeClickAsync(btn);
 
-    // Legacy: wait for modal to appear
     try {
       await waitForElement(
-        ".jobs-easy-apply-modal, [data-test-modal], .artdeco-modal",
+        ".jobs-easy-apply-modal, [class*='jobs-easy-apply'], [data-test-modal], .artdeco-modal",
         5000
       );
     } catch (e) {
@@ -1523,43 +1706,139 @@
 
     const fields = [];
 
+    function cleanLabelText(text) {
+      return (text || "")
+        .replace(/\s+/g, " ")
+        .replace(/\*$/, "")
+        .trim();
+    }
+
+    function extractMaxLength(input) {
+      if (input.maxLength && input.maxLength > 0 && input.maxLength < 100000) {
+        return input.maxLength;
+      }
+      const describedBy = input.getAttribute("aria-describedby");
+      if (describedBy) {
+        for (const id of describedBy.split(/\s+/)) {
+          const helper = document.getElementById(id);
+          const helperText = helper?.textContent || "";
+          // LinkedIn helper: "0/20" or "0 of 20 characters"
+          const m = helperText.match(/(\d+)\s*(?:\/|of)\s*(\d+)/i);
+          if (m) return Number(m[2]);
+        }
+      }
+      const parent = input.closest("div");
+      const nearby = parent?.parentElement?.textContent || "";
+      const nearbyMatch = nearby.match(/(\d+)\s*(?:\/|of)\s*(\d+)\s*character/i) || nearby.match(/\b0\/(\d+)\b/);
+      if (nearbyMatch) {
+        return Number(nearbyMatch[2] || nearbyMatch[1]);
+      }
+      return undefined;
+    }
+
+    function findQuestionLabelNear(el) {
+      // Classic LinkedIn form label
+      const classic =
+        el.closest(".fb-dash-form-element")?.querySelector("label, .fb-dash-form-element__label")?.textContent ||
+        el.getAttribute("aria-label") ||
+        el.getAttribute("placeholder") ||
+        "";
+      if (classic && classic.trim()) return cleanLabelText(classic);
+
+      // SDUI / new Easy Apply: question text is often a preceding <p>
+      let node = el.parentElement;
+      for (let depth = 0; depth < 6 && node; depth++) {
+        let prev = node.previousElementSibling;
+        while (prev) {
+          if (prev.tagName === "P" || prev.getAttribute("role") === "heading") {
+            const t = cleanLabelText(prev.textContent);
+            if (t && t.length > 2 && t.length < 300) return t;
+          }
+          // Sometimes question is nested inside previous sibling
+          const nestedP = prev.querySelector?.("p, legend, label, [role='heading']");
+          if (nestedP) {
+            const t = cleanLabelText(nestedP.textContent);
+            if (t && t.length > 2 && t.length < 300) return t;
+          }
+          prev = prev.previousElementSibling;
+        }
+        node = node.parentElement;
+      }
+      return cleanLabelText(el.getAttribute("aria-label") || "");
+    }
+
+    function radioOptionLabel(radio) {
+      // Classic: label[for=id] or wrapping label
+      if (radio.id) {
+        const forLabel = document.querySelector(`label[for="${CSS.escape(radio.id)}"]`);
+        if (forLabel) {
+          const t = cleanLabelText(forLabel.textContent);
+          if (t) return t;
+        }
+      }
+      const wrap = radio.closest("label");
+      if (wrap) {
+        const t = cleanLabelText(wrap.textContent);
+        if (t) return t;
+      }
+
+      // LinkedIn SDUI: role="radio" container with sibling <p>Yes</p>
+      const roleRadio = radio.closest("[role='radio']");
+      if (roleRadio) {
+        const p = roleRadio.querySelector("p");
+        if (p) {
+          const t = cleanLabelText(p.textContent);
+          if (t) return t;
+        }
+        const t = cleanLabelText(roleRadio.textContent);
+        // Strip empty/placeholder chars
+        if (t) return t;
+      }
+
+      return cleanLabelText(radio.nextElementSibling?.textContent || radio.value || "");
+    }
+
     // Text inputs
     const inputs = modal.querySelectorAll("input[type='text'], input[type='number'], input[type='tel'], input[type='email'], input[type='url']");
     for (const input of inputs) {
-      const label = input.closest(".fb-dash-form-element")?.querySelector("label")?.textContent?.trim() ||
-        input.getAttribute("aria-label") || input.getAttribute("placeholder") || "";
+      // Skip radio-like hidden helpers
+      if (input.offsetParent === null && !input.required) continue;
+      const label = findQuestionLabelNear(input);
+      const maxLength = extractMaxLength(input);
       fields.push({
         type: "text",
         inputType: input.type || "text",
         label,
         value: input.value,
         selector: buildSelector(input),
-        required: input.required || input.getAttribute("aria-required") === "true",
+        required: input.required || input.getAttribute("aria-required") === "true" || /\*$/.test(label + (input.getAttribute("aria-label") || "")),
+        maxLength,
       });
     }
 
     // Textareas
     const textareas = modal.querySelectorAll("textarea");
     for (const ta of textareas) {
-      const label = ta.closest(".fb-dash-form-element")?.querySelector("label")?.textContent?.trim() ||
-        ta.getAttribute("aria-label") || "";
+      const label = findQuestionLabelNear(ta);
+      const maxLength = extractMaxLength(ta);
       fields.push({
         type: "textarea",
         label,
         value: ta.value,
         selector: buildSelector(ta),
-        required: ta.required,
+        required: ta.required || ta.getAttribute("aria-required") === "true",
+        maxLength,
       });
     }
 
     // Selects (dropdowns)
     const selects = modal.querySelectorAll("select");
     for (const sel of selects) {
-      const label = sel.closest(".fb-dash-form-element")?.querySelector("label")?.textContent?.trim() ||
-        sel.getAttribute("aria-label") || "";
+      const label = findQuestionLabelNear(sel);
       const options = Array.from(sel.options).map((o) => ({
         value: o.value,
         text: o.textContent?.trim() || "",
+        label: o.textContent?.trim() || "",
       }));
       fields.push({
         type: "select",
@@ -1580,8 +1859,7 @@
       if (control.getAttribute("aria-disabled") === "true") continue;
       if (control.offsetParent === null) continue;
 
-      const label = control.closest(".fb-dash-form-element")?.querySelector("label")?.textContent?.trim() ||
-        control.getAttribute("aria-label") || "";
+      const label = findQuestionLabelNear(control);
       const currentText = (control.textContent || "").trim();
       const isPlaceholder = /select|choose|please|pick|--|option/i.test(currentText);
 
@@ -1595,25 +1873,60 @@
       });
     }
 
-    // Radio buttons
+    // Radio buttons (classic fieldset + SDUI role=radiogroup)
     const radioGroups = modal.querySelectorAll("fieldset, [role='radiogroup']");
     for (const group of radioGroups) {
-      const legend = group.querySelector("legend, .fb-dash-form-element__label")?.textContent?.trim() || "";
+      let legend =
+        group.querySelector("legend, .fb-dash-form-element__label")?.textContent?.trim() || "";
+      if (!legend) {
+        // SDUI: question text is a sibling <p> before the fieldset/radiogroup
+        const prev = group.previousElementSibling;
+        if (prev && (prev.tagName === "P" || prev.querySelector?.("p"))) {
+          legend = (prev.tagName === "P" ? prev.textContent : prev.querySelector("p")?.textContent) || "";
+        }
+        if (!legend) {
+          const parent = group.parentElement;
+          const parentP = parent?.querySelector(":scope > p");
+          legend = parentP?.textContent || "";
+        }
+        // aria-labelledby
+        const labelledBy = group.getAttribute("aria-labelledby");
+        if (!legend && labelledBy) {
+          legend = document.getElementById(labelledBy)?.textContent || "";
+        }
+      }
+      legend = cleanLabelText(legend);
+
       const radios = group.querySelectorAll("input[type='radio']");
-      const options = Array.from(radios).map((r) => ({
-        value: r.value,
-        label: r.closest("label")?.textContent?.trim() || r.nextElementSibling?.textContent?.trim() || "",
-        selector: buildSelector(r),
-      }));
+      const options = Array.from(radios).map((r) => {
+        const optLabel = radioOptionLabel(r);
+        return {
+          value: r.value || optLabel,
+          label: optLabel,
+          text: optLabel,
+          selector: buildSelector(r),
+        };
+      });
       if (options.length > 0) {
+        const checked = group.querySelector("input[type='radio']:checked");
+        const checkedLabel = checked ? radioOptionLabel(checked) : "";
+        // Question with * in surrounding text is required; SDUI often omits required attrs
+        const rawTitle =
+          group.previousElementSibling?.textContent ||
+          group.parentElement?.querySelector(":scope > p")?.textContent ||
+          legend;
+        const titleHasRequired = /\*/.test(rawTitle || "");
         fields.push({
           type: "radio",
           label: legend,
           options,
-          value: group.querySelector("input[type='radio']:checked")?.value || "",
+          value: checked?.value || checkedLabel || "",
           required:
             group.querySelector("input[type='radio'][required]") !== null ||
-            group.getAttribute("aria-required") === "true",
+            group.getAttribute("aria-required") === "true" ||
+            titleHasRequired ||
+            // Additional Questions screening groups always need an answer to proceed
+            !!(legend && options.length >= 2),
         });
       }
     }
@@ -1622,10 +1935,12 @@
     const checkboxes = modal.querySelectorAll("input[type='checkbox']");
     for (const cb of checkboxes) {
       const label =
-        cb.closest("label")?.textContent?.trim() ||
-        cb.closest(".fb-dash-form-element")?.querySelector("label")?.textContent?.trim() ||
-        cb.getAttribute("aria-label") ||
-        "Consent checkbox";
+        cleanLabelText(
+          cb.closest("label")?.textContent ||
+          cb.closest(".fb-dash-form-element")?.querySelector("label")?.textContent ||
+          cb.getAttribute("aria-label") ||
+          "Consent checkbox"
+        );
       fields.push({
         type: "checkbox",
         label,
@@ -1638,8 +1953,7 @@
     // File inputs
     const fileInputs = modal.querySelectorAll("input[type='file']");
     for (const fi of fileInputs) {
-      const label = fi.closest(".fb-dash-form-element")?.querySelector("label")?.textContent?.trim() ||
-        fi.getAttribute("aria-label") || "Resume/CV Upload";
+      const label = findQuestionLabelNear(fi) || "Resume/CV Upload";
       fields.push({
         type: "file",
         label,
@@ -1794,14 +2108,48 @@
     } else if (fieldType === "radio") {
       const bySelector = resolveFromSelector();
       if (bySelector) {
-        dispatchNativeClick(bySelector);
+        // Prefer clicking the visible role=radio container or the input
+        const clickTarget =
+          bySelector.closest?.("[role='radio']") ||
+          bySelector.closest?.("label") ||
+          bySelector;
+        dispatchNativeClick(clickTarget);
+        if (bySelector instanceof HTMLInputElement && !bySelector.checked) {
+          dispatchNativeClick(bySelector);
+        }
         return;
       }
-      // Use CSS.escape to prevent selector injection
-      const escapedValue = CSS.escape(value);
-      const radios = modal.querySelectorAll(`input[type='radio'][value='${escapedValue}']`);
-      if (radios.length > 0) {
-        dispatchNativeClick(radios[0]);
+
+      // Match radio by value or visible option label (LinkedIn often uses empty value attrs)
+      const target = String(value || "").trim().toLowerCase();
+      const allRadios = modal.querySelectorAll("input[type='radio']");
+      let matched = null;
+      for (const r of allRadios) {
+        const val = (r.value || "").toString().trim().toLowerCase();
+        if (val && val === target) {
+          matched = r;
+          break;
+        }
+        const roleRadio = r.closest("[role='radio']");
+        const labelText = (
+          roleRadio?.querySelector("p")?.textContent ||
+          r.closest("label")?.textContent ||
+          (r.id ? document.querySelector(`label[for="${CSS.escape(r.id)}"]`)?.textContent : "") ||
+          r.nextElementSibling?.textContent ||
+          ""
+        )
+          .toString()
+          .trim()
+          .toLowerCase();
+        if (labelText === target || labelText.includes(target) || target.includes(labelText)) {
+          matched = r;
+          break;
+        }
+      }
+      if (matched) {
+        const clickTarget = matched.closest("[role='radio']") || matched.closest("label") || matched;
+        dispatchNativeClick(clickTarget);
+        if (!matched.checked) dispatchNativeClick(matched);
       }
     } else if (fieldType === "checkbox") {
       const bySelector = resolveFromSelector();

@@ -62,11 +62,13 @@ Rules:
 - Normalize dates to MM/YYYY format when possible
 - Separate skills into individual items
 - Experience highlights should be achievement-oriented bullet points
-- If summary is not explicit, synthesize one from the overall resume`,
+- If summary is not explicit, synthesize one from the overall resume
+- Also work well with free-form career dumps: LinkedIn profiles, notes, bios, bullet lists — not only formal resume formatting
+- Capture projects, side work, freelance, and internships under experience or projects as appropriate`,
     },
     {
       role: "user",
-      content: `Parse this resume text into structured JSON:\n\n${rawText}`,
+      content: `Parse this resume / career text into structured JSON:\n\n${rawText}`,
     },
   ];
 }

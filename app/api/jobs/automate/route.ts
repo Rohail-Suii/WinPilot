@@ -17,7 +17,7 @@ import JobSearch from "@/lib/db/models/job-search";
 import JobApplication from "@/lib/db/models/job-application";
 import User from "@/lib/db/models/user";
 import { checkApiRateLimit } from "@/lib/utils/rate-limit";
-import { processDiscoveredJobs, prepareJobApplication, completeApplication } from "@/lib/services/job-analysis";
+import { processDiscoveredJobs, prepareJobApplication, completeApplication, updateApplicationStatus } from "@/lib/services/job-analysis";
 import { answerFormQuestions } from "@/lib/services/form-answerer";
 import { generateTailoredResumePDF } from "@/lib/services/resume-pdf";
 import { canPerformAction } from "@/lib/anti-detection/rate-limiter";
@@ -41,17 +41,34 @@ async function resolveUserId(req: Request): Promise<string | null> {
   }
   return null;
 }
-// LinkedIn search URL builder
-function buildLinkedInSearchURL(search: {
-  keywords: string;
-  location?: string;
-  remote?: boolean;
-  experienceLevel?: string[];
-  datePosted?: string;
-  easyApplyOnly?: boolean;
-}): string {
+// Split a comma-separated keywords string into individual search phrases.
+// LinkedIn's keyword search doesn't handle a single query containing multiple
+// comma-separated phrases well (it's matched close to literally), so each
+// phrase is run as its own search instead.
+function splitKeywords(raw: string): string[] {
+  return Array.from(
+    new Set(
+      (raw || "")
+        .split(",")
+        .map((k) => k.trim())
+        .filter(Boolean)
+    )
+  );
+}
+
+// LinkedIn search URL builder — builds a search URL for a single keyword phrase
+function buildLinkedInSearchURL(
+  search: {
+    location?: string;
+    remote?: boolean;
+    experienceLevel?: string[];
+    datePosted?: string;
+    easyApplyOnly?: boolean;
+  },
+  keyword: string
+): string {
   const params = new URLSearchParams();
-  params.set("keywords", search.keywords);
+  params.set("keywords", keyword);
   if (search.location) params.set("location", search.location);
 
   // LinkedIn f_TPR (time posted range)
@@ -148,13 +165,20 @@ export async function POST(req: Request) {
         return NextResponse.json({ error: "Daily application limit reached", remaining: 0 }, { status: 429 });
       }
 
-      const searchUrl = buildLinkedInSearchURL(search);
+      const keywordList = splitKeywords(search.keywords);
+      if (!keywordList.length) {
+        return NextResponse.json({ error: "Search has no keywords configured" }, { status: 400 });
+      }
+      const searches = keywordList.map((keyword) => ({
+        keyword,
+        url: buildLinkedInSearchURL(search, keyword),
+      }));
 
       return NextResponse.json({
         command: "NAVIGATE",
-        url: searchUrl,
         searchId,
         remaining: limit - current,
+        searches,
         searchConfig: {
           keywords: search.keywords,
           easyApplyOnly: search.easyApplyOnly,
@@ -311,6 +335,8 @@ export async function POST(req: Request) {
         summary: application.tailoredResume?.summary,
         skills: application.tailoredResume?.skills,
         highlights: application.tailoredResume?.highlights,
+        experience: application.tailoredResume?.experience,
+        projects: application.tailoredResume?.projects,
       });
 
       return NextResponse.json({
@@ -330,28 +356,44 @@ export async function POST(req: Request) {
       }
 
       const user = await User.findById(userId).lean() as Record<string, unknown> | null;
-      const prefs = (user?.formPreferences as Record<string, string>) || {};
+      const settings = (user?.settings as Record<string, unknown> | undefined) || {};
+      const prefs = {
+        ...((user?.formPreferences as Record<string, string>) || {}),
+        ...((settings.formPreferences as Record<string, string>) || {}),
+      };
 
       const answers = await answerFormQuestions(
         userId,
-        questions.map((q: { label: string; type: string }) => ({
-          question: q.label,
-          fieldType: q.type,
-        })),
+        questions.map(
+          (q: {
+            label?: string;
+            question?: string;
+            type?: string;
+            fieldType?: string;
+            options?: string[];
+            maxLength?: number;
+            expectedFormat?: "digits" | "decimal" | "yes_no" | "text" | "long_text" | "currency" | "date" | "unknown";
+          }) => ({
+            question: q.label || q.question || "",
+            fieldType: q.type || q.fieldType || "text",
+            options: Array.isArray(q.options) ? q.options : undefined,
+            maxLength: typeof q.maxLength === "number" ? q.maxLength : undefined,
+            expectedFormat: q.expectedFormat,
+          })
+        ),
         prefs
       );
 
-      // Save form answers to the application
+      // Save form answers to the application (append per step)
       if (applicationId) {
+        const mapped = answers.map((a) => ({
+          question: a.question,
+          answer: a.answer.answer,
+          fieldType: a.fieldType,
+        }));
         await JobApplication.findOneAndUpdate(
           { _id: applicationId, userId },
-          {
-            formAnswers: answers.map((a) => ({
-              question: a.question,
-              answer: a.answer.answer,
-              fieldType: a.fieldType,
-            })),
-          }
+          { $push: { formAnswers: { $each: mapped } } }
         );
       }
 
@@ -360,6 +402,7 @@ export async function POST(req: Request) {
           question: a.question,
           answer: a.answer.answer,
           confidence: a.answer.confidence,
+          source: a.answer.source,
           fieldType: a.fieldType,
         })),
       });
@@ -378,6 +421,17 @@ export async function POST(req: Request) {
       const { current, limit } = await canPerformAction(userId, "applies");
 
       return NextResponse.json({ success: true, remaining: limit - current });
+    }
+
+    // ── Step 6: Update status
+    if (step === "update-status") {
+      const { applicationId, status, notes } = body;
+      if (!applicationId || !status) {
+        return NextResponse.json({ error: "applicationId and status are required" }, { status: 400 });
+      }
+
+      await updateApplicationStatus(userId, applicationId, status, notes);
+      return NextResponse.json({ success: true });
     }
 
     return NextResponse.json({ error: "Invalid step" }, { status: 400 });

@@ -32,6 +32,8 @@ import {
   Key,
   SlidersHorizontal,
   Check,
+  Pencil,
+  FormInput,
 } from "lucide-react";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Card, CardContent } from "@/components/ui/card";
@@ -124,6 +126,7 @@ export function JobsClient() {
   const [stats, setStats] = useState<ApplicationStats | null>(null);
   const [loading, setLoading] = useState(true);
   const [addOpen, setAddOpen] = useState(false);
+  const [editingSearch, setEditingSearch] = useState<JobSearchItem | null>(null);
   const [statusFilter, setStatusFilter] = useState("");
   const [expandedApp, setExpandedApp] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
@@ -149,6 +152,7 @@ export function JobsClient() {
   const { startAutomation, stopAutomation } = useWebSocket();
   const [useAI, setUseAI] = useState(true);
   const [useJobMatching, setUseJobMatching] = useState(true);
+  const [useAIFormFilling, setUseAIFormFilling] = useState(false);
   const logsEndRef = useRef<HTMLDivElement>(null);
   const [autoScroll, setAutoScroll] = useState(true);
 
@@ -158,6 +162,8 @@ export function JobsClient() {
     if (savedAI === "false") setUseAI(false);
     const savedMatch = window.localStorage.getItem("jobs-automation-use-matching");
     if (savedMatch === "false") setUseJobMatching(false);
+    const savedForm = window.localStorage.getItem("jobs-automation-use-ai-form-filling");
+    if (savedForm === "true") setUseAIFormFilling(true);
   }, []);
 
   const handleAiToggle = (checked: boolean) => {
@@ -181,6 +187,18 @@ export function JobsClient() {
       checked
         ? "Job Matching ON: AI scores jobs against your resume before applying (uses AI credits)"
         : "Job Matching OFF: applies to all eligible jobs without scoring",
+    );
+  };
+
+  const handleFormFillingToggle = (checked: boolean) => {
+    setUseAIFormFilling(checked);
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem("jobs-automation-use-ai-form-filling", String(checked));
+    }
+    toast.info(
+      checked
+        ? "AI Form Filling ON: AI answers screening questions from your resume (uses AI credits)"
+        : "AI Form Filling OFF: uses built-in rule-based answers",
     );
   };
 
@@ -288,17 +306,27 @@ export function JobsClient() {
     fetchSearches();
   };
 
+  const openEditDialog = (search: JobSearchItem) => {
+    setEditingSearch(search);
+    setAddOpen(true);
+  };
+
   const handleStartAutomation = (searchId: string) => {
     if (!isConnected) {
       toast.error("Extension not connected. Open LinkedIn in Chrome with the extension enabled.");
       return;
     }
-    startAutomation(searchId, { useAI, useJobMatching });
+    startAutomation(searchId, { useAI, useJobMatching, useAIFormFilling });
     setAutomationRunning(true);
+    const modes = [
+      useAI ? "AI resume" : null,
+      useJobMatching ? "matching" : null,
+      useAIFormFilling ? "AI form fill" : null,
+    ].filter(Boolean);
     toast.success(
-      useAI
-        ? "Automation started with AI Resume Tailoring."
-        : "Automation started without AI tailoring.",
+      modes.length
+        ? `Automation started (${modes.join(", ")}).`
+        : "Automation started (rule-based only).",
     );
   };
 
@@ -342,7 +370,7 @@ export function JobsClient() {
           <h2 className="text-2xl font-bold text-white">Job Automation</h2>
           <p className="text-white/50 mt-1">Configure searches and track applications</p>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-3 flex-wrap justify-end">
           <div className="flex items-center gap-2 rounded-lg border border-white/10 bg-white/[0.03] px-3 py-1.5">
             <Sparkles className="h-3.5 w-3.5 text-purple-400/70" />
             <span className="text-xs text-white/70">AI Resume Tailoring</span>
@@ -355,6 +383,12 @@ export function JobsClient() {
             <Switch checked={useJobMatching} onCheckedChange={handleMatchToggle} />
             <span className="text-xs text-white/40">{useJobMatching ? "ON" : "OFF"}</span>
           </div>
+          <div className="flex items-center gap-2 rounded-lg border border-white/10 bg-white/[0.03] px-3 py-1.5">
+            <FormInput className="h-3.5 w-3.5 text-emerald-400/70" />
+            <span className="text-xs text-white/70">AI Form Filling</span>
+            <Switch checked={useAIFormFilling} onCheckedChange={handleFormFillingToggle} />
+            <span className="text-xs text-white/40">{useAIFormFilling ? "ON" : "OFF"}</span>
+          </div>
           <div className="flex items-center gap-2 text-sm">
             <span className={`h-2 w-2 rounded-full ${isConnected ? "bg-emerald-400" : "bg-red-400"}`} />
             <span className="text-white/40">{isConnected ? "Extension connected" : "Extension offline"}</span>
@@ -364,7 +398,7 @@ export function JobsClient() {
               <Square className="h-3.5 w-3.5 mr-1.5" />Stop
             </Button>
           )}
-          <Button onClick={() => setAddOpen(true)}>
+          <Button onClick={() => { setEditingSearch(null); setAddOpen(true); }}>
             <Plus className="h-4 w-4" />New Search
           </Button>
         </div>
@@ -429,7 +463,7 @@ export function JobsClient() {
               icon={<Briefcase className="h-10 w-10 text-white/20" />}
               title="No saved searches"
               description="Create a job search configuration to start auto-applying"
-              action={<Button onClick={() => setAddOpen(true)} size="sm"><Plus className="h-4 w-4" />Create Search</Button>}
+              action={<Button onClick={() => { setEditingSearch(null); setAddOpen(true); }} size="sm"><Plus className="h-4 w-4" />Create Search</Button>}
             />
           ) : (
             <div className="grid gap-4 md:grid-cols-2">
@@ -472,7 +506,10 @@ export function JobsClient() {
                         >
                           <Play className="h-4 w-4 text-emerald-400" />
                         </Button>
-                        <Button variant="ghost" size="icon" onClick={() => deleteSearch(search._id)}>
+                        <Button variant="ghost" size="icon" onClick={() => openEditDialog(search)} title="Edit search">
+                          <Pencil className="h-4 w-4 text-white/60" />
+                        </Button>
+                        <Button variant="ghost" size="icon" onClick={() => deleteSearch(search._id)} title="Delete search">
                           <Trash2 className="h-4 w-4 text-red-400" />
                         </Button>
                       </div>
@@ -553,7 +590,11 @@ export function JobsClient() {
                       </div>
                     </div>
                     <div className="flex items-center gap-3">
-                      <Badge variant={statusVariant(app.status)}>{app.status}</Badge>
+                      <Badge variant={statusVariant(app.status)}>
+                        {app.status === "skipped" && /external/i.test(app.notes || "")
+                          ? "external link"
+                          : app.status}
+                      </Badge>
                       <span className="text-xs text-white/30">
                         {new Date(app.appliedAt || app.createdAt).toLocaleDateString()}
                       </span>
@@ -841,7 +882,16 @@ export function JobsClient() {
         </TabsContent>
       </Tabs>
 
-      <AddSearchDialog open={addOpen} onOpenChange={setAddOpen} onSuccess={fetchSearches} />
+      <AddSearchDialog
+        key={editingSearch?._id ?? "create"}
+        open={addOpen}
+        onOpenChange={(open) => {
+          setAddOpen(open);
+          if (!open) setEditingSearch(null);
+        }}
+        onSuccess={fetchSearches}
+        editingSearch={editingSearch}
+      />
     </div>
   );
 }
@@ -1034,42 +1084,58 @@ function AddSearchDialog({
   open,
   onOpenChange,
   onSuccess,
+  editingSearch,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onSuccess: () => void;
+  editingSearch?: JobSearchItem | null;
 }) {
+  const isEditing = !!editingSearch;
   const [saving, setSaving] = useState(false);
   const { register, handleSubmit, reset, formState: { errors } } = useForm<JobSearchFormValues>({
     resolver: zodResolver(jobSearchSchema),
-    defaultValues: {
-      name: "",
-      keywords: "",
-      location: "",
-      remote: false,
-      experienceLevel: [],
-      datePosted: "any",
-      easyApplyOnly: true,
-    },
+    defaultValues: editingSearch
+      ? {
+          name: editingSearch.name,
+          keywords: editingSearch.keywords,
+          location: editingSearch.location || "",
+          remote: editingSearch.remote,
+          experienceLevel: editingSearch.experienceLevel as JobSearchFormValues["experienceLevel"],
+          datePosted: editingSearch.datePosted as JobSearchFormValues["datePosted"],
+          easyApplyOnly: editingSearch.easyApplyOnly,
+        }
+      : {
+          name: "",
+          keywords: "",
+          location: "",
+          remote: false,
+          experienceLevel: [],
+          datePosted: "any",
+          easyApplyOnly: true,
+        },
   });
 
   const onSubmit = async (data: JobSearchFormValues) => {
     setSaving(true);
-    const res = await fetch("/api/jobs", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(data),
-    });
+    const res = await fetch(
+      isEditing ? `/api/jobs?id=${editingSearch._id}` : "/api/jobs",
+      {
+        method: isEditing ? "PUT" : "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(data),
+      }
+    );
     setSaving(false);
 
     if (res.ok) {
-      toast.success("Search created");
+      toast.success(isEditing ? "Search updated" : "Search created");
       onOpenChange(false);
       reset();
       onSuccess();
     } else {
       const err = await res.json();
-      toast.error(err.error || "Failed to create search");
+      toast.error(err.error || `Failed to ${isEditing ? "update" : "create"} search`);
     }
   };
 
@@ -1086,8 +1152,10 @@ function AddSearchDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>Create Job Search</DialogTitle>
-          <DialogDescription>Configure a new job search for auto-apply</DialogDescription>
+          <DialogTitle>{isEditing ? "Edit Job Search" : "Create Job Search"}</DialogTitle>
+          <DialogDescription>
+            {isEditing ? "Update this job search's configuration" : "Configure a new job search for auto-apply"}
+          </DialogDescription>
         </DialogHeader>
         <form onSubmit={handleSubmit(onSubmit)} className="space-y-4 max-h-[60vh] overflow-y-auto pr-1">
           <div className="space-y-2">
@@ -1144,7 +1212,9 @@ function AddSearchDialog({
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
             <Button type="submit" disabled={saving}>
-              {saving ? <><Loader2 className="h-4 w-4 animate-spin" />Creating...</> : "Create Search"}
+              {saving
+                ? <><Loader2 className="h-4 w-4 animate-spin" />{isEditing ? "Saving..." : "Creating..."}</>
+                : isEditing ? "Save Changes" : "Create Search"}
             </Button>
           </DialogFooter>
         </form>

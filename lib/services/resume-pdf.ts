@@ -7,10 +7,25 @@
 import PDFDocument from "pdfkit";
 import { getDefaultResume } from "./resume-service";
 
+interface TailoredExperienceItem {
+  company?: string;
+  title?: string;
+  description?: string;
+  highlights?: string[];
+}
+
+interface TailoredProjectItem {
+  name?: string;
+  description?: string;
+  tech?: string[];
+}
+
 interface TailoredData {
   summary?: string;
   skills?: string[];
   highlights?: string[];
+  experience?: TailoredExperienceItem[];
+  projects?: TailoredProjectItem[];
 }
 
 /**
@@ -21,7 +36,28 @@ export async function generateTailoredResumePDF(
   userId: string,
   tailoredData: TailoredData
 ): Promise<{ base64: string; fileName: string }> {
-  const resume = await getDefaultResume(userId);
+  let resume = await getDefaultResume(userId);
+
+  // Fall back to Career Profile so data-mode users can generate PDFs without a uploaded resume
+  if (!resume) {
+    const { getCareerProfile, careerProfileHasContent } = await import(
+      "./career-profile"
+    );
+    const career = await getCareerProfile(userId);
+    if (!careerProfileHasContent(career)) {
+      throw new Error("No resume found");
+    }
+    resume = {
+      contactInfo: career!.contactInfo || {},
+      summary: career!.summary || "",
+      experience: career!.experience || [],
+      education: career!.education || [],
+      skills: career!.skills || [],
+      certifications: career!.certifications || [],
+      projects: career!.projects || [],
+    } as Awaited<ReturnType<typeof getDefaultResume>>;
+  }
+
   if (!resume) {
     throw new Error("No resume found");
   }
@@ -39,25 +75,24 @@ export async function generateTailoredResumePDF(
   // --- Header / Name ---
   const name =
     resume.contactInfo?.name ||
-    resume.contactInfo?.email?.split("@")[0] || "Applicant";
+    resume.contactInfo?.email?.split("@")[0] ||
+    "Applicant";
   const displayName = resume.contactInfo?.name
-    ? name // already properly formatted if from parsed name
+    ? name
     : name
-      .replace(/[._-]/g, " ")
-      .replace(/\b\w/g, (c) => c.toUpperCase());
+        .replace(/[._-]/g, " ")
+        .replace(/\b\w/g, (c) => c.toUpperCase());
 
-  doc
-    .fontSize(22)
-    .font("Helvetica-Bold")
-    .text(displayName, { align: "center" });
+  doc.fontSize(22).font("Helvetica-Bold").text(displayName, { align: "center" });
   doc.moveDown(0.3);
 
-  // Contact line
   const contactParts: string[] = [];
   if (resume.contactInfo?.email) contactParts.push(resume.contactInfo.email);
   if (resume.contactInfo?.phone) contactParts.push(resume.contactInfo.phone);
   if (resume.contactInfo?.location) contactParts.push(resume.contactInfo.location);
   if (resume.contactInfo?.linkedin) contactParts.push(resume.contactInfo.linkedin);
+  if (resume.contactInfo?.github) contactParts.push(resume.contactInfo.github);
+  if (resume.contactInfo?.portfolio) contactParts.push(resume.contactInfo.portfolio);
 
   if (contactParts.length > 0) {
     doc.fontSize(9).font("Helvetica").text(contactParts.join("  |  "), { align: "center" });
@@ -81,8 +116,44 @@ export async function generateTailoredResumePDF(
     doc.moveDown(0.6);
   }
 
-  // --- Experience ---
-  if (resume.experience?.length) {
+  // --- Experience (prefer full AI rewrite when available) ---
+  const tailoredExp = tailoredData.experience?.length ? tailoredData.experience : null;
+  if (tailoredExp) {
+    sectionHeader(doc, "EXPERIENCE");
+    for (const exp of tailoredExp) {
+      const title = exp.title || "Role";
+      const company = exp.company || "";
+      doc
+        .fontSize(11)
+        .font("Helvetica-Bold")
+        .text(title, { continued: !!company })
+        .font("Helvetica")
+        .text(company ? `  —  ${company}` : "");
+
+      // Preserve dates from matching base experience when possible
+      const baseMatch = resume.experience?.find(
+        (b) =>
+          b.company?.toLowerCase() === (company || "").toLowerCase() ||
+          b.title?.toLowerCase() === (title || "").toLowerCase()
+      );
+      if (baseMatch) {
+        const dates = [baseMatch.startDate, baseMatch.current ? "Present" : baseMatch.endDate]
+          .filter(Boolean)
+          .join(" – ");
+        if (dates) doc.fontSize(9).font("Helvetica-Oblique").text(dates);
+      }
+
+      if (exp.description) {
+        doc.fontSize(10).font("Helvetica").text(exp.description, { lineGap: 1 });
+      }
+      if (exp.highlights?.length) {
+        for (const h of exp.highlights) {
+          doc.fontSize(10).font("Helvetica").text(`  •  ${h}`, { indent: 10, lineGap: 1 });
+        }
+      }
+      doc.moveDown(0.4);
+    }
+  } else if (resume.experience?.length) {
     sectionHeader(doc, "EXPERIENCE");
     for (const exp of resume.experience) {
       doc
@@ -103,7 +174,6 @@ export async function generateTailoredResumePDF(
         doc.fontSize(10).font("Helvetica").text(exp.description, { lineGap: 1 });
       }
 
-      // Use tailored highlights if available, otherwise original
       const highlights =
         tailoredData.highlights?.length && resume.experience.indexOf(exp) === 0
           ? tailoredData.highlights
@@ -115,6 +185,36 @@ export async function generateTailoredResumePDF(
         }
       }
       doc.moveDown(0.4);
+    }
+  }
+
+  // --- Projects ---
+  const tailoredProjects = tailoredData.projects?.length ? tailoredData.projects : null;
+  if (tailoredProjects) {
+    sectionHeader(doc, "PROJECTS");
+    for (const proj of tailoredProjects) {
+      doc
+        .fontSize(11)
+        .font("Helvetica-Bold")
+        .text(proj.name || "Project", { continued: !!(proj.tech && proj.tech.length) })
+        .font("Helvetica")
+        .text(proj.tech?.length ? `  [${proj.tech.join(", ")}]` : "");
+      if (proj.description) {
+        doc.fontSize(10).font("Helvetica").text(proj.description, { lineGap: 1 });
+      }
+      doc.moveDown(0.3);
+    }
+  } else if (resume.projects?.length) {
+    sectionHeader(doc, "PROJECTS");
+    for (const proj of resume.projects) {
+      doc
+        .fontSize(11)
+        .font("Helvetica-Bold")
+        .text(proj.name, { continued: true })
+        .font("Helvetica")
+        .text(proj.tech?.length ? `  [${proj.tech.join(", ")}]` : "");
+      doc.fontSize(10).font("Helvetica").text(proj.description, { lineGap: 1 });
+      doc.moveDown(0.3);
     }
   }
 
@@ -147,21 +247,6 @@ export async function generateTailoredResumePDF(
       doc.fontSize(10).font("Helvetica").text(`${cert.name} — ${cert.issuer}`);
     }
     doc.moveDown(0.4);
-  }
-
-  // --- Projects ---
-  if (resume.projects?.length) {
-    sectionHeader(doc, "PROJECTS");
-    for (const proj of resume.projects) {
-      doc
-        .fontSize(11)
-        .font("Helvetica-Bold")
-        .text(proj.name, { continued: true })
-        .font("Helvetica")
-        .text(proj.tech?.length ? `  [${proj.tech.join(", ")}]` : "");
-      doc.fontSize(10).font("Helvetica").text(proj.description, { lineGap: 1 });
-      doc.moveDown(0.3);
-    }
   }
 
   doc.end();

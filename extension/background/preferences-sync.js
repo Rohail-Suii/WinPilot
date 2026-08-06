@@ -16,7 +16,7 @@ async function syncUserPreferences() {
       return;
     }
 
-    const url = apiUrl || "https://winpilot.tech";
+    const url = apiUrl || "http://localhost:3000";
     const response = await fetch(`${url}/api/settings/automation`, {
       method: "GET",
       headers: {
