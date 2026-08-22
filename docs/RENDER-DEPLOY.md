@@ -5,7 +5,7 @@ Production runs on Render's **Node** runtime.
 | Setting | Value |
 |---|---|
 | Branch | `master` |
-| Build command | `npm install --include=dev && npm run build` |
+| Build command | `npm install && npm run build` |
 | Start command | `npm start` |
 | Health check path | `/api/health` |
 
@@ -29,21 +29,22 @@ Consequences:
 - `next start` is still available as `npm run start:next` if you ever want the
   HTTP-only server.
 
-## Why the build command needs `--include=dev`
+## Why `.npmrc` sets `include=dev`
 
 Render applies `NODE_ENV=production` during the **build**, and npm omits
 `devDependencies` in that mode. But `next build` needs several of them —
-`typescript`, `tailwindcss`, `@tailwindcss/postcss`, `@types/*` and
-`@next/bundle-analyzer`. A plain `npm install` therefore builds a tree that
-cannot compile, failing with:
+`typescript`, `tailwindcss`, `@tailwindcss/postcss` and the `@types/*`
+packages — so a production-mode install produces a tree that cannot compile:
 
 ```
 Error: Cannot find module '@next/bundle-analyzer'
+Error: Cannot find module '@tailwindcss/postcss'
 ```
 
-`--include=dev` restores them. `@next/bundle-analyzer` is additionally loaded
-lazily in `next.config.ts` (only when `ANALYZE=true`), but the other packages
-are genuinely required, so the flag is not optional.
+The repo's `.npmrc` sets `include=dev`, which makes `npm install` install them
+regardless of `NODE_ENV`. This lives in the repo rather than in the host's
+build command so the build behaves the same everywhere — no dashboard setting
+to forget when recreating the service.
 
 Runtime is unaffected: `npm start` only needs `dependencies`, which is why
 `tsx` was moved there.
