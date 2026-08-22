@@ -51,8 +51,12 @@ let extensionNs: Namespace | null = null;
 let dashboardNs: Namespace | null = null;
 let rawWss: WebSocketServer | null = null;
 
+// Dedicated upgrade path for the raw-WebSocket extension transport. Kept
+// distinct from the Socket.IO path (/api/ws) so both can share one HTTP server.
+const RAW_WS_PATH = "/ws/extension";
+
 const MAX_QUEUED_PER_USER = 100;
-const HEARTBEAT_TIMEOUT = 60_000; // 60s — mark disconnected if no heartbeat in this window
+const _HEARTBEAT_TIMEOUT = 60_000; // 60s — mark disconnected if no heartbeat in this window
 
 // userId -> Set of socket IDs (extension sockets — Socket.IO or raw WS)
 const extensionSockets = new Map<string, Set<string>>();
@@ -135,16 +139,35 @@ export function getIO(): SocketIOServer | null {
   return io;
 }
 
+/**
+ * Origins permitted to open a Socket.IO connection.
+ * Always includes the deployed app origin, any extra origins listed in
+ * WS_ALLOWED_ORIGINS (comma-separated), localhost for dev, and every
+ * chrome-extension:// origin (extension IDs differ per install).
+ */
+function allowedOrigins(): (string | RegExp)[] {
+  const extra = (process.env.WS_ALLOWED_ORIGINS || "")
+    .split(",")
+    .map((o) => o.trim())
+    .filter(Boolean);
+
+  const origins = [
+    process.env.NEXTAUTH_URL,
+    ...extra,
+    "http://localhost:3000",
+    "https://www.linkedin.com",
+  ].filter(Boolean) as string[];
+
+  return [...new Set(origins), /^chrome-extension:\/\/.+$/];
+}
+
 export function initSocketServer(httpServer: HTTPServer): SocketIOServer {
   if (io) return io;
 
   io = new SocketIOServer(httpServer, {
     path: "/api/ws",
     cors: {
-      origin: [
-        process.env.NEXTAUTH_URL || "http://localhost:3000",
-        /^chrome-extension:\/\/.+$/,
-      ],
+      origin: allowedOrigins(),
       methods: ["GET", "POST"],
       credentials: true,
     },
@@ -309,18 +332,18 @@ export function initRawWebSocketServer(httpServer: HTTPServer): WebSocketServer 
 
   rawWss = new WebSocketServer({ noServer: true });
 
-  // Handle HTTP upgrade: route to Socket.IO or raw WS
+  // Handle HTTP upgrade for the raw-WS extension endpoint only.
+  //
+  // Socket.IO and Next.js both attach their own "upgrade" listeners to this
+  // same server (Socket.IO for /api/ws/, Next.js for /_next/webpack-hmr and
+  // Turbopack HMR in dev). We must therefore claim ONLY our own path and leave
+  // every other upgrade untouched — grabbing the rest would break HMR and the
+  // Socket.IO transport upgrade.
   httpServer.on("upgrade", (request: IncomingMessage, socket, head) => {
-    const url = request.url || "";
+    const path = (request.url || "").split("?")[0].replace(/\/$/, "");
 
-    // Socket.IO handles its own upgrades on /api/ws path
-    // Socket.IO upgrade URLs look like: /api/ws/?EIO=4&transport=websocket...
-    if (url.startsWith("/api/ws")) {
-      // Let Socket.IO handle this — it already hooks into the upgrade event
-      return;
-    }
+    if (path !== RAW_WS_PATH) return;
 
-    // Everything else goes to raw WebSocket (extension)
     rawWss!.handleUpgrade(request, socket as never, head as never, (ws) => {
       rawWss!.emit("connection", ws, request);
     });

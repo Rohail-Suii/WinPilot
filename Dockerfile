@@ -69,7 +69,6 @@ WORKDIR /app
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
 ENV PORT=3000
-ENV WS_PORT=3001
 ENV HOSTNAME=0.0.0.0
 
 # Install dumb-init for proper signal handling
@@ -98,8 +97,8 @@ RUN mkdir -p .next && chown nextjs:nodejs .next
 # Switch to non-root user
 USER nextjs
 
-# Expose ports: 3000 (Next.js), 3001 (WebSocket)
-EXPOSE 3000 3001
+# Expose one port: Next.js and Socket.IO share it (Socket.IO at /api/ws)
+EXPOSE 3000
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \

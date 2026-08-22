@@ -39,7 +39,7 @@ export class OpenRouterProvider implements AIProvider {
     return headers;
   }
 
-  private captureUsageFromResponse(data: any) {
+  private captureUsageFromResponse(data: { usage?: Record<string, unknown> } | null | undefined) {
     const usage = data?.usage;
     const totalCost = Number(usage?.cost ?? 0);
 

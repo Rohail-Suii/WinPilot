@@ -1,11 +1,18 @@
 {
   "manifest_version": 3,
   "name": "WinPilot",
-  "version": "1.0.1",
-  "description": "LinkedIn automation assistant — auto-apply, post content, and scrape leads",
-  "permissions": ["activeTab", "storage", "tabs", "scripting", "alarms"],
+  "version": "1.0.2",
+  "description": "LinkedIn automation assistant \u2014 auto-apply, post content, and scrape leads",
+  "permissions": [
+    "activeTab",
+    "storage",
+    "tabs",
+    "scripting",
+    "alarms"
+  ],
   "host_permissions": [
     "https://www.linkedin.com/*",
+    "https://winpilot.onrender.com/*",
     "https://winpilot.tech/*",
     "http://localhost/*"
   ],
@@ -15,8 +22,13 @@
   },
   "content_scripts": [
     {
-      "matches": ["https://www.linkedin.com/*"],
-      "js": ["ai-fallback.js", "content.js"],
+      "matches": [
+        "https://www.linkedin.com/*"
+      ],
+      "js": [
+        "ai-fallback.js",
+        "content.js"
+      ],
       "run_at": "document_idle"
     }
   ],

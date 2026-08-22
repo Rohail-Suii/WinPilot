@@ -202,7 +202,12 @@ function connectSharedSocket(userId: string) {
 
   currentUserId = userId;
 
-  const wsUrl = process.env.NEXT_PUBLIC_WS_URL || "http://localhost:3001";
+  // The WebSocket server shares the app's port, so same-origin is the correct
+  // default. NEXT_PUBLIC_WS_URL only needs setting when it lives elsewhere.
+  const wsUrl =
+    process.env.NEXT_PUBLIC_WS_URL ||
+    (typeof window !== "undefined" ? window.location.origin : "http://localhost:3000");
+
   const socket = io(`${wsUrl}/dashboard`, {
     path: "/api/ws",
     transports: ["websocket", "polling"],
@@ -299,10 +304,30 @@ export function useWebSocket() {
 
   const startAutomation = useCallback((
     searchId: string,
-    options?: { useAI?: boolean; useJobMatching?: boolean; useAIFormFilling?: boolean }
+    options?: { useAI?: boolean; useJobMatching?: boolean; useAIFormFilling?: boolean; useAutoMessaging?: boolean }
   ) => {
     if (sharedSocket?.connected) {
       sharedSocket.emit("EXECUTE_ACTION", { type: "START_AUTOMATION", searchId, options: options || {} });
+    }
+  }, []);
+
+  /** Apply to a single job the user pasted a LinkedIn link for. */
+  const applyJobUrl = useCallback((
+    url: string,
+    options?: { useAI?: boolean; useJobMatching?: boolean; useAIFormFilling?: boolean; useAutoMessaging?: boolean }
+  ) => {
+    if (sharedSocket?.connected) {
+      sharedSocket.emit("EXECUTE_ACTION", { type: "APPLY_JOB_URL", url, options: options || {} });
+    }
+  }, []);
+
+  /** Apply to every job on a results page the user pasted a link for. */
+  const applyJobList = useCallback((
+    url: string,
+    options?: { useAI?: boolean; useJobMatching?: boolean; useAIFormFilling?: boolean; useAutoMessaging?: boolean }
+  ) => {
+    if (sharedSocket?.connected) {
+      sharedSocket.emit("EXECUTE_ACTION", { type: "APPLY_JOB_LIST", url, options: options || {} });
     }
   }, []);
 
@@ -316,6 +341,8 @@ export function useWebSocket() {
     isConnected: sharedSocket?.connected ?? false,
     sendCommand,
     startAutomation,
+    applyJobUrl,
+    applyJobList,
     stopAutomation,
     reconnect: () => {
       if (currentUserId) {
