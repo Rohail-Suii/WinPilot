@@ -1,9 +1,13 @@
 /**
  * Custom Server Entry Point
- * Runs Next.js with Socket.IO WebSocket server for extension communication.
- * 
- * Usage: node server.ts (via tsx or ts-node)
- * Or for production: build Next.js first, then run this.
+ * Runs Next.js with the Socket.IO WebSocket server for extension communication.
+ *
+ * Both the HTTP app and the WebSocket server share a SINGLE port, because PaaS
+ * hosts (Render, Railway, Fly, Heroku) only route traffic to one port per
+ * service. Socket.IO is mounted on the Next.js server at path /api/ws.
+ *
+ * Dev:  npm run dev    (tsx server.ts)
+ * Prod: npm start      (tsx server.ts with NODE_ENV=production)
  */
 
 import { createServer } from "http";
@@ -11,9 +15,13 @@ import next from "next";
 import { initSocketServer, initRawWebSocketServer } from "./lib/websocket/server";
 
 const dev = process.env.NODE_ENV !== "production";
-const hostname = process.env.HOSTNAME || "localhost";
+const hostname = process.env.HOSTNAME || (dev ? "localhost" : "0.0.0.0");
 const port = parseInt(process.env.PORT || "3000", 10);
-const wsPort = parseInt(process.env.WS_PORT || "3001", 10);
+
+// Optional: bind a second HTTP listener for the WebSocket server. Only used by
+// deployments that expose more than one port (e.g. the docker-compose stack).
+// Leave WS_PORT unset on single-port hosts like Render.
+const wsPort = process.env.WS_PORT ? parseInt(process.env.WS_PORT, 10) : null;
 
 // Prevent unhandled errors from crashing the process
 process.on("unhandledRejection", (reason) => {
@@ -29,15 +37,7 @@ async function main() {
 
   await app.prepare();
 
-  // Create a separate HTTP server for WebSocket on port 3001
-  const wsServer = createServer();
-  initSocketServer(wsServer);
-  initRawWebSocketServer(wsServer);
-  wsServer.listen(wsPort, () => {
-    console.log(`> WebSocket server listening on port ${wsPort}`);
-  });
-
-  // Create the main Next.js HTTP server on port 3000
+  // Main HTTP server: serves Next.js *and* upgrades WebSocket connections.
   const server = createServer(async (req, res) => {
     try {
       await handle(req, res);
@@ -50,10 +50,24 @@ async function main() {
     }
   });
 
-  server.listen(port, () => {
+  // Mount Socket.IO (path /api/ws) and the raw-WS endpoint on the same server.
+  initSocketServer(server);
+  initRawWebSocketServer(server);
+
+  server.listen(port, hostname, () => {
     console.log(`> Next.js ready on http://${hostname}:${port}`);
-    console.log(`> WebSocket ready on ws://${hostname}:${wsPort}`);
+    console.log(`> Socket.IO ready on the same port at path /api/ws`);
   });
+
+  if (wsPort && wsPort !== port) {
+    // Legacy dual-port mode: proxy-free second listener that shares the same
+    // Socket.IO instance is not possible, so just warn instead of silently
+    // starting a listener nothing is attached to.
+    console.warn(
+      `> WS_PORT=${wsPort} is set but ignored — WebSocket now shares port ${port}. ` +
+        `Point NEXT_PUBLIC_WS_URL at the app origin and unset WS_PORT.`
+    );
+  }
 }
 
 main().catch((err) => {

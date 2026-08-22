@@ -4,8 +4,20 @@
 
 import { io } from "./socket.io.esm.min.js";
 
-const DEFAULT_WS_URL = "wss://winpilot.tech";
-const DEFAULT_API_URL = "https://winpilot.tech";
+// Production endpoints. The WebSocket server shares the app's origin
+// (Socket.IO is mounted at path /api/ws), so both URLs are the same host.
+const DEFAULT_WS_URL = "https://winpilot.onrender.com";
+const DEFAULT_API_URL = "https://winpilot.onrender.com";
+
+// Origins from earlier builds that must not survive an update. Any stored
+// wsUrl/apiUrl matching these is replaced with the production default.
+const STALE_URL_PATTERN = /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i;
+
+function resolveStoredUrl(stored, fallback) {
+  if (!stored) return fallback;
+  const trimmed = String(stored).replace(/\/$/, "");
+  return STALE_URL_PATTERN.test(trimmed) ? fallback : trimmed;
+}
 const HEARTBEAT_INTERVAL = 30000;
 const RECONNECT_BASE_DELAY = 1000;
 const MAX_RECONNECT_DELAY = 30000;
@@ -25,8 +37,8 @@ let automationAborted = false;
 
 // Load settings from storage
 chrome.storage.local.get(["wsUrl", "apiUrl"], (result) => {
-  if (result.wsUrl) wsUrl = result.wsUrl;
-  if (result.apiUrl) apiUrl = result.apiUrl;
+  wsUrl = resolveStoredUrl(result.wsUrl, DEFAULT_WS_URL);
+  apiUrl = resolveStoredUrl(result.apiUrl, DEFAULT_API_URL);
 });
 
 // ─── WebSocket Connection ─────────────────────────────
@@ -148,6 +160,12 @@ function handleServerMessage(message) {
       break;
     case "START_AUTOMATION":
       startAutomation(message.searchId, message.options || message.config || {});
+      break;
+    case "APPLY_JOB_URL":
+      startSingleApply(message.url, message.options || {});
+      break;
+    case "APPLY_JOB_LIST":
+      startListApply(message.url, message.options || {});
       break;
     case "STOP_AUTOMATION":
       stopAutomation();
@@ -518,6 +536,11 @@ function normalizeAutomationOptions(options) {
   const source = options && typeof options === "object" ? options : {};
   return {
     useAI: source.useAI !== false,
+    useJobMatching: source.useJobMatching !== false,
+    // Default OFF to preserve rule-based filling unless user opts in
+    useAIFormFilling: source.useAIFormFilling === true,
+    // Default OFF — messaging companies is opt-in
+    useAutoMessaging: source.useAutoMessaging === true,
   };
 }
 
@@ -590,8 +613,16 @@ function normalizeAnswerForField(field, rawAnswer) {
       return "5.0";
     }
 
-    const digitsOnly = text.replace(/\D+/g, "");
-    if (digitsOnly) return digitsOnly;
+    // Prefer first number group so "5 years" → "5" and "50,000-60,000" → "50000"
+    const firstNumber = text.match(/\d[\d,]*(?:\.\d+)?/);
+    if (firstNumber) {
+      const cleaned = firstNumber[0].replace(/,/g, "");
+      // For years/experience prefer integer
+      if (label.includes("year") || label.includes("experience") || label.includes("how many")) {
+        return String(parseInt(cleaned, 10));
+      }
+      return cleaned.replace(/\..*$/, ""); // salary etc. as integer digits
+    }
     if (label.includes("phone")) return "0000000000";
     if (label.includes("salary")) return "5000";
     if (label.includes("year") || label.includes("experience")) return "3";
@@ -628,24 +659,28 @@ function fallbackAnswerForField(field) {
     // Always prefer "Yes" — it keeps doors open
     const yesOpt = options.find((o) => {
       const val = (o?.value || "").toString().trim().toLowerCase();
-      const txt = (o?.text || "").toString().trim().toLowerCase();
+      const txt = (o?.text || o?.label || "").toString().trim().toLowerCase();
       return val === "yes" || txt === "yes";
     });
-    if (yesOpt) return yesOpt.value;
+    if (yesOpt) return yesOpt.value || yesOpt.label || yesOpt.text || "";
     const valid = options.find((o) => {
       const value = (o?.value || "").toString().trim().toLowerCase();
-      const text = (o?.text || "").toString().trim().toLowerCase();
+      const text = (o?.text || o?.label || "").toString().trim().toLowerCase();
       const joined = `${value} ${text}`;
-      return !!value && !/select|choose|please|option|pick one|--/.test(joined);
+      return (!!value || !!text) && !/select|choose|please|option|pick one|--/.test(joined);
     });
-    return valid?.value || options[0]?.value || "";
+    return valid?.value || valid?.label || valid?.text || options[0]?.value || options[0]?.label || "";
   };
 
   if (field.type === "checkbox") return "true";
   if (field.type === "radio") {
     // Prefer "Yes" for radio buttons too
-    const yesRadio = (field.options || []).find((o) => (o.label || "").toLowerCase() === "yes" || (o.value || "").toLowerCase() === "yes");
-    return yesRadio?.value || field.options?.[0]?.value || "Yes";
+    const yesRadio = (field.options || []).find((o) => {
+      const lbl = (o.label || o.text || "").toLowerCase();
+      const val = (o.value || "").toLowerCase();
+      return lbl === "yes" || val === "yes";
+    });
+    return yesRadio?.value || yesRadio?.label || field.options?.[0]?.value || field.options?.[0]?.label || "Yes";
   }
   if (field.type === "select" || field.type === "custom-dropdown") {
     return pickBestSelectOption(field.options || []);
@@ -655,6 +690,117 @@ function fallbackAnswerForField(field) {
   if (label.includes("city")) return "Dubai";
   if (label.includes("country")) return "United Arab Emirates";
   return normalizeAnswerForField(field, "Yes");
+}
+
+function optionTextList(field) {
+  return (field?.options || [])
+    .map((o) => (o?.label || o?.text || o?.value || "").toString().trim())
+    .filter(Boolean);
+}
+
+function inferFieldExpectedFormat(field) {
+  const label = (field?.label || "").toLowerCase();
+  const inputType = (field?.inputType || "").toLowerCase();
+  const maxLength = Number(field?.maxLength || 0);
+
+  if (field?.type === "radio" || field?.type === "select" || field?.type === "custom-dropdown") {
+    const opts = optionTextList(field);
+    if (opts.length <= 4 && opts.some((o) => /^(yes|no)$/i.test(o))) return "yes_no";
+    return "text";
+  }
+  if (field?.type === "textarea" || maxLength > 80) return "long_text";
+  if (inputType === "number" || /salary|compensation|pay|how many|years of|experience|scale|gpa/i.test(label)) {
+    if (/salary|compensation|pay|ctc/.test(label)) return "currency";
+    return "digits";
+  }
+  return "unknown";
+}
+
+function resolveOptionSelector(field, answer) {
+  if (!field || !answer) return field?.selector || null;
+  const options = field.options || [];
+  if (!options.length) return field.selector || null;
+
+  const normalized = String(answer).trim().toLowerCase();
+  const match =
+    options.find((o) => (o.label || "").toString().trim().toLowerCase() === normalized) ||
+    options.find((o) => (o.value || "").toString().trim().toLowerCase() === normalized) ||
+    options.find((o) => (o.text || "").toString().trim().toLowerCase() === normalized) ||
+    options.find((o) => {
+      const lbl = (o.label || o.text || o.value || "").toString().trim().toLowerCase();
+      return lbl && (lbl.includes(normalized) || normalized.includes(lbl));
+    });
+
+  return match?.selector || field.selector || null;
+}
+
+/**
+ * Ask the server AI form-answerer for answers to missing fields.
+ * Returns a Map of field label → answer string.
+ */
+async function getAIFormAnswers(fields, applicationId) {
+  if (!fields.length) return new Map();
+
+  const questions = fields.map((field) => ({
+    label: field.label || field.ariaLabel || "Unknown question",
+    type: field.type || "text",
+    options: optionTextList(field),
+    maxLength: field.maxLength || undefined,
+    expectedFormat: inferFieldExpectedFormat(field),
+  }));
+
+  try {
+    const result = await apiCall(`/api/jobs/automate?step=answer-form`, {
+      applicationId,
+      questions,
+    });
+
+    const map = new Map();
+    for (const item of result?.answers || []) {
+      const key = (item.question || "").toLowerCase().trim();
+      if (key && item.answer) {
+        map.set(key, String(item.answer));
+      }
+    }
+    return map;
+  } catch (err) {
+    console.warn(`[WinPilot] AI form answering failed: ${err.message}`);
+    emitLog("warn", "api", "AI form answering failed — falling back to rules", err.message);
+    return new Map();
+  }
+}
+
+async function answerFieldForForm(field, storedRules, aiAnswers) {
+  const labelKey = (field?.label || "").toLowerCase().trim();
+
+  // Prefer AI answer when available
+  if (aiAnswers && aiAnswers.size > 0) {
+    const aiRaw =
+      aiAnswers.get(labelKey) ||
+      [...aiAnswers.entries()].find(([k]) => labelKey && (labelKey.includes(k) || k.includes(labelKey)))?.[1];
+
+    if (aiRaw) {
+      const chosen = normalizeAnswerForField(field, aiRaw);
+      if (chosen) {
+        // For radio/select, map free-text AI answer onto an option
+        if (field.type === "radio" || field.type === "select" || field.type === "custom-dropdown") {
+          const options = field.options || [];
+          const match = options.find((o) => {
+            const lbl = (o.label || o.text || o.value || "").toString().trim().toLowerCase();
+            const ans = chosen.toLowerCase();
+            return lbl === ans || lbl.includes(ans) || ans.includes(lbl);
+          });
+          if (match) {
+            return match.value || match.label || match.text || chosen;
+          }
+        }
+        return chosen;
+      }
+    }
+  }
+
+  const raw = getRuleBasedAnswer(field, storedRules);
+  return normalizeAnswerForField(field, raw) || fallbackAnswerForField(field);
 }
 
 async function getStoredFormRules() {
@@ -831,14 +977,27 @@ async function ensureContentScriptReady(tabId, maxRetries = 3) {
     } catch (err) {
       console.warn(`[WinPilot] Content script not ready (attempt ${attempt + 1}): ${err.message}`);
       if (attempt < maxRetries - 1) {
-        // Try to inject the content script manually
-        try {
-          await chrome.scripting.executeScript({
-            target: { tabId },
-            files: ["content.js"],
-          });
-        } catch (injectErr) {
-          console.warn(`[WinPilot] Could not inject content script: ${injectErr.message}`);
+        if (attempt === 0) {
+          // First failure: the content script may just not have loaded yet — inject it directly.
+          try {
+            await chrome.scripting.executeScript({
+              target: { tabId },
+              files: ["content.js"],
+            });
+          } catch (injectErr) {
+            console.warn(`[WinPilot] Could not inject content script: ${injectErr.message}`);
+          }
+        } else {
+          // Still failing: the tab's JS context is likely orphaned (e.g. the extension was
+          // reloaded while this tab was already open). A plain injection re-runs in that same
+          // stale context, so force a full reload to get a context tied to the current extension.
+          console.warn(`[WinPilot] Reloading tab ${tabId} to recover a stale content script context`);
+          try {
+            await chrome.tabs.reload(tabId, { bypassCache: true });
+            await waitForTabLoad(tabId);
+          } catch (reloadErr) {
+            console.warn(`[WinPilot] Could not reload tab: ${reloadErr.message}`);
+          }
         }
         await new Promise((r) => setTimeout(r, 2000 * (attempt + 1)));
       }
@@ -892,66 +1051,806 @@ function emitLog(level, source, message, details) {
   });
 }
 
+// ─── Auto Messaging: reach the company after applying ───
+
+/** Ask the server for the message text for one outreach attempt. */
+async function composeOutreachMessage(applicationId, channel, recipient) {
+  const result = await apiCall(`/api/jobs/automate?step=outreach-message`, {
+    applicationId,
+    channel,
+    recipientName: recipient?.name || "",
+    recipientHeadline: recipient?.headline || "",
+  });
+  return result?.message || "";
+}
+
+/**
+ * Open a composer on the current page, write the message, send it.
+ * Returns { sent, error } and always leaves the composer closed.
+ */
+async function sendOutreachOnCurrentPage(tabId, applicationId, channel, recipient, actionKey, selector) {
+  const openResult = await sendToContentScript(tabId, {
+    type: "EXECUTE_ACTION",
+    command: "OPEN_MESSAGE_COMPOSER",
+    actionId: `msg-open-${actionKey}`,
+    selector: selector || "",
+  });
+
+  if (!openResult?.data?.opened) {
+    return { sent: false, error: openResult?.data?.error || "Message composer did not open" };
+  }
+
+  if (openResult.data.topic) {
+    emitLog("info", "extension", `Message topic selected: ${openResult.data.topic}`);
+  }
+
+  // Only spend an AI call once a composer is actually in front of us
+  const text = await composeOutreachMessage(applicationId, channel, recipient);
+  if (!text) {
+    await sendToContentScript(tabId, {
+      type: "EXECUTE_ACTION",
+      command: "CLOSE_MESSAGE_OVERLAY",
+      actionId: `msg-close-${actionKey}`,
+    });
+    return { sent: false, error: "No message text was generated" };
+  }
+
+  // Read-and-type pause, so the message is not sent the instant the box opens
+  await randomDelay(1500, 3000);
+
+  const sendResult = await sendToContentScript(tabId, {
+    type: "EXECUTE_ACTION",
+    command: "SEND_MESSAGE",
+    actionId: `msg-send-${actionKey}`,
+    text,
+  });
+
+  await sendToContentScript(tabId, {
+    type: "EXECUTE_ACTION",
+    command: "CLOSE_MESSAGE_OVERLAY",
+    actionId: `msg-close-${actionKey}`,
+  }).catch(() => {});
+
+  if (sendResult?.data?.sent) {
+    return { sent: true, message: text, topic: openResult.data.topic || "" };
+  }
+  return { sent: false, error: sendResult?.data?.error || "Message was not sent" };
+}
+
+/**
+ * After an application goes through, try to put a short message in front of a
+ * human at that company. Three channels, tried in order of who is most likely
+ * to care and least likely to be closed off:
+ *
+ *   1. the hiring team named on the job post (a person who owns this role)
+ *   2. the company page's own Message action, under its Careers topic
+ *   3. an existing connection who works there, who can route it internally
+ *
+ * Plenty of companies allow none of these — that is expected and recorded, not
+ * treated as a failure. Never throws: outreach must not sink an application.
+ */
+async function attemptCompanyOutreach(tabId, ctx, application, jobWithDetail) {
+  const applicationId = application?._id;
+  if (!applicationId) return;
+
+  const actionKey = String(applicationId).slice(-8);
+  const companyName = application.company || jobWithDetail?.company || "the company";
+  let outcome = { sent: false, error: "No messaging channel was available" };
+  let channel = null;
+  let recipient = null;
+
+  try {
+    reportProgress("task:progress", {
+      message: `Looking for someone to message at ${companyName}...`,
+      jobTitle: application.jobTitle,
+    });
+
+    // Clear LinkedIn's "application sent" dialog first — it sits on top of the
+    // page and would otherwise swallow the clicks below
+    await sendToContentScript(tabId, {
+      type: "EXECUTE_ACTION",
+      command: "CLOSE_MESSAGE_OVERLAY",
+      actionId: `outreach-dismiss-${actionKey}`,
+    }).catch(() => {});
+    await randomDelay(800, 1600);
+
+    const targetsResult = await sendToContentScript(tabId, {
+      type: "EXECUTE_ACTION",
+      command: "GET_OUTREACH_TARGETS",
+      actionId: `outreach-targets-${actionKey}`,
+    });
+    const company = targetsResult?.data?.company || null;
+    const hiringTeam = targetsResult?.data?.hiringTeam || [];
+
+    // ── Channel 1: the hiring team on the job post
+    const messageableHirer = hiringTeam.find((person) => person.canMessage);
+    if (messageableHirer) {
+      channel = "hiring_team";
+      recipient = messageableHirer;
+      emitLog("info", "extension", `Messaging hiring team member ${messageableHirer.name} at ${companyName}`);
+      await randomDelay(1200, 2500);
+      outcome = await sendOutreachOnCurrentPage(
+        tabId,
+        applicationId,
+        channel,
+        recipient,
+        `${actionKey}-hirer`,
+        messageableHirer.selector
+      );
+    }
+
+    // ── Channel 2: the company page's Message action (Careers topic)
+    const companyUrl = company?.url || "";
+    if (!outcome.sent && companyUrl) {
+      channel = "company_page";
+      recipient = { name: company.name || companyName, headline: "" };
+      emitLog("info", "extension", `Opening ${companyUrl} to message the company page`);
+
+      await navigateAndWait(tabId, companyUrl);
+      ctx.navigatedAway = true;
+      await randomDelay(2500, 4500);
+
+      if (await ensureContentScriptReady(tabId)) {
+        outcome = await sendOutreachOnCurrentPage(
+          tabId,
+          applicationId,
+          channel,
+          recipient,
+          `${actionKey}-page`
+        );
+      } else {
+        outcome = { sent: false, error: "Could not connect to the company page" };
+      }
+    }
+
+    // ── Channel 3: someone already connected who works there
+    if (!outcome.sent && companyUrl) {
+      emitLog("info", "extension", `Company page messaging unavailable — looking for a connection at ${companyName}`);
+
+      await navigateAndWait(tabId, `${companyUrl}people/`);
+      ctx.navigatedAway = true;
+      await randomDelay(3000, 5000);
+
+      if (await ensureContentScriptReady(tabId)) {
+        const peopleResult = await sendToContentScript(tabId, {
+          type: "EXECUTE_ACTION",
+          command: "SCRAPE_COMPANY_PEOPLE",
+          actionId: `people-${actionKey}`,
+        });
+        const people = peopleResult?.data?.people || [];
+
+        // 1st-degree only: anyone else cannot be messaged without InMail credits
+        const connection = people.find((person) => /1st/.test(person.degree || ""));
+
+        if (connection?.profileUrl) {
+          channel = "connection";
+          recipient = connection;
+          emitLog("info", "extension", `Messaging connection ${connection.name} at ${companyName}`);
+
+          await navigateAndWait(tabId, connection.profileUrl);
+          await randomDelay(2500, 4000);
+
+          if (await ensureContentScriptReady(tabId)) {
+            outcome = await sendOutreachOnCurrentPage(
+              tabId,
+              applicationId,
+              channel,
+              recipient,
+              `${actionKey}-conn`
+            );
+          } else {
+            outcome = { sent: false, error: "Could not connect to the profile page" };
+          }
+        } else {
+          outcome = {
+            sent: false,
+            error: `No first-degree connection found at ${companyName}`,
+          };
+        }
+      }
+    }
+
+    if (!outcome.sent && !companyUrl && !messageableHirer) {
+      outcome = { sent: false, error: "No company page or hiring contact on this job post" };
+    }
+  } catch (err) {
+    outcome = { sent: false, error: err?.message || "Outreach failed" };
+  }
+
+  // Record the attempt either way — a company that cannot be messaged is a
+  // normal outcome worth remembering, not an error to retry forever.
+  try {
+    await apiCall(`/api/jobs/automate?step=outreach-complete`, {
+      applicationId,
+      sent: !!outcome.sent,
+      channel: channel || undefined,
+      recipient: recipient?.name || undefined,
+      message: outcome.message || undefined,
+      reason: outcome.sent ? undefined : outcome.error,
+    });
+  } catch (recordErr) {
+    emitLog("warn", "api", "Could not record outreach outcome", recordErr?.message || "");
+  }
+
+  if (outcome.sent) {
+    reportProgress("task:progress", {
+      message: `Messaged ${recipient?.name || companyName} about ${application.jobTitle}.`,
+      jobTitle: application.jobTitle,
+    });
+    emitLog("info", "extension", `Outreach sent via ${channel} to ${recipient?.name || companyName}`);
+  } else {
+    reportProgress("task:progress", {
+      message: `No message sent to ${companyName}: ${outcome.error}.`,
+      jobTitle: application.jobTitle,
+    });
+    emitLog("info", "extension", `Outreach skipped for ${companyName}: ${outcome.error}`);
+  }
+}
+
+/**
+ * Take one candidate job from a results list all the way to submitted:
+ * bring the tab back to the list, open the job, check LinkedIn's qualification
+ * signal, read the posting, then run the shared apply routine.
+ *
+ * Shared by the saved-search run and by "apply to every job on this page".
+ * `ctx` is the run state described on applyToJobOnTab, plus `listUrl` (the
+ * results page to return to) and `useJobMatching`.
+ *
+ * Resolves with { status: "applied", application } or { status: "skipped", reason }.
+ * Throws only on errors that should be recorded as a failed application.
+ */
+async function processJobCandidate(tabId, candidateJob, ctx, meta = {}) {
+  const actionKey = meta.actionKey || "job";
+  const jobLabel = candidateJob.title || candidateJob.jobId || candidateJob.url;
+
+  // Clear the previous candidate's record so a failure here is never charged to it
+  ctx.application = null;
+
+  // Back to the results page if the previous job navigated away
+  if (ctx.navigatedAway && ctx.listUrl) {
+    console.log(`[WinPilot] Returning to results page ${ctx.listUrl}`);
+    await navigateAndWait(tabId, ctx.listUrl);
+    await randomDelay(900, 1500);
+    ctx.navigatedAway = false;
+  }
+
+  // Verify we're on the results page before selecting a card
+  const pageInfoCheck = await sendToContentScript(tabId, {
+    type: "EXECUTE_ACTION",
+    command: "GET_PAGE_INFO",
+    actionId: `pagecheck-${actionKey}`,
+  });
+  const currentTabUrl = pageInfoCheck?.data?.url || "";
+  if (
+    ctx.listUrl &&
+    !currentTabUrl.includes("/jobs/search") &&
+    !currentTabUrl.includes("/jobs/collection")
+  ) {
+    console.log(`[WinPilot] Not on results page (url=${currentTabUrl}), navigating back...`);
+    await navigateAndWait(tabId, ctx.listUrl);
+    await randomDelay(900, 1500);
+  }
+
+  const selectResult = await sendToContentScript(tabId, {
+    type: "EXECUTE_ACTION",
+    command: "SELECT_JOB_FROM_LIST",
+    actionId: `select-${actionKey}`,
+    jobId: candidateJob.jobId,
+    jobUrl: candidateJob.url,
+  });
+
+  if (!selectResult?.data?.selected) {
+    // The card could not be clicked (lazy-rendered row, or a job id we know from
+    // the link rather than from the list). Open the job's own page instead.
+    if (!candidateJob.url) {
+      return {
+        status: "skipped",
+        reason: `could not select job card in results list (${selectResult?.data?.error || "unknown"})`,
+      };
+    }
+
+    emitLog("info", "extension", `Could not select "${jobLabel}" in the list — opening its job page instead`);
+    await navigateAndWait(tabId, candidateJob.url);
+    ctx.navigatedAway = true;
+    await randomDelay(1200, 2200);
+
+    if (!(await ensureContentScriptReady(tabId))) {
+      return { status: "skipped", reason: "could not connect to the LinkedIn tab" };
+    }
+  }
+
+  // Simulate time spent reading the job card (like a human would)
+  await randomDelay(1500, 3500);
+
+  const qualResult = await sendToContentScript(tabId, {
+    type: "EXECUTE_ACTION",
+    command: "CHECK_JOB_QUALIFICATION",
+    actionId: `qual-${actionKey}`,
+    maxAttempts: 12,
+    delayMs: 350,
+  });
+  const qualification = qualResult?.data?.qualification || {
+    status: "unknown",
+    matched: false,
+    text: "",
+  };
+
+  // Proceed if matched OR if status is unknown (LinkedIn didn't show qualification info)
+  const shouldSkipJob = ctx.useJobMatching && (
+    qualification.status === "missing_required" ||
+    qualification.status === "no_match" ||
+    (qualification.matched === false && qualification.status !== "unknown")
+  );
+  const qualificationLabel =
+    qualification.text ||
+    String(qualification.status || "unknown").replace(/_/g, " ");
+
+  console.log(`[WinPilot] Qualification check: status="${qualification.status}", matched=${qualification.matched}, shouldSkip=${shouldSkipJob}, text="${qualification.text || ""}"`);
+  emitLog("info", "extension", `Qualification check: status="${qualification.status}", matched=${qualification.matched}, shouldSkip=${shouldSkipJob}`, qualification.text || "");
+
+  if (shouldSkipJob) {
+    return {
+      status: "skipped",
+      qualification: true,
+      reason: `LinkedIn qualification signal is "${qualificationLabel}"`,
+    };
+  }
+
+  console.log(`[WinPilot] Proceeding with application for ${jobLabel}...`);
+  emitLog("info", "extension", `Proceeding with application for ${jobLabel}`);
+
+  // Simulate reading the job description (human-like pause before scraping)
+  await randomDelay(2000, 5000);
+
+  let detail = null;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const detailResult = await sendToContentScript(tabId, {
+      type: "EXECUTE_ACTION",
+      command: "SCRAPE_JOB_DETAIL",
+      actionId: `detail-${actionKey}-${attempt}`,
+    });
+    detail = detailResult?.data?.detail;
+    if (detail?.description) break;
+    await randomDelay(1500, 2500);
+  }
+
+  if (!detail?.description) {
+    throw new Error("Could not extract job description");
+  }
+
+  const jobWithDetail = {
+    ...candidateJob,
+    url: candidateJob.url || detail.url,
+    title: detail.title || candidateJob.title,
+    company: detail.company || candidateJob.company,
+    description: detail.description,
+  };
+
+  const application = await applyToJobOnTab(tabId, jobWithDetail, ctx);
+  return { status: "applied", application };
+}
+
+/**
+ * Errors that must stop the whole run rather than just skip one job.
+ */
+function abortedError() {
+  const err = new Error("Automation stopped by user");
+  err.aborted = true;
+  return err;
+}
+
+function sessionLostError() {
+  const err = new Error("LinkedIn session could not be restored");
+  err.fatal = true;
+  return err;
+}
+
+/**
+ * Apply to ONE job on the tab that is already showing it (search side panel or
+ * job page). Shared by the bulk search run and the single pasted-link run.
+ *
+ * ctx carries the run's mutable state:
+ *   { searchId?, useAI, useAIFormFilling, storedRules, application, navigatedAway }
+ * `useAI` / `useAIFormFilling` are switched off in place when the AI provider
+ * runs out of quota, `application` exposes the registered record to the
+ * caller's error handler, and `navigatedAway` tells the caller the tab no
+ * longer shows the search results page.
+ *
+ * Throws on failure; resolves with the applied application record.
+ */
+async function applyToJobOnTab(tabId, jobWithDetail, ctx) {
+  let targetApp = null;
+
+  let prepData = null;
+
+  const registerResult = await apiCall(`/api/jobs/automate?step=register-job`, {
+    searchId: ctx.searchId,
+    job: {
+      title: jobWithDetail.title,
+      company: jobWithDetail.company,
+      location: jobWithDetail.location || "",
+      url: jobWithDetail.url,
+      description: jobWithDetail.description || "",
+    },
+  });
+
+  targetApp = registerResult?.application || {
+    _id: null,
+    jobTitle: jobWithDetail.title,
+    company: jobWithDetail.company,
+    jobUrl: jobWithDetail.url,
+  };
+
+  ctx.application = targetApp;
+
+  if (!targetApp?._id) {
+    throw new Error("Could not register application record for job");
+  }
+
+  reportProgress("job:applying", {
+    message: ctx.useAI
+      ? `Applying to ${targetApp.jobTitle || jobWithDetail.title} at ${targetApp.company || jobWithDetail.company}...`
+      : `Applying (AI OFF) to ${targetApp.jobTitle || jobWithDetail.title} at ${targetApp.company || jobWithDetail.company}...`,
+    jobTitle: targetApp.jobTitle || jobWithDetail.title,
+    company: targetApp.company || jobWithDetail.company,
+  });
+
+  if (ctx.useAI) {
+    try {
+      prepData = await apiCall(`/api/jobs/automate?step=prepare-apply`, {
+        applicationId: targetApp._id,
+      });
+    } catch (prepErr) {
+      const prepMessage = prepErr?.message || "";
+      if (isGeminiQuotaErrorMessage(prepMessage)) {
+        ctx.useAI = false;
+        reportProgress("task:error", {
+          message: `${prepMessage} Switched to AI Mode OFF for remaining jobs.`,
+        });
+        reportProgress("task:progress", {
+          message: "AI Mode OFF active: continuing with existing LinkedIn resume (no AI calls).",
+        });
+      } else {
+        throw prepErr;
+      }
+    }
+
+    if (ctx.useAI && !prepData?.resumePdf) {
+      throw new Error("Tailored resume PDF was not generated");
+    }
+  }
+
+  // Try Easy Apply from the search results side panel first
+  let easyApplyResult = await sendToContentScript(tabId, {
+    type: "EXECUTE_ACTION",
+    command: "CLICK_EASY_APPLY",
+    actionId: `apply-${targetApp._id}`,
+  });
+
+  if (!easyApplyResult?.data?.clicked) {
+    // Side panel miss — open the full job page and retry
+    console.log(`[WinPilot] Easy Apply not found on side panel, navigating to job page...`);
+    await navigateAndWait(tabId, targetApp.jobUrl);
+    ctx.navigatedAway = true;
+
+    if (!(await ensureSessionHealthy(tabId))) {
+      throw sessionLostError();
+    }
+
+    await randomDelay(1500, 3000);
+
+    easyApplyResult = await sendToContentScript(tabId, {
+      type: "EXECUTE_ACTION",
+      command: "CLICK_EASY_APPLY",
+      actionId: `apply-${targetApp._id}-retry`,
+    });
+    if (!easyApplyResult?.data?.clicked) {
+      throw new Error(`Easy Apply button not found: ${easyApplyResult?.data?.error || "unknown"}`);
+    }
+  }
+
+  if (easyApplyResult?.data?.sdui) {
+    ctx.navigatedAway = true;
+    await waitForTabLoad(tabId);
+    await randomDelay(1400, 2200);
+    await ensureContentScriptReady(tabId);
+  }
+
+  const MAX_FORM_STEPS = 15;
+  let uploaded = false;
+  let submitted = false;
+  let lastFieldsSignature = "";
+  let repeatedSignatureCount = 0;
+
+  for (let step = 0; step < MAX_FORM_STEPS; step++) {
+    if (automationAborted) throw abortedError();
+
+    const fieldsResult = await sendToContentScript(tabId, {
+      type: "EXECUTE_ACTION",
+      command: "GET_FORM_FIELDS",
+      actionId: `fields-${targetApp._id}-${step}`,
+    });
+    const fields = fieldsResult?.data?.fields || [];
+
+    const fieldsSignature = fields
+      .filter((f) => f.required)
+      .map((f) => `${f.type}:${(f.label || "").toLowerCase().trim()}:${String(f.value || "").toLowerCase().trim()}`)
+      .sort()
+      .join("|");
+
+    if (fieldsSignature && fieldsSignature === lastFieldsSignature) {
+      repeatedSignatureCount++;
+    } else {
+      repeatedSignatureCount = 0;
+      lastFieldsSignature = fieldsSignature;
+    }
+
+    if (repeatedSignatureCount >= 4) {
+      await recordUnknownAutomationSituation(
+        "form-stuck-no-progress",
+        {
+          label: "No progress detected across repeated form steps",
+          source: "GET_FORM_FIELDS",
+          step: step + 1,
+          repeatedSignatureCount,
+          fieldsSignature,
+        },
+        targetApp.jobTitle
+      );
+      throw new Error("No form progress detected; skipping this job");
+    }
+
+    if (ctx.useAI && prepData?.resumePdf && !uploaded && fields.some((f) => f.type === "file")) {
+      const uploadResult = await sendToContentScript(tabId, {
+        type: "EXECUTE_ACTION",
+        command: "UPLOAD_RESUME",
+        actionId: `upload-${targetApp._id}-${step}`,
+        fileData: prepData.resumePdf,
+        fileName: prepData.resumeFileName || "tailored-resume.pdf",
+      });
+      if (!uploadResult?.data?.uploaded) {
+        throw new Error(`Resume upload failed: ${uploadResult?.data?.error || "unknown"}`);
+      }
+      uploaded = true;
+      await randomDelay(1000, 1600);
+    }
+
+    const requiredMissing = fields.filter((f) => f.required && isMissingFieldValue(f));
+
+    // Batch AI answers for this form step when AI Form Filling is enabled
+    let aiAnswers = new Map();
+    if (ctx.useAIFormFilling && requiredMissing.length > 0) {
+      reportProgress("task:progress", {
+        message: `AI answering ${requiredMissing.length} form question(s)...`,
+        jobTitle: targetApp.jobTitle || jobWithDetail.title,
+      });
+      try {
+        aiAnswers = await getAIFormAnswers(requiredMissing, targetApp._id);
+        if (aiAnswers.size > 0) {
+          emitLog("info", "api", `AI form fill returned ${aiAnswers.size} answer(s)`);
+        }
+      } catch (formAiErr) {
+        const formAiMessage = formAiErr?.message || "";
+        if (isGeminiQuotaErrorMessage(formAiMessage)) {
+          ctx.useAIFormFilling = false;
+          chrome.storage.local.set({ useAIFormFilling: false });
+          reportProgress("task:error", {
+            message: `${formAiMessage} Switched AI Form Filling OFF for remaining jobs.`,
+          });
+        } else {
+          emitLog("warn", "api", "AI form fill error, using rules", formAiMessage);
+        }
+      }
+    }
+
+    for (let i = 0; i < requiredMissing.length; i++) {
+      const field = requiredMissing[i];
+      const chosen = await answerFieldForForm(field, ctx.storedRules, ctx.useAIFormFilling ? aiAnswers : null);
+
+      if (!chosen) {
+        await recordUnknownFieldSituation(field, targetApp.jobTitle);
+        continue;
+      }
+
+      const fillSelector = resolveOptionSelector(field, chosen) || field.selector;
+
+      await sendToContentScript(tabId, {
+        type: "EXECUTE_ACTION",
+        command: "FILL_FORM_FIELD",
+        actionId: `fill-${targetApp._id}-${step}-${i}`,
+        fieldIndex: i,
+        selector: fillSelector,
+        value: chosen,
+        fieldType: field.type,
+        fieldLabel: field.label,
+      });
+      await randomDelay(800, 2000);
+    }
+
+    const dropdownResult = await sendToContentScript(tabId, {
+      type: "EXECUTE_ACTION",
+      command: "AUTO_SELECT_DROPDOWNS",
+      actionId: `auto-dropdown-${targetApp._id}-${step}`,
+    });
+    if ((dropdownResult?.data?.selectedCount || 0) > 0) {
+      await randomDelay(300, 700);
+    }
+
+    const navResult = await sendToContentScript(tabId, {
+      type: "EXECUTE_ACTION",
+      command: "CLICK_NEXT_OR_SUBMIT",
+      actionId: `nav-${targetApp._id}-${step}`,
+    });
+
+    const navAction = navResult?.data?.action;
+    if (navAction === "submitted") {
+      submitted = true;
+      await randomDelay(1000, 1500);
+      try {
+        await sendToContentScript(tabId, {
+          type: "EXECUTE_ACTION",
+          command: "GET_PAGE_INFO",
+          actionId: `post-submit-check-${targetApp._id}`,
+        });
+      } catch { /* ignore - page may have navigated */ }
+      break;
+    }
+
+    if (navAction === "next" || navAction === "review") {
+      await randomDelay(1500, 3000);
+      continue;
+    }
+
+    if (navAction === "continue_applying") {
+      await recordUnknownAutomationSituation(
+        "linkedin-continue-applying-interstitial",
+        {
+          label: "LinkedIn safety interstitial after Easy Apply",
+          source: "CLICK_NEXT_OR_SUBMIT",
+          href: navResult?.data?.href || "",
+          safety: !!navResult?.data?.safety,
+        },
+        targetApp.jobTitle
+      );
+      ctx.navigatedAway = true;
+      await waitForTabLoad(tabId);
+      await randomDelay(1400, 2200);
+      await ensureContentScriptReady(tabId);
+      continue;
+    }
+
+    if (navAction === "blocked") {
+      const stillMissing = requiredMissing.filter((f) => isMissingFieldValue(f));
+      if (stillMissing.length > 0) {
+        for (const field of stillMissing) {
+          await recordUnknownFieldSituation(field, targetApp.jobTitle);
+        }
+      }
+      throw new Error(`Navigation blocked: ${navResult?.data?.error || "required fields unresolved"}`);
+    }
+
+    await recordUnknownAutomationSituation(
+      "form-navigation-unknown-action",
+      {
+        label: "Unknown form navigation action",
+        source: "CLICK_NEXT_OR_SUBMIT",
+        action: navAction || "none",
+        error: navResult?.data?.error || "",
+        step: step + 1,
+      },
+      targetApp.jobTitle
+    );
+
+    throw new Error(`Form navigation blocked on step ${step + 1} (action=${navAction || "none"})`);
+  }
+
+  if (!submitted) {
+    throw new Error("Application was not submitted within the allowed form steps");
+  }
+
+  // Mark that we need to return to search results for the next job
+  ctx.navigatedAway = true;
+
+  // Post-submission pause — humans don't immediately move on
+  await randomDelay(2000, 5000);
+
+  if (targetApp?._id) {
+    await apiCall(`/api/jobs/automate?step=complete`, {
+      applicationId: targetApp._id,
+      success: true,
+      notes: "Auto-applied via WinPilot",
+    });
+  }
+
+  // Auto Messaging: try to reach a human at this company before moving on.
+  // Runs after the application is safely recorded, and never throws.
+  if (ctx.useAutoMessaging) {
+    await attemptCompanyOutreach(tabId, ctx, targetApp, jobWithDetail);
+  }
+
+  return targetApp;
+}
+
 async function startAutomation(searchId, options = {}) {
   if (automationRunning) {
     reportProgress("task:error", { message: "Automation already running" });
     return;
   }
 
-  let targetApp = null;
-  const normalizedOptions = normalizeAutomationOptions(options);
-  let useAI = normalizedOptions.useAI;
+  // Starting values only — jobCtx below owns these for the rest of the run,
+  // since the apply routine switches them off when the AI provider runs dry.
+  const { useAI, useJobMatching, useAIFormFilling, useAutoMessaging } = normalizeAutomationOptions(options);
 
   console.log(`[WinPilot] ====== STARTING AUTOMATION ======`);
   console.log(`[WinPilot] searchId: ${searchId}`);
   console.log(`[WinPilot] apiUrl: ${apiUrl}`);
   console.log(`[WinPilot] authToken: ${authToken ? `${authToken.substring(0, 8)}...` : "NOT SET"}`);
   console.log(`[WinPilot] wsUrl: ${wsUrl}`);
-  console.log(`[WinPilot] useAI: ${useAI}`);
-  emitLog("info", "system", "====== STARTING AUTOMATION ======", `searchId=${searchId}, useAI=${useAI}`);
+  console.log(`[WinPilot] useAI: ${useAI}, useJobMatching: ${useJobMatching}, useAIFormFilling: ${useAIFormFilling}, useAutoMessaging: ${useAutoMessaging}`);
+  emitLog(
+    "info",
+    "system",
+    "====== STARTING AUTOMATION ======",
+    `searchId=${searchId}, useAI=${useAI}, useAIFormFilling=${useAIFormFilling}`
+  );
 
   automationRunning = true;
   automationAborted = false;
 
-  chrome.storage.local.set({ automationRunning: true, automationSearchId: searchId });
+  chrome.storage.local.set({
+    automationRunning: true,
+    automationSearchId: searchId,
+    // Keep AI fallback module in sync for post-submit validation fixes
+    useAIFormFilling,
+  });
 
   reportProgress("task:start", { label: "Starting job automation..." });
   reportProgress("task:progress", {
-    message: useAI
-      ? "AI Mode ON: matching and tailored resume generation enabled"
-      : "AI Mode OFF: applying with existing LinkedIn resume (no AI usage)",
+    message: [
+      useAI ? "AI resume ON" : "AI resume OFF",
+      useJobMatching ? "matching ON" : "matching OFF",
+      useAIFormFilling ? "AI form fill ON" : "AI form fill OFF (rules)",
+      useAutoMessaging ? "auto messaging ON" : null,
+    ].filter(Boolean).join(" · "),
   });
 
+  // Shared state for every job in this run. The AI switches flip off in place
+  // when the provider runs out of quota, and the apply routine reports back
+  // whether the tab still shows the results page.
+  const jobCtx = {
+    searchId,
+    listUrl: "",
+    useAI,
+    useJobMatching,
+    useAIFormFilling,
+    useAutoMessaging,
+    storedRules: null,
+    application: null,
+    navigatedAway: false,
+  };
+
   try {
-    // Step 1: Get search config and navigate to LinkedIn Jobs
+    // Step 1: Get one search URL per keyword (LinkedIn doesn't handle a comma-separated
+    // multi-phrase keyword string well, so each keyword gets its own search)
     console.log(`[WinPilot] Step 1: Fetching search configuration...`);
     reportProgress("task:progress", { message: "Fetching search configuration..." });
     const startData = await apiCall(`/api/jobs/automate?step=start`, { searchId });
     console.log(`[WinPilot] Step 1 result:`, JSON.stringify(startData).substring(0, 300));
-    emitLog("info", "extension", "Search configuration received", `URL: ${startData.url || "none"}, remaining: ${startData.remaining || "?"}`);
+    // remaining is null when server-side daily caps are disabled
+    const remainingText =
+      startData.remaining == null ? "no daily limit" : `${startData.remaining} remaining today`;
+    emitLog("info", "extension", "Search configuration received", `${startData.searches?.length || 0} keyword(s), ${remainingText}`);
 
-    if (!startData.url) {
+    if (!startData.searches?.length) {
       throw new Error("No search URL returned");
     }
 
     reportProgress("task:progress", {
-      message: `Navigating to LinkedIn Jobs (${startData.remaining} applications remaining today)...`,
+      message: `Navigating to LinkedIn Jobs (${remainingText})...`,
     });
 
-    // Navigate to search URL
-    console.log(`[WinPilot] Step 1b: Navigating to ${startData.url}`);
     const tab = await ensureLinkedInTab();
     console.log(`[WinPilot] Got LinkedIn tab: id=${tab.id}, url=${tab.url}`);
-    await chrome.tabs.update(tab.id, { url: startData.url, active: true });
-    await waitForTabLoad(tab.id);
-    await randomDelay(4000, 7000); // Longer initial load wait
-    const csReady = await ensureContentScriptReady(tab.id);
-    console.log(`[WinPilot] Content script ready: ${csReady}`);
-
-    // Session health check before starting
-    if (!(await ensureSessionHealthy(tab.id))) {
-      return cleanup("Automation stopped: LinkedIn session could not be restored");
-    }
 
     if (automationAborted) return cleanup("Automation stopped by user");
 
@@ -970,21 +1869,50 @@ async function startAutomation(searchId, options = {}) {
       }
     }
 
-    // Configuration for multi-page processing
-    const MAX_PAGES = 5;
-    const MAX_JOBS_PER_RUN = 50;
+    // Configuration for multi-page processing. These are runaway guards for a
+    // single run, not a daily policy cap (daily caps are disabled server-side).
+    const MAX_PAGES = 20;
+    const MAX_JOBS_PER_RUN = 500;
     let totalAppliedCount = 0;
     let totalFailedCount = 0;
     let totalSkippedQualificationCount = 0;
-    let currentPage = 1;
+    let totalPagesProcessed = 0;
     const processedJobIds = new Set();
 
-    // Multi-page loop
-    pageLoop: for (let pageNum = 1; pageNum <= MAX_PAGES; pageNum++) {
+    // Search each keyword one at a time
+    keywordLoop: for (const { keyword, url: keywordSearchUrl } of startData.searches) {
       if (automationAborted) return cleanup("Automation stopped by user");
+      if (totalAppliedCount + totalFailedCount >= MAX_JOBS_PER_RUN) break keywordLoop;
 
-      currentPage = pageNum;
-      const currentPageUrl = getSearchUrlForPage(startData.url, pageNum);
+      console.log(`[WinPilot] ====== Searching keyword: "${keyword}" ======`);
+      emitLog("info", "extension", `Searching keyword: "${keyword}"`);
+      reportProgress("task:progress", { message: `Searching for "${keyword}"...` });
+
+      try {
+        await chrome.tabs.update(tab.id, { url: keywordSearchUrl, active: true });
+        await waitForTabLoad(tab.id);
+        await randomDelay(4000, 7000); // Longer initial load wait
+        const csReady = await ensureContentScriptReady(tab.id);
+        console.log(`[WinPilot] Content script ready: ${csReady}`);
+        if (!csReady) {
+          emitLog("warn", "extension", `Skipping "${keyword}": could not connect to the LinkedIn tab's content script`);
+          continue keywordLoop;
+        }
+
+        // Session health check before starting
+        if (!(await ensureSessionHealthy(tab.id))) {
+          return cleanup("Automation stopped: LinkedIn session could not be restored");
+        }
+
+        let currentPage = 1;
+
+        // Multi-page loop
+        pageLoop: for (let pageNum = 1; pageNum <= MAX_PAGES; pageNum++) {
+          if (automationAborted) return cleanup("Automation stopped by user");
+
+          currentPage = pageNum;
+          totalPagesProcessed++;
+          const currentPageUrl = getSearchUrlForPage(keywordSearchUrl, pageNum);
 
       // Navigate to the correct page (only if pageNum > 1 or first time)
       if (pageNum > 1) {
@@ -1012,13 +1940,31 @@ async function startAutomation(searchId, options = {}) {
       // Simulate browsing the listings page first
       await randomDelay(2500, 5000);
 
-      const scrapeResult = await sendToContentScript(tab.id, {
+      let scrapeResult = await sendToContentScript(tab.id, {
         type: "EXECUTE_ACTION",
         command: "SCRAPE_JOB_LISTINGS",
         actionId: `scrape-listings-p${pageNum}`,
       });
 
-      const scrapedJobs = scrapeResult?.data?.jobs || [];
+      let scrapedJobs = scrapeResult?.data?.jobs || [];
+
+      // LinkedIn periodically changes the results page layout (e.g. the "AI job
+      // search" rollout), which can leave the scraper reading 0 jobs off a page
+      // that actually has results. Reload once and retry on page 1 before
+      // concluding the search truly came back empty.
+      if (scrapedJobs.length === 0 && pageNum === 1 && !scrapeResult?.data?.noResultsConfirmed) {
+        console.warn(`[WinPilot] Page ${pageNum}: 0 jobs parsed, reloading and retrying once...`);
+        emitLog("warn", "extension", "No jobs parsed on first attempt — reloading and retrying once...");
+        await navigateAndWait(tab.id, currentPageUrl);
+        await randomDelay(3000, 5000);
+        scrapeResult = await sendToContentScript(tab.id, {
+          type: "EXECUTE_ACTION",
+          command: "SCRAPE_JOB_LISTINGS",
+          actionId: `scrape-listings-p${pageNum}-retry`,
+        });
+        scrapedJobs = scrapeResult?.data?.jobs || [];
+      }
+
       console.log(`[WinPilot] Page ${pageNum}: ${scrapedJobs.length} jobs found`);
       emitLog("info", "extension", `Page ${pageNum}: ${scrapedJobs.length} jobs found`);
       if (scrapedJobs.length > 0) {
@@ -1028,32 +1974,55 @@ async function startAutomation(searchId, options = {}) {
       if (scrapedJobs.length === 0) {
         if (pageNum === 1) {
           console.error(`[WinPilot] Step 2 FAILED: scrapeResult =`, JSON.stringify(scrapeResult));
-          throw new Error("No jobs found on the search results page");
+          const reason = scrapeResult?.data?.noResultsConfirmed
+            ? "No jobs found on the search results page"
+            : "No jobs found on the search results page (LinkedIn's page layout may have changed — retried once)";
+          throw new Error(reason);
         } else {
           console.log(`[WinPilot] No more jobs found on page ${pageNum}, finishing pagination`);
           break pageLoop;
         }
       }
 
-      // Filter eligible jobs, excluding already processed ones
-      const eligibleJobs = scrapedJobs.filter(
-        (job) => job?.url && !job.applied && job.easyApply !== false && !processedJobIds.has(job.jobId || job.url)
-      );
+      // Process all unapplied jobs with a URL/id. Do NOT gate on list-card Easy Apply badges —
+      // modern LinkedIn often hides them, which previously left eligible=0 on full pages of jobs.
+      // Easy Apply vs external is decided on the detail pane / CLICK_EASY_APPLY.
+      const eligibleJobs = scrapedJobs.filter((job) => {
+        if (job?.applied) return false;
+        const hasTarget = !!(job?.url || job?.jobId);
+        if (!hasTarget) return false;
+        const keys = [job.jobId, job.url].filter(Boolean);
+        if (keys.some((k) => processedJobIds.has(k))) return false;
+        return true;
+      });
       const dedupedEligibleJobs = [];
       const seenJobKeys = new Set();
       for (const job of eligibleJobs) {
+        // Ensure every job has a navigable URL
+        if (!job.url && job.jobId) {
+          job.url = `https://www.linkedin.com/jobs/view/${job.jobId}/`;
+        }
         const key = (job.jobId || job.url || "").trim();
         if (!key || seenJobKeys.has(key) || processedJobIds.has(key)) continue;
         seenJobKeys.add(key);
         dedupedEligibleJobs.push(job);
       }
       const skippedAppliedCount = scrapedJobs.filter((job) => job?.applied).length;
-      const easyApplyDetectedCount = scrapedJobs.filter((job) => job?.easyApply !== false).length;
+      const knownEasyApplyCount = scrapedJobs.filter((job) => job?.easyApply === true).length;
+      const unknownApplyCount = scrapedJobs.filter(
+        (job) => job?.easyApply == null || job?.easyApply === undefined
+      ).length;
+      const externalOnCardCount = scrapedJobs.filter((job) => job?.easyApply === false).length;
+      const missingUrlCount = scrapedJobs.filter((job) => !job?.url && !job?.jobId).length;
 
       console.log(
-        `[WinPilot] Page ${pageNum} eligibility: total=${scrapedJobs.length}, easyApply=${easyApplyDetectedCount}, alreadyApplied=${skippedAppliedCount}, eligible=${dedupedEligibleJobs.length}`
+        `[WinPilot] Page ${pageNum} eligibility: total=${scrapedJobs.length}, easyApplyBadge=${knownEasyApplyCount}, unknown=${unknownApplyCount}, externalCard=${externalOnCardCount}, noUrl=${missingUrlCount}, alreadyApplied=${skippedAppliedCount}, eligible=${dedupedEligibleJobs.length}`
       );
-      emitLog("info", "extension", `Page ${pageNum} eligibility: total=${scrapedJobs.length}, easyApply=${easyApplyDetectedCount}, alreadyApplied=${skippedAppliedCount}, eligible=${dedupedEligibleJobs.length}`);
+      emitLog(
+        "info",
+        "extension",
+        `Page ${pageNum} eligibility: total=${scrapedJobs.length}, easyApplyBadge=${knownEasyApplyCount}, unknown=${unknownApplyCount}, externalCard=${externalOnCardCount}, noUrl=${missingUrlCount}, alreadyApplied=${skippedAppliedCount}, eligible=${dedupedEligibleJobs.length}`
+      );
 
       if (dedupedEligibleJobs.length === 0) {
         console.log(`[WinPilot] No new eligible jobs on page ${pageNum}, trying next page...`);
@@ -1066,7 +2035,9 @@ async function startAutomation(searchId, options = {}) {
         page: pageNum,
       });
 
-      const storedRules = await getStoredFormRules();
+      jobCtx.storedRules = await getStoredFormRules();
+      jobCtx.listUrl = currentPageUrl;
+      jobCtx.navigatedAway = false;
       const remainingQuota = MAX_JOBS_PER_RUN - totalAppliedCount - totalFailedCount;
       const jobsToProcessOnThisPage = Math.min(dedupedEligibleJobs.length, remainingQuota, 25);
 
@@ -1078,11 +2049,9 @@ async function startAutomation(searchId, options = {}) {
       let pageAppliedCount = 0;
       let pageFailedCount = 0;
       let pageSkippedQualificationCount = 0;
-      let needsReturnToSearchPage = false;
 
       for (let jobIndex = 0; jobIndex < jobsToProcessOnThisPage; jobIndex++) {
         const candidateJob = dedupedEligibleJobs[jobIndex];
-        targetApp = null;
 
         // Mark as processed to avoid reprocessing
         processedJobIds.add(candidateJob.jobId || candidateJob.url);
@@ -1110,413 +2079,53 @@ async function startAutomation(searchId, options = {}) {
           console.log(`[WinPilot] Processing job ${jobIndex + 1}/${jobsToProcessOnThisPage} (page ${pageNum}): ${candidateJob.title}`);
           emitLog("info", "extension", `Processing job ${jobIndex + 1}/${jobsToProcessOnThisPage} (page ${pageNum}): ${candidateJob.title}`);
 
-          // Navigate back to the CORRECT page if we navigated away (e.g., after applying)
-          if (needsReturnToSearchPage) {
-            console.log(`[WinPilot] Returning to search results page ${pageNum}...`);
-            await navigateAndWait(tab.id, currentPageUrl);
-            await randomDelay(900, 1500);
-            needsReturnToSearchPage = false;
-          }
-
-          // Verify we're on the right page before selecting
-          const pageInfoCheck = await sendToContentScript(tab.id, {
-            type: "EXECUTE_ACTION",
-            command: "GET_PAGE_INFO",
-            actionId: `pagecheck-${pageNum}-${jobIndex}`,
-          });
-          const currentTabUrl = pageInfoCheck?.data?.url || "";
-          if (!currentTabUrl.includes("/jobs/search") && !currentTabUrl.includes("/jobs/collection")) {
-            console.log(`[WinPilot] Not on search results page (url=${currentTabUrl}), navigating back...`);
-            await navigateAndWait(tab.id, currentPageUrl);
-            await randomDelay(900, 1500);
-          }
-
-          const selectResult = await sendToContentScript(tab.id, {
-            type: "EXECUTE_ACTION",
-            command: "SELECT_JOB_FROM_LIST",
-            actionId: `select-p${pageNum}-${jobIndex}`,
-            jobId: candidateJob.jobId,
-            jobUrl: candidateJob.url,
+          const outcome = await processJobCandidate(tab.id, candidateJob, jobCtx, {
+            actionKey: `p${pageNum}-${jobIndex}`,
           });
 
-          if (!selectResult?.data?.selected) {
+          if (outcome.status === "skipped") {
+            if (outcome.qualification) pageSkippedQualificationCount++;
             pageFailedCount++;
             totalFailedCount++;
             reportProgress("task:progress", {
-              message: `Skipping ${candidateJob.title}: could not select job card in results list (${selectResult?.data?.error || "unknown"}).`,
+              message: `Skipping ${candidateJob.title}: ${outcome.reason}.`,
               jobTitle: candidateJob.title,
             });
             continue;
           }
 
-          // Simulate time spent reading the job card (like a human would)
-          await randomDelay(1500, 3500);
-
-          const qualResult = await sendToContentScript(tab.id, {
-            type: "EXECUTE_ACTION",
-            command: "CHECK_JOB_QUALIFICATION",
-            actionId: `qual-p${pageNum}-${jobIndex}`,
-            maxAttempts: 12,
-            delayMs: 350,
-          });
-          const qualification = qualResult?.data?.qualification || {
-            status: "unknown",
-            matched: false,
-            text: "",
-          };
-
-          // Proceed if matched OR if status is unknown (LinkedIn didn't show qualification info)
-          const shouldSkipJob =
-            qualification.status === "missing_required" ||
-            qualification.status === "no_match" ||
-            (qualification.matched === false && qualification.status !== "unknown");
-          const qualificationLabel =
-            qualification.text ||
-            String(qualification.status || "unknown").replace(/_/g, " ");
-
-          console.log(`[WinPilot] Qualification check: status="${qualification.status}", matched=${qualification.matched}, shouldSkip=${shouldSkipJob}, text="${qualification.text || ""}"`);
-          emitLog("info", "extension", `Qualification check: status="${qualification.status}", matched=${qualification.matched}, shouldSkip=${shouldSkipJob}`, qualification.text || "");
-
-          if (shouldSkipJob) {
-            pageSkippedQualificationCount++;
-            pageFailedCount++;
-            totalFailedCount++;
-            reportProgress("task:progress", {
-              message: `Skipping ${candidateJob.title}: LinkedIn qualification signal is "${qualificationLabel}".`,
-              jobTitle: candidateJob.title,
-            });
-            continue;
-          }
-
-          console.log(`[WinPilot] Proceeding with application for ${candidateJob.title}...`);
-          emitLog("info", "extension", `Proceeding with application for ${candidateJob.title}`);
-
-          // Simulate reading the job description (human-like pause before scraping)
-          await randomDelay(2000, 5000);
-
-          let detail = null;
-          for (let attempt = 0; attempt < 3; attempt++) {
-            const detailResult = await sendToContentScript(tab.id, {
-              type: "EXECUTE_ACTION",
-              command: "SCRAPE_JOB_DETAIL",
-              actionId: `detail-p${pageNum}-${jobIndex}-${attempt}`,
-            });
-            detail = detailResult?.data?.detail;
-            if (detail?.description) break;
-            await randomDelay(1500, 2500);
-          }
-
-          if (!detail?.description) {
-            throw new Error("Could not extract job description");
-          }
-
-          const jobWithDetail = {
-            ...candidateJob,
-            title: detail.title || candidateJob.title,
-            company: detail.company || candidateJob.company,
-            description: detail.description,
-          };
-
-          let prepData = null;
-
-          const registerResult = await apiCall(`/api/jobs/automate?step=register-job`, {
-            searchId,
-            job: {
-              title: jobWithDetail.title,
-              company: jobWithDetail.company,
-              location: jobWithDetail.location || "",
-              url: jobWithDetail.url,
-              description: jobWithDetail.description || "",
-            },
-          });
-
-          targetApp = registerResult?.application || {
-            _id: null,
-            jobTitle: jobWithDetail.title,
-            company: jobWithDetail.company,
-            jobUrl: jobWithDetail.url,
-          };
-
-          if (!targetApp?._id) {
-            throw new Error("Could not register application record for job");
-          }
-
-          reportProgress("job:applying", {
-            message: useAI
-              ? `Applying to ${targetApp.jobTitle || jobWithDetail.title} at ${targetApp.company || jobWithDetail.company}...`
-              : `Applying (AI OFF) to ${targetApp.jobTitle || jobWithDetail.title} at ${targetApp.company || jobWithDetail.company}...`,
-            jobTitle: targetApp.jobTitle || jobWithDetail.title,
-            company: targetApp.company || jobWithDetail.company,
-          });
-
-          if (useAI) {
-            try {
-              prepData = await apiCall(`/api/jobs/automate?step=prepare-apply`, {
-                applicationId: targetApp._id,
-              });
-            } catch (prepErr) {
-              const prepMessage = prepErr?.message || "";
-              if (isGeminiQuotaErrorMessage(prepMessage)) {
-                useAI = false;
-                reportProgress("task:error", {
-                  message: `${prepMessage} Switched to AI Mode OFF for remaining jobs.`,
-                });
-                reportProgress("task:progress", {
-                  message: "AI Mode OFF active: continuing with existing LinkedIn resume (no AI calls).",
-                });
-              } else {
-                throw prepErr;
-              }
-            }
-
-            if (useAI && !prepData?.resumePdf) {
-              throw new Error("Tailored resume PDF was not generated");
-            }
-          }
-
-          // Try clicking Easy Apply from the search results side panel first
-          // (avoids navigating away from the search page)
-          let easyApplyResult = await sendToContentScript(tab.id, {
-            type: "EXECUTE_ACTION",
-            command: "CLICK_EASY_APPLY",
-            actionId: `apply-${targetApp._id}`,
-          });
-
-          if (!easyApplyResult?.data?.clicked) {
-            // If Easy Apply button wasn't found on side panel, navigate to the job page
-            console.log(`[WinPilot] Easy Apply not found on side panel, navigating to job page...`);
-            await navigateAndWait(tab.id, targetApp.jobUrl);
-            needsReturnToSearchPage = true;
-
-            // Check session after navigation (LinkedIn may redirect to login)
-            if (!(await ensureSessionHealthy(tab.id))) {
-              return cleanup("Automation stopped: LinkedIn session could not be restored");
-            }
-
-            await randomDelay(1500, 3000);
-
-            easyApplyResult = await sendToContentScript(tab.id, {
-              type: "EXECUTE_ACTION",
-              command: "CLICK_EASY_APPLY",
-              actionId: `apply-${targetApp._id}-retry`,
-            });
-            if (!easyApplyResult?.data?.clicked) {
-              throw new Error(`Easy Apply button not found: ${easyApplyResult?.data?.error || "unknown"}`);
-            }
-          }
-
-          if (easyApplyResult?.data?.sdui) {
-            needsReturnToSearchPage = true;
-            await waitForTabLoad(tab.id);
-            await randomDelay(1400, 2200);
-            await ensureContentScriptReady(tab.id);
-          }
-
-          const MAX_FORM_STEPS = 15;
-          let uploaded = false;
-          let submitted = false;
-          let lastFieldsSignature = "";
-          let repeatedSignatureCount = 0;
-
-          for (let step = 0; step < MAX_FORM_STEPS; step++) {
-            if (automationAborted) return cleanup("Automation stopped by user");
-
-            const fieldsResult = await sendToContentScript(tab.id, {
-              type: "EXECUTE_ACTION",
-              command: "GET_FORM_FIELDS",
-              actionId: `fields-${targetApp._id}-${step}`,
-            });
-            const fields = fieldsResult?.data?.fields || [];
-
-            const fieldsSignature = fields
-              .filter((f) => f.required)
-              .map((f) => `${f.type}:${(f.label || "").toLowerCase().trim()}:${String(f.value || "").toLowerCase().trim()}`)
-              .sort()
-              .join("|");
-
-            if (fieldsSignature && fieldsSignature === lastFieldsSignature) {
-              repeatedSignatureCount++;
-            } else {
-              repeatedSignatureCount = 0;
-              lastFieldsSignature = fieldsSignature;
-            }
-
-            if (repeatedSignatureCount >= 4) {
-              await recordUnknownAutomationSituation(
-                "form-stuck-no-progress",
-                {
-                  label: "No progress detected across repeated form steps",
-                  source: "GET_FORM_FIELDS",
-                  step: step + 1,
-                  repeatedSignatureCount,
-                  fieldsSignature,
-                },
-                targetApp.jobTitle
-              );
-              throw new Error("No form progress detected; skipping this job");
-            }
-
-            if (useAI && !uploaded && fields.some((f) => f.type === "file")) {
-              const uploadResult = await sendToContentScript(tab.id, {
-                type: "EXECUTE_ACTION",
-                command: "UPLOAD_RESUME",
-                actionId: `upload-${targetApp._id}-${step}`,
-                fileData: prepData.resumePdf,
-                fileName: prepData.resumeFileName || "tailored-resume.pdf",
-              });
-              if (!uploadResult?.data?.uploaded) {
-                throw new Error(`Resume upload failed: ${uploadResult?.data?.error || "unknown"}`);
-              }
-              uploaded = true;
-              await randomDelay(1000, 1600);
-            }
-
-            const requiredMissing = fields.filter((f) => f.required && isMissingFieldValue(f));
-            for (let i = 0; i < requiredMissing.length; i++) {
-              const field = requiredMissing[i];
-              const raw = getRuleBasedAnswer(field, storedRules);
-              const chosen = normalizeAnswerForField(field, raw) || fallbackAnswerForField(field);
-
-              if (!chosen) {
-                await recordUnknownFieldSituation(field, targetApp.jobTitle);
-                continue;
-              }
-
-              await sendToContentScript(tab.id, {
-                type: "EXECUTE_ACTION",
-                command: "FILL_FORM_FIELD",
-                actionId: `fill-${targetApp._id}-${step}-${i}`,
-                fieldIndex: i,
-                selector: field.selector,
-                value: chosen,
-                fieldType: field.type,
-              });
-              // Human-like pause between form fields
-              await randomDelay(800, 2000);
-            }
-
-            const dropdownResult = await sendToContentScript(tab.id, {
-              type: "EXECUTE_ACTION",
-              command: "AUTO_SELECT_DROPDOWNS",
-              actionId: `auto-dropdown-${targetApp._id}-${step}`,
-            });
-            if ((dropdownResult?.data?.selectedCount || 0) > 0) {
-              await randomDelay(300, 700);
-            }
-
-            const navResult = await sendToContentScript(tab.id, {
-              type: "EXECUTE_ACTION",
-              command: "CLICK_NEXT_OR_SUBMIT",
-              actionId: `nav-${targetApp._id}-${step}`,
-            });
-
-            const navAction = navResult?.data?.action;
-            if (navAction === "submitted") {
-              submitted = true;
-              // After submission, dismiss the confirmation dialog if present
-              await randomDelay(1000, 1500);
-              try {
-                await sendToContentScript(tab.id, {
-                  type: "EXECUTE_ACTION",
-                  command: "GET_PAGE_INFO",
-                  actionId: `post-submit-check-${targetApp._id}`,
-                });
-              } catch { /* ignore - page may have navigated */ }
-              break;
-            }
-
-            if (navAction === "next" || navAction === "review") {
-              // Wait for next page to load, then simulate reading
-              await randomDelay(1500, 3000);
-              continue;
-            }
-
-            if (navAction === "continue_applying") {
-              await recordUnknownAutomationSituation(
-                "linkedin-continue-applying-interstitial",
-                {
-                  label: "LinkedIn safety interstitial after Easy Apply",
-                  source: "CLICK_NEXT_OR_SUBMIT",
-                  href: navResult?.data?.href || "",
-                  safety: !!navResult?.data?.safety,
-                },
-                targetApp.jobTitle
-              );
-              needsReturnToSearchPage = true;
-              await waitForTabLoad(tab.id);
-              await randomDelay(1400, 2200);
-              await ensureContentScriptReady(tab.id);
-              continue;
-            }
-
-            if (navAction === "blocked") {
-              const stillMissing = requiredMissing.filter((f) => isMissingFieldValue(f));
-              if (stillMissing.length > 0) {
-                for (const field of stillMissing) {
-                  await recordUnknownFieldSituation(field, targetApp.jobTitle);
-                }
-              }
-              throw new Error(`Navigation blocked: ${navResult?.data?.error || "required fields unresolved"}`);
-            }
-
-            await recordUnknownAutomationSituation(
-              "form-navigation-unknown-action",
-              {
-                label: "Unknown form navigation action",
-                source: "CLICK_NEXT_OR_SUBMIT",
-                action: navAction || "none",
-                error: navResult?.data?.error || "",
-                step: step + 1,
-              },
-              targetApp.jobTitle
-            );
-
-            throw new Error(`Form navigation blocked on step ${step + 1} (action=${navAction || "none"})`);
-          }
-
-          if (!submitted) {
-            throw new Error("Application was not submitted within the allowed form steps");
-          }
-
-          // Mark that we need to return to search results for the next job
-          needsReturnToSearchPage = true;
-
-          // Post-submission pause — humans don't immediately move on
-          await randomDelay(2000, 5000);
-
-          if (targetApp?._id) {
-            await apiCall(`/api/jobs/automate?step=complete`, {
-              applicationId: targetApp._id,
-              success: true,
-              notes: "Auto-applied via WinPilot",
-            });
-          }
+          const appliedApp = outcome.application;
 
           pageAppliedCount++;
           totalAppliedCount++;
           reportProgress("job:applied", {
-            message: `Applied to ${targetApp.jobTitle} at ${targetApp.company}`,
-            jobTitle: targetApp.jobTitle,
-            company: targetApp.company,
+            message: `Applied to ${appliedApp.jobTitle} at ${appliedApp.company}`,
+            jobTitle: appliedApp.jobTitle,
+            company: appliedApp.company,
             appliedCount: totalAppliedCount,
             page: currentPage,
           });
         } catch (jobErr) {
-          pageFailedCount++;
-          totalFailedCount++;
-          if (targetApp?._id) {
+          if (jobCtx.application?._id) {
             await apiCall(`/api/jobs/automate?step=complete`, {
-              applicationId: targetApp._id,
+              applicationId: jobCtx.application._id,
               success: false,
               notes: `Auto-apply failed: ${jobErr.message}`,
             }).catch(() => {});
           }
+
+          // A stop request or a lost session ends the run, not just this job
+          if (jobErr?.aborted) return cleanup("Automation stopped by user");
+          if (jobErr?.fatal) return cleanup(`Automation stopped: ${jobErr.message}`);
+
+          pageFailedCount++;
+          totalFailedCount++;
           reportProgress("task:error", {
             message: `Skipped ${candidateJob.title}: ${jobErr.message}`,
             jobTitle: candidateJob.title,
           });
           // If the error might have caused navigation, flag for return
-          needsReturnToSearchPage = true;
+          jobCtx.navigatedAway = true;
         }
       }
 
@@ -1531,14 +2140,23 @@ async function startAutomation(searchId, options = {}) {
         console.log(`[WinPilot] Reached max jobs limit (${MAX_JOBS_PER_RUN}), stopping pagination`);
         break pageLoop;
       }
-    } // End of pageLoop
+        } // End of pageLoop
+      } catch (keywordErr) {
+        console.error(`[WinPilot] Keyword "${keyword}" failed: ${keywordErr.message}`);
+        emitLog("warn", "extension", `Search for "${keyword}" failed: ${keywordErr.message}`);
+        reportProgress("task:progress", {
+          message: `No results for "${keyword}" (${keywordErr.message}), trying next keyword...`,
+        });
+        continue keywordLoop;
+      }
+    } // End of keywordLoop
 
     reportProgress("task:complete", {
-      message: `Automation complete. Pages processed: ${currentPage}. Applied: ${totalAppliedCount}, Failed/Skipped: ${totalFailedCount} (${totalSkippedQualificationCount} skipped by LinkedIn qualification signal).`,
+      message: `Automation complete. Keywords searched: ${startData.searches.length}, pages processed: ${totalPagesProcessed}. Applied: ${totalAppliedCount}, Failed/Skipped: ${totalFailedCount} (${totalSkippedQualificationCount} skipped by LinkedIn qualification signal).`,
       appliedCount: totalAppliedCount,
       failedCount: totalFailedCount,
       skippedQualificationCount: totalSkippedQualificationCount,
-      pagesProcessed: currentPage,
+      pagesProcessed: totalPagesProcessed,
     });
     return cleanup();
   } catch (err) {
@@ -1558,6 +2176,438 @@ async function startAutomation(searchId, options = {}) {
 function stopAutomation() {
   automationAborted = true;
   reportProgress("task:progress", { message: "Stopping automation..." });
+}
+
+/**
+ * Apply to every job on a results page the user pasted a link to — a saved
+ * search, a collection, or one of LinkedIn's "jobs that match your profile"
+ * feeds. Reads the page's job list and runs the same per-job pipeline the
+ * saved-search automation uses, for that one page.
+ */
+async function startListApply(rawUrl, options = {}) {
+  if (automationRunning) {
+    reportProgress("task:error", { message: "Automation already running" });
+    return;
+  }
+
+  const { useAI, useJobMatching, useAIFormFilling, useAutoMessaging } = normalizeAutomationOptions(options);
+  const jobCtx = {
+    searchId: null,
+    listUrl: "",
+    useAI,
+    useJobMatching,
+    useAIFormFilling,
+    useAutoMessaging,
+    storedRules: null,
+    application: null,
+    navigatedAway: false,
+  };
+
+  automationRunning = true;
+  automationAborted = false;
+  chrome.storage.local.set({
+    automationRunning: true,
+    automationSearchId: null,
+    useAIFormFilling,
+  });
+
+  console.log(`[WinPilot] ====== APPLY TO PASTED JOB LIST ======`, rawUrl);
+  emitLog("info", "system", "====== APPLY TO PASTED JOB LIST ======", rawUrl);
+  reportProgress("task:start", { label: "Applying to the jobs on that page..." });
+
+  let appliedCount = 0;
+  let failedCount = 0;
+  let skippedQualificationCount = 0;
+
+  try {
+    // Step 1: server validates the link and hands back a clean results URL
+    const resolved = await apiCall(`/api/jobs/automate?step=list-apply`, { url: rawUrl });
+    if (!resolved?.listUrl) {
+      throw new Error("Could not read a jobs list from that link");
+    }
+    jobCtx.listUrl = resolved.listUrl;
+
+    // Step 2: open the results page
+    const tab = await ensureLinkedInTab();
+    if (automationAborted) return cleanup("Automation stopped by user");
+
+    reportProgress("task:progress", { message: "Opening the jobs page..." });
+    await navigateAndWait(tab.id, jobCtx.listUrl);
+    await randomDelay(4000, 7000);
+
+    if (!(await ensureContentScriptReady(tab.id))) {
+      throw new Error("Could not connect to the LinkedIn tab — reload LinkedIn and try again");
+    }
+    if (!(await ensureSessionHealthy(tab.id))) {
+      return cleanup("Automation stopped: LinkedIn session could not be restored");
+    }
+
+    // Step 3: read the job list, with one reload retry — LinkedIn periodically
+    // ships layout changes that leave the scraper reading 0 jobs off a full page
+    reportProgress("task:progress", { message: "Reading the jobs on the page..." });
+    await randomDelay(2000, 4000);
+
+    let scrapeResult = await sendToContentScript(tab.id, {
+      type: "EXECUTE_ACTION",
+      command: "SCRAPE_JOB_LISTINGS",
+      actionId: "scrape-pasted-list",
+    });
+    let scrapedJobs = scrapeResult?.data?.jobs || [];
+
+    if (scrapedJobs.length === 0 && !scrapeResult?.data?.noResultsConfirmed) {
+      emitLog("warn", "extension", "No jobs parsed on first attempt — reloading and retrying once...");
+      await navigateAndWait(tab.id, jobCtx.listUrl);
+      await randomDelay(3000, 5000);
+      scrapeResult = await sendToContentScript(tab.id, {
+        type: "EXECUTE_ACTION",
+        command: "SCRAPE_JOB_LISTINGS",
+        actionId: "scrape-pasted-list-retry",
+      });
+      scrapedJobs = scrapeResult?.data?.jobs || [];
+    }
+
+    const alreadyAppliedOnPage = scrapedJobs.filter((job) => job?.applied).length;
+
+    // Build the candidate list: everything on the page with a usable target
+    let candidates = [];
+    const seen = new Set();
+    for (const job of scrapedJobs) {
+      if (job?.applied) continue;
+      if (!job?.url && !job?.jobId) continue;
+      const url = job.url || `https://www.linkedin.com/jobs/view/${job.jobId}/`;
+      const key = job.jobId || url;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      candidates.push({ ...job, url });
+    }
+
+    // The page rendered nothing we could read — fall back to the job ids the
+    // link itself names, opening each job page directly.
+    if (candidates.length === 0 && resolved.jobIds?.length) {
+      emitLog(
+        "warn",
+        "extension",
+        `Could not read the list on the page — using the ${resolved.jobIds.length} job id(s) from the link instead`
+      );
+      candidates = resolved.jobIds.map((jobId, i) => ({
+        jobId,
+        url: (resolved.jobUrls || [])[i] || `https://www.linkedin.com/jobs/view/${jobId}/`,
+        title: `Job ${jobId}`,
+        company: "",
+      }));
+    }
+
+    if (candidates.length === 0) {
+      throw new Error(
+        alreadyAppliedOnPage > 0
+          ? `No new jobs on that page — all ${alreadyAppliedOnPage} are already applied to`
+          : "No jobs found on that page"
+      );
+    }
+
+    // Step 4: drop the ones already applied to in an earlier run
+    let alreadyAppliedBefore = 0;
+    try {
+      const filtered = await apiCall(`/api/jobs/automate?step=filter-applied`, {
+        jobUrls: candidates.map((c) => c.url),
+      });
+      const appliedUrls = new Set(filtered?.appliedUrls || []);
+      if (appliedUrls.size > 0) {
+        alreadyAppliedBefore = candidates.filter((c) => appliedUrls.has(c.url)).length;
+        candidates = candidates.filter((c) => !appliedUrls.has(c.url));
+      }
+    } catch (filterErr) {
+      emitLog("warn", "api", "Could not check previously applied jobs", filterErr?.message || "");
+    }
+
+    const maxJobs = Number.isFinite(resolved.maxJobs) ? resolved.maxJobs : 25;
+    const jobsToProcess = Math.min(candidates.length, Math.max(0, maxJobs));
+
+    if (jobsToProcess === 0) {
+      reportProgress("task:complete", {
+        message: `Nothing to do — every job on that page was already applied to.`,
+        appliedCount: 0,
+        failedCount: 0,
+      });
+      return cleanup();
+    }
+
+    const skippedNote = alreadyAppliedOnPage + alreadyAppliedBefore;
+    reportProgress("job:found", {
+      message: `Found ${scrapedJobs.length || candidates.length} job(s) on the page — applying to ${jobsToProcess}${skippedNote ? ` (${skippedNote} already applied)` : ""}.`,
+      count: jobsToProcess,
+    });
+
+    // Step 5: apply to each one with the shared pipeline
+    jobCtx.storedRules = await getStoredFormRules();
+
+    for (let i = 0; i < jobsToProcess; i++) {
+      const candidateJob = candidates[i];
+
+      if (automationAborted) return cleanup("Automation stopped by user");
+
+      if (!(await ensureSessionHealthy(tab.id))) {
+        return cleanup("Automation stopped: LinkedIn session could not be restored");
+      }
+
+      // ─── Anti-Detection: natural browsing break every 2-4 jobs ───
+      if (i > 0 && i % (2 + Math.floor(Math.random() * 3)) === 0) {
+        emitLog("info", "extension", `Taking a natural browsing break after ${i} jobs...`);
+        await simulateBrowsingBreak(tab.id);
+      }
+
+      // ─── Anti-Detection: variable inter-job delay ───
+      if (i > 0) {
+        const interJobDelay = 5000 + Math.random() * 15000;
+        await randomDelay(interJobDelay * 0.8, interJobDelay * 1.2);
+      }
+
+      try {
+        console.log(`[WinPilot] Processing job ${i + 1}/${jobsToProcess}: ${candidateJob.title}`);
+        emitLog("info", "extension", `Processing job ${i + 1}/${jobsToProcess}: ${candidateJob.title}`);
+
+        const outcome = await processJobCandidate(tab.id, candidateJob, jobCtx, {
+          actionKey: `list-${i}`,
+        });
+
+        if (outcome.status === "skipped") {
+          if (outcome.qualification) skippedQualificationCount++;
+          failedCount++;
+          reportProgress("task:progress", {
+            message: `Skipping ${candidateJob.title}: ${outcome.reason}.`,
+            jobTitle: candidateJob.title,
+          });
+          continue;
+        }
+
+        appliedCount++;
+        reportProgress("job:applied", {
+          message: `Applied to ${outcome.application.jobTitle} at ${outcome.application.company}`,
+          jobTitle: outcome.application.jobTitle,
+          company: outcome.application.company,
+          appliedCount,
+        });
+      } catch (jobErr) {
+        if (jobCtx.application?._id) {
+          await apiCall(`/api/jobs/automate?step=complete`, {
+            applicationId: jobCtx.application._id,
+            success: false,
+            notes: `Auto-apply failed: ${jobErr.message}`,
+          }).catch(() => {});
+        }
+
+        // A stop request or a lost session ends the run, not just this job
+        if (jobErr?.aborted) return cleanup("Automation stopped by user");
+        if (jobErr?.fatal) return cleanup(`Automation stopped: ${jobErr.message}`);
+
+        failedCount++;
+        reportProgress("task:error", {
+          message: `Skipped ${candidateJob.title}: ${jobErr.message}`,
+          jobTitle: candidateJob.title,
+        });
+        jobCtx.navigatedAway = true;
+      }
+    }
+
+    reportProgress("task:complete", {
+      message: `Page complete. Applied: ${appliedCount}, skipped/failed: ${failedCount} (${skippedQualificationCount} skipped by LinkedIn qualification signal).`,
+      appliedCount,
+      failedCount,
+      skippedQualificationCount,
+    });
+    return cleanup();
+  } catch (err) {
+    console.error("[WinPilot] Job list apply failed:", err.message);
+    emitLog("error", "system", `JOB LIST APPLY FAILED: ${err.message}`);
+    reportProgress("task:error", { message: `Could not apply: ${err.message}` });
+    reportProgress("task:complete", {
+      message: `Stopped after ${appliedCount} application(s): ${err.message}`,
+      appliedCount,
+      failedCount,
+    });
+  }
+
+  cleanup();
+}
+
+/**
+ * Apply to a single job the user pasted a link to.
+ *
+ * Same pipeline as the search run — check the job, tailor the resume, fill and
+ * submit Easy Apply — but for exactly one job, with no search behind it. The
+ * server resolves whatever LinkedIn link shape was pasted into a job page URL.
+ */
+async function startSingleApply(rawUrl, options = {}) {
+  if (automationRunning) {
+    reportProgress("task:error", { message: "Automation already running" });
+    return;
+  }
+
+  const { useAI, useJobMatching, useAIFormFilling, useAutoMessaging } = normalizeAutomationOptions(options);
+  const ctx = {
+    searchId: null,
+    useAI,
+    useJobMatching,
+    useAIFormFilling,
+    useAutoMessaging,
+    storedRules: null,
+    application: null,
+    navigatedAway: false,
+  };
+
+  automationRunning = true;
+  automationAborted = false;
+  chrome.storage.local.set({
+    automationRunning: true,
+    automationSearchId: null,
+    useAIFormFilling,
+  });
+
+  console.log(`[WinPilot] ====== SINGLE JOB APPLY ======`, rawUrl);
+  emitLog("info", "system", "====== SINGLE JOB APPLY ======", rawUrl);
+  reportProgress("task:start", { label: "Applying to pasted job link..." });
+
+  try {
+    // Step 1: server turns the pasted link into a canonical job URL and tells
+    // us whether this job was already applied to
+    const resolved = await apiCall(`/api/jobs/automate?step=single-apply`, { url: rawUrl });
+    const jobUrl = resolved?.jobUrl;
+    if (!jobUrl) {
+      throw new Error("Could not read a job id from that link");
+    }
+
+    if (resolved.alreadyApplied) {
+      const label = resolved.existing?.jobTitle
+        ? `${resolved.existing.jobTitle} at ${resolved.existing.company}`
+        : "this job";
+      reportProgress("task:complete", {
+        message: `Already applied to ${label} — skipping.`,
+        appliedCount: 0,
+        failedCount: 0,
+      });
+      return cleanup();
+    }
+
+    // Step 2: open the job page
+    const tab = await ensureLinkedInTab();
+    if (automationAborted) return cleanup("Automation stopped by user");
+
+    reportProgress("task:progress", { message: `Opening job ${resolved.jobId}...` });
+    await navigateAndWait(tab.id, jobUrl);
+    await randomDelay(2500, 4500);
+
+    if (!(await ensureContentScriptReady(tab.id))) {
+      throw new Error("Could not connect to the LinkedIn tab — reload LinkedIn and try again");
+    }
+    if (!(await ensureSessionHealthy(tab.id))) {
+      return cleanup("Automation stopped: LinkedIn session could not be restored");
+    }
+
+    // Step 3: check the job before applying
+    const qualResult = await sendToContentScript(tab.id, {
+      type: "EXECUTE_ACTION",
+      command: "CHECK_JOB_QUALIFICATION",
+      actionId: `qual-single-${resolved.jobId}`,
+      maxAttempts: 12,
+      delayMs: 350,
+    });
+    const qualification = qualResult?.data?.qualification || { status: "unknown", matched: false, text: "" };
+    const qualificationLabel =
+      qualification.text || String(qualification.status || "unknown").replace(/_/g, " ");
+    emitLog("info", "extension", `Qualification check: status="${qualification.status}", matched=${qualification.matched}`, qualification.text || "");
+
+    const shouldSkipJob =
+      useJobMatching &&
+      (qualification.status === "missing_required" ||
+        qualification.status === "no_match" ||
+        (qualification.matched === false && qualification.status !== "unknown"));
+
+    if (shouldSkipJob) {
+      reportProgress("task:complete", {
+        message: `Did not apply: LinkedIn qualification signal is "${qualificationLabel}". Turn Job Matching off to apply anyway.`,
+        appliedCount: 0,
+        failedCount: 1,
+      });
+      return cleanup();
+    }
+
+    // Step 4: read the posting
+    await randomDelay(2000, 4000);
+    let detail = null;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      if (automationAborted) return cleanup("Automation stopped by user");
+      const detailResult = await sendToContentScript(tab.id, {
+        type: "EXECUTE_ACTION",
+        command: "SCRAPE_JOB_DETAIL",
+        actionId: `detail-single-${resolved.jobId}-${attempt}`,
+      });
+      detail = detailResult?.data?.detail;
+      if (detail?.description) break;
+      await randomDelay(1500, 2500);
+    }
+
+    if (!detail?.description) {
+      throw new Error("Could not read the job description from that page");
+    }
+
+    const jobWithDetail = {
+      url: jobUrl,
+      jobId: resolved.jobId,
+      title: detail.title || "Job",
+      company: detail.company || "Unknown",
+      location: detail.location || "",
+      description: detail.description,
+    };
+
+    reportProgress("job:found", {
+      message: `Found ${jobWithDetail.title} at ${jobWithDetail.company}`,
+      count: 1,
+    });
+
+    // Step 5: apply — same routine the search run uses
+    ctx.storedRules = await getStoredFormRules();
+    const applied = await applyToJobOnTab(tab.id, jobWithDetail, ctx);
+
+    reportProgress("job:applied", {
+      message: `Applied to ${applied.jobTitle} at ${applied.company}`,
+      jobTitle: applied.jobTitle,
+      company: applied.company,
+      appliedCount: 1,
+    });
+    reportProgress("task:complete", {
+      message: `Applied to ${applied.jobTitle} at ${applied.company}.`,
+      appliedCount: 1,
+      failedCount: 0,
+    });
+    return cleanup();
+  } catch (err) {
+    if (ctx.application?._id) {
+      await apiCall(`/api/jobs/automate?step=complete`, {
+        applicationId: ctx.application._id,
+        success: false,
+        notes: `Auto-apply failed: ${err.message}`,
+      }).catch(() => {});
+    }
+
+    if (err?.aborted) return cleanup("Automation stopped by user");
+
+    // A missing Easy Apply button on a single pasted job almost always means the
+    // posting sends applicants to the company's own site, which can't be automated.
+    const reason = /easy apply button not found/i.test(err.message || "")
+      ? `${err.message} — this job likely applies on the company's own website, which WinPilot can't automate.`
+      : err.message;
+
+    console.error("[WinPilot] Single job apply failed:", err.message);
+    emitLog("error", "system", `SINGLE JOB APPLY FAILED: ${err.message}`);
+    reportProgress("task:error", { message: `Could not apply: ${reason}` });
+    reportProgress("task:complete", {
+      message: `Did not apply to the pasted job: ${reason}`,
+      appliedCount: 0,
+      failedCount: 1,
+    });
+  }
+
+  cleanup();
 }
 
 // ─── Lead Generation Automation State ──────────────────
@@ -1885,7 +2935,8 @@ async function startLeadGenAutomation(campaignId, options = {}) {
         );
         if (limitCheckRes.ok) {
           const { commentsToday, commentLimit } = await limitCheckRes.json();
-          if (commentsToday >= commentLimit) {
+          // commentLimit is null when server-side daily caps are disabled
+          if (commentLimit != null && commentsToday >= commentLimit) {
             emitLeadLog("warn", "system", `Daily comment limit (${commentLimit}) reached. Stopping.`);
             reportLeadProgress("leadgen:progress", {
               message: `Daily comment limit (${commentLimit}) reached. Stopping for today.`,
@@ -2226,6 +3277,16 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       sendResponse({ success: true });
       break;
 
+    case "APPLY_JOB_URL":
+      startSingleApply(message.url, message.options || {});
+      sendResponse({ success: true });
+      break;
+
+    case "APPLY_JOB_LIST":
+      startListApply(message.url, message.options || {});
+      sendResponse({ success: true });
+      break;
+
     case "STOP_AUTOMATION":
       stopAutomation();
       sendResponse({ success: true });
@@ -2267,8 +3328,10 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
 chrome.storage.local.get(["authToken", "apiUrl", "wsUrl"], (result) => {
   if (result.authToken) authToken = result.authToken;
-  if (result.apiUrl) apiUrl = result.apiUrl;
-  if (result.wsUrl) wsUrl = result.wsUrl;
+  apiUrl = resolveStoredUrl(result.apiUrl, DEFAULT_API_URL);
+  wsUrl = resolveStoredUrl(result.wsUrl, DEFAULT_WS_URL);
+  // Persist the migration so a stale localhost URL is not re-read next wake-up.
+  chrome.storage.local.set({ apiUrl, wsUrl });
   console.log("[WinPilot] Initialized — apiUrl:", apiUrl, "authToken:", authToken ? `${authToken.substring(0, 8)}...` : "NOT SET", "wsUrl:", wsUrl);
   connect();
 });

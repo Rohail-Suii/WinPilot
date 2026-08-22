@@ -226,6 +226,48 @@ export async function POST(req: Request) {
   }
 }
 
+export async function PUT(req: Request) {
+  try {
+    const actor = await getActorId();
+    if (!actor) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+    const { id: userId } = actor;
+
+    const rateLimit = await checkApiRateLimit(userId);
+    if (!rateLimit.success) {
+      return NextResponse.json({ error: "Too many requests" }, { status: 429 });
+    }
+
+    const { searchParams } = new URL(req.url);
+    const id = searchParams.get("id");
+    if (!id) {
+      return NextResponse.json({ error: "Missing id" }, { status: 400 });
+    }
+
+    const body = await req.json();
+    const parsed = jobSearchSchema.safeParse(body);
+    if (!parsed.success) {
+      return NextResponse.json({ error: parsed.error.issues[0].message }, { status: 400 });
+    }
+
+    await connectDB();
+    const search = await JobSearch.findOneAndUpdate(
+      { _id: id, userId: userId },
+      { $set: parsed.data },
+      { new: true }
+    ).lean();
+    if (!search) {
+      return NextResponse.json({ error: "Not found" }, { status: 404 });
+    }
+
+    return NextResponse.json({ search });
+  } catch (error) {
+    console.error("[Jobs] Error:", error);
+    return NextResponse.json({ error: "Internal server error" }, { status: 500 });
+  }
+}
+
 export async function DELETE(req: Request) {
   try {
     const actor = await getActorId();

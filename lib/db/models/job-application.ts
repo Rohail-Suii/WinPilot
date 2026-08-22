@@ -39,8 +39,32 @@ export interface IJobApplication extends Document {
     highlights?: string[];
     matchExplanation?: string;
     keywordsUsed?: string[];
+    detectedRole?: string;
+    source?: "resume" | "data";
+    experience?: {
+      company?: string;
+      title?: string;
+      description?: string;
+      highlights?: string[];
+    }[];
+    projects?: {
+      name?: string;
+      description?: string;
+      tech?: string[];
+    }[];
   };
   matchBreakdown?: IMatchBreakdown;
+  /** Follow-up message sent on LinkedIn after applying (Auto Messaging). */
+  outreach?: {
+    attempted: boolean;
+    sent: boolean;
+    channel?: "hiring_team" | "company_page" | "connection";
+    recipient?: string;
+    message?: string;
+    /** Why nothing was sent — e.g. the company page has messaging turned off. */
+    reason?: string;
+    at?: Date;
+  };
   formAnswers: {
     question: string;
     answer: string;
@@ -83,6 +107,23 @@ const JobApplicationSchema = new Schema<IJobApplication>(
       highlights: [String],
       matchExplanation: String,
       keywordsUsed: [String],
+      detectedRole: String,
+      source: { type: String, enum: ["resume", "data"] },
+      experience: [
+        {
+          company: String,
+          title: String,
+          description: String,
+          highlights: [String],
+        },
+      ],
+      projects: [
+        {
+          name: String,
+          description: String,
+          tech: [String],
+        },
+      ],
     },
     matchBreakdown: {
       skillsMatch: Number,
@@ -93,6 +134,15 @@ const JobApplicationSchema = new Schema<IJobApplication>(
       strengths: [String],
       concerns: [String],
       recommendation: String,
+    },
+    outreach: {
+      attempted: { type: Boolean, default: false },
+      sent: { type: Boolean, default: false },
+      channel: { type: String, enum: ["hiring_team", "company_page", "connection"] },
+      recipient: String,
+      message: String,
+      reason: String,
+      at: Date,
     },
     formAnswers: [
       {

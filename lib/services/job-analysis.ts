@@ -162,6 +162,19 @@ export async function prepareJobApplication(
       highlights: normalizeStringArray(tailored.tailoredHighlights),
       matchExplanation: typeof tailored.matchExplanation === "string" ? tailored.matchExplanation : "",
       keywordsUsed: normalizeStringArray(tailored.keywordsUsed),
+      detectedRole: typeof tailored.detectedRole === "string" ? tailored.detectedRole : "",
+      source: tailored.source,
+      experience: (tailored.tailoredExperience || []).map((e) => ({
+        company: e.company,
+        title: e.title,
+        description: e.description,
+        highlights: normalizeStringArray(e.highlights),
+      })),
+      projects: (tailored.tailoredProjects || []).map((p) => ({
+        name: p.name,
+        description: p.description,
+        tech: normalizeStringArray(p.tech),
+      })),
     };
     application.matchScore = tailored.matchScore;
     application.status = "applying";

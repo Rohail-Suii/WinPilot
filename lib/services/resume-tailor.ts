@@ -1,20 +1,45 @@
 /**
  * Resume Tailor Service
  * Uses AI to tailor a resume for a specific job description.
+ * Source modes:
+ *  - resume: optimize uploaded/default resume document
+ *  - data: rebuild from full structured career data (experience/projects/etc.)
  */
 
 import { getUserAIProvider } from "@/lib/ai/key-manager";
-import { buildResumeTailoringPrompt } from "@/lib/ai/prompts";
+import {
+  buildResumeTailoringPrompt,
+  type ResumeTailoringSource,
+} from "@/lib/ai/prompts/resume-tailoring";
 import { getDefaultResume, resumeToText } from "./resume-service";
 import { sanitizeForAI } from "@/lib/utils";
+import connectDB from "@/lib/db/connection";
+import User from "@/lib/db/models/user";
+
+export interface TailoredExperienceItem {
+  company: string;
+  title: string;
+  description: string;
+  highlights: string[];
+}
+
+export interface TailoredProjectItem {
+  name: string;
+  description: string;
+  tech: string[];
+}
 
 export interface TailoredResumeResult {
   tailoredSummary: string;
   tailoredSkills: string[];
   tailoredHighlights: string[];
+  tailoredExperience: TailoredExperienceItem[];
+  tailoredProjects: TailoredProjectItem[];
+  detectedRole: string;
   matchScore: number;
   matchExplanation: string;
   keywordsUsed: string[];
+  source: ResumeTailoringSource;
 }
 
 function cleanResumeText(input: string): string {
@@ -61,25 +86,99 @@ function toStringArray(value: unknown): string[] {
   return [];
 }
 
-function normalizeTailoredResumeResult(raw: unknown): TailoredResumeResult {
-  const source = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
+function normalizeExperience(raw: unknown): TailoredExperienceItem[] {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .map((item) => {
+      if (!item || typeof item !== "object") return null;
+      const exp = item as Record<string, unknown>;
+      const company = typeof exp.company === "string" ? cleanResumeText(exp.company) : "";
+      const title = typeof exp.title === "string" ? cleanResumeText(exp.title) : "";
+      if (!company && !title) return null;
+      return {
+        company,
+        title,
+        description:
+          typeof exp.description === "string" ? cleanResumeText(exp.description) : "",
+        highlights: toStringArray(exp.highlights),
+      };
+    })
+    .filter((x): x is TailoredExperienceItem => !!x);
+}
 
-  const matchScoreRaw = source.matchScore;
-  const numericScore = typeof matchScoreRaw === "number" ? matchScoreRaw : Number(matchScoreRaw);
+function normalizeProjects(raw: unknown): TailoredProjectItem[] {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .map((item) => {
+      if (!item || typeof item !== "object") return null;
+      const p = item as Record<string, unknown>;
+      const name = typeof p.name === "string" ? cleanResumeText(p.name) : "";
+      if (!name) return null;
+      return {
+        name,
+        description:
+          typeof p.description === "string" ? cleanResumeText(p.description) : "",
+        tech: toStringArray(p.tech),
+      };
+    })
+    .filter((x): x is TailoredProjectItem => !!x);
+}
+
+function normalizeTailoredResumeResult(
+  raw: unknown,
+  source: ResumeTailoringSource
+): TailoredResumeResult {
+  const sourceObj = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
+
+  const matchScoreRaw = sourceObj.matchScore;
+  const numericScore =
+    typeof matchScoreRaw === "number" ? matchScoreRaw : Number(matchScoreRaw);
   const normalizedScore = Number.isFinite(numericScore)
     ? Math.max(0, Math.min(100, Math.round(numericScore)))
     : 0;
 
   return {
     tailoredSummary:
-      typeof source.tailoredSummary === "string" ? cleanResumeText(source.tailoredSummary) : "",
-    tailoredSkills: toStringArray(source.tailoredSkills),
-    tailoredHighlights: toStringArray(source.tailoredHighlights),
+      typeof sourceObj.tailoredSummary === "string"
+        ? cleanResumeText(sourceObj.tailoredSummary)
+        : "",
+    tailoredSkills: toStringArray(sourceObj.tailoredSkills),
+    tailoredHighlights: toStringArray(sourceObj.tailoredHighlights),
+    tailoredExperience: normalizeExperience(sourceObj.tailoredExperience),
+    tailoredProjects: normalizeProjects(sourceObj.tailoredProjects),
+    detectedRole:
+      typeof sourceObj.detectedRole === "string"
+        ? cleanResumeText(sourceObj.detectedRole)
+        : "",
     matchScore: normalizedScore,
     matchExplanation:
-      typeof source.matchExplanation === "string" ? cleanResumeText(source.matchExplanation) : "",
-    keywordsUsed: toStringArray(source.keywordsUsed),
+      typeof sourceObj.matchExplanation === "string"
+        ? cleanResumeText(sourceObj.matchExplanation)
+        : "",
+    keywordsUsed: toStringArray(sourceObj.keywordsUsed),
+    source,
   };
+}
+
+export async function getResumeTailoringSource(
+  userId: string
+): Promise<ResumeTailoringSource> {
+  try {
+    await connectDB();
+    const user = await User.findById(userId).select("settings").lean();
+    if (user) {
+      const source = (user as { settings?: { resumeTailoringSource?: string } })
+        .settings?.resumeTailoringSource;
+      return source === "data" ? "data" : "resume";
+    }
+
+    // Guests have no User document; their preference lives on the session doc.
+    const { default: GuestSession } = await import("@/lib/db/models/guest-session");
+    const guest = await GuestSession.findById(userId).select("resumeTailoringSource").lean();
+    return guest?.resumeTailoringSource === "data" ? "data" : "resume";
+  } catch {
+    return "resume";
+  }
 }
 
 /**
@@ -96,33 +195,149 @@ export async function tailorResumeForJob(
   }
 
   const resume = await getDefaultResume(userId);
-  if (!resume) {
-    throw new Error("No resume found. Upload a resume in Settings first.");
-  }
-
+  const source = await getResumeTailoringSource(userId);
   const sanitizedDescription = sanitizeForAI(jobDescription);
 
-  const resumeData = {
-    summary: resume.summary || "",
-    experience: resume.experience.map((e) => ({
-      company: e.company,
-      title: e.title,
-      description: e.description,
-      highlights: e.highlights,
-    })),
-    skills: resume.skills,
-    education: resume.education.map((e) => ({
-      school: e.school,
-      degree: e.degree,
-      field: e.field,
-    })),
-  };
+  // Data mode: dedicated Career Profile first. Resume upload is optional in this mode.
+  let baseData: Parameters<typeof buildResumeTailoringPrompt>[0];
+  let customPrompt: string | undefined;
 
-  const customPrompt = (resume as unknown as { customTailoringPrompt?: string }).customTailoringPrompt;
-  const messages = buildResumeTailoringPrompt(resumeData, sanitizedDescription, customPrompt);
-  const result = await ai.generateJSON<unknown>(messages);
+  if (source === "data") {
+    const { getCareerProfile, careerProfileHasContent } = await import(
+      "./career-profile"
+    );
+    const career = await getCareerProfile(userId);
 
-  return normalizeTailoredResumeResult(result);
+    if (careerProfileHasContent(career)) {
+      baseData = {
+        summary: career!.summary || "",
+        experience: (career!.experience || []).map((e) => ({
+          company: e.company,
+          title: e.title,
+          startDate: e.startDate,
+          endDate: e.endDate || undefined,
+          current: e.current,
+          description: e.description,
+          highlights: e.highlights || [],
+        })),
+        skills: career!.skills || [],
+        education: (career!.education || []).map((edu) => ({
+          school: edu.school,
+          degree: edu.degree,
+          field: edu.field,
+        })),
+        certifications: (career!.certifications || []).map((c) => ({
+          name: c.name,
+          issuer: c.issuer,
+          date: c.date || undefined,
+        })),
+        projects: (career!.projects || []).map((p) => ({
+          name: p.name,
+          description: p.description,
+          tech: p.tech || [],
+          url: p.url || undefined,
+        })),
+      };
+    } else if (resume) {
+      // Fallback: structured fields from default resume if career bank empty
+      baseData = {
+        summary: resume.summary || "",
+        experience: (resume.experience || []).map((e) => ({
+          company: e.company,
+          title: e.title,
+          startDate: e.startDate,
+          endDate: e.endDate || undefined,
+          current: e.current,
+          description: e.description,
+          highlights: e.highlights || [],
+        })),
+        skills: resume.skills || [],
+        education: (resume.education || []).map((edu) => ({
+          school: edu.school,
+          degree: edu.degree,
+          field: edu.field,
+        })),
+        certifications: (resume.certifications || []).map((c) => ({
+          name: c.name,
+          issuer: c.issuer,
+          date: c.date || undefined,
+        })),
+        projects: (resume.projects || []).map((p) => ({
+          name: p.name,
+          description: p.description,
+          tech: p.tech || [],
+          url: p.url || undefined,
+        })),
+        rawText: resume.rawText || undefined,
+      };
+    } else {
+      throw new Error(
+        "No career data found. Go to Jobs → Settings → Resume → Career Data, add experience/projects/skills, then Save Career Data."
+      );
+    }
+
+    customPrompt = (resume as unknown as { customTailoringPrompt?: string } | null)
+      ?.customTailoringPrompt;
+  } else {
+    if (!resume) {
+      throw new Error("No resume found. Upload a resume in Settings first.");
+    }
+
+    baseData = {
+      summary: resume.summary || "",
+      experience: (resume.experience || []).map((e) => ({
+        company: e.company,
+        title: e.title,
+        startDate: e.startDate,
+        endDate: e.endDate || undefined,
+        current: e.current,
+        description: e.description,
+        highlights: e.highlights || [],
+      })),
+      skills: resume.skills || [],
+      education: (resume.education || []).map((edu) => ({
+        school: edu.school,
+        degree: edu.degree,
+        field: edu.field,
+      })),
+      certifications: (resume.certifications || []).map((c) => ({
+        name: c.name,
+        issuer: c.issuer,
+        date: c.date || undefined,
+      })),
+      projects: (resume.projects || []).map((p) => ({
+        name: p.name,
+        description: p.description,
+        tech: p.tech || [],
+        url: p.url || undefined,
+      })),
+      rawText: resume.rawText || resumeToText(resume),
+    };
+    customPrompt = (resume as unknown as { customTailoringPrompt?: string })
+      .customTailoringPrompt;
+  }
+
+  if (
+    source === "data" &&
+    !baseData.experience.length &&
+    !baseData.projects?.length &&
+    !baseData.skills.length &&
+    !baseData.summary
+  ) {
+    throw new Error(
+      "Career data is empty. Add experience, projects, or skills under Jobs → Settings → Resume → Career Data."
+    );
+  }
+
+  const messages = buildResumeTailoringPrompt(
+    baseData,
+    sanitizedDescription,
+    customPrompt,
+    source
+  );
+  const result = await ai.generateJSON<unknown>(messages, { maxTokens: 4096 });
+
+  return normalizeTailoredResumeResult(result, source);
 }
 
 /**

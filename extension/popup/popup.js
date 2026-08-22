@@ -1,6 +1,6 @@
 // WinPilot Popup Script
 
-const DEFAULT_DASHBOARD_BASE_URL = "https://winpilot.tech";
+const DEFAULT_DASHBOARD_BASE_URL = "https://winpilot.onrender.com";
 
 const app = document.getElementById("app");
 
@@ -24,17 +24,11 @@ function normalizeBaseUrl(url) {
 function getDashboardBaseUrl() {
   return new Promise((resolve) => {
     chrome.storage.local.get(["dashboardUrl", "apiUrl"], (result) => {
-      if (result.dashboardUrl) {
-        resolve(normalizeBaseUrl(result.dashboardUrl));
-        return;
-      }
+      const stale = /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i;
+      const stored = normalizeBaseUrl(result.dashboardUrl || result.apiUrl);
 
-      if (result.apiUrl) {
-        resolve(normalizeBaseUrl(result.apiUrl));
-        return;
-      }
-
-      resolve(DEFAULT_DASHBOARD_BASE_URL);
+      // Ignore localhost values left over from a dev build.
+      resolve(stored && !stale.test(stored) ? stored : DEFAULT_DASHBOARD_BASE_URL);
     });
   });
 }

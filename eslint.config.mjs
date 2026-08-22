@@ -16,6 +16,14 @@ const eslintConfig = defineConfig([
     "extension/**",
   ]),
   {
+    // scripts/ holds standalone CommonJS Node utilities (icon/logo generation)
+    // that are run directly with `node`, not bundled by Next.js.
+    files: ["scripts/**/*.js"],
+    rules: {
+      "@typescript-eslint/no-require-imports": "off",
+    },
+  },
+  {
     rules: {
       // Calling setState at the top of an effect (e.g. setLoading(true)) or syncing
       // state from server data / localStorage are established React patterns.

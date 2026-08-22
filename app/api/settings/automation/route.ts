@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import connectDB from "@/lib/db/connection";
 import User from "@/lib/db/models/user";
+import GuestSession from "@/lib/db/models/guest-session";
+import { DAILY_LIMITS_ENFORCED } from "@/lib/anti-detection/rate-limiter";
 import { z } from "zod";
 import { checkApiRateLimit } from "@/lib/utils/rate-limit";
 import { getActorId } from "@/lib/utils/get-actor-id";
@@ -18,6 +20,7 @@ const automationSettingsSchema = z.object({
     extension: z.boolean(),
   }).optional(),
   useAIFormFilling: z.boolean().optional(),
+  resumeTailoringSource: z.enum(["resume", "data"]).optional(),
 });
 
 export async function GET() {
@@ -28,14 +31,20 @@ export async function GET() {
     }
     const { id: userId, isGuest } = actor;
 
-    // Return default settings for guests — no User document exists
+    // Guests have no User document — defaults, except the AI resume source
+    // which is persisted on their session so the choice survives a reload.
     if (isGuest) {
+      await connectDB();
+      const guest = await GuestSession.findById(userId).lean();
       return NextResponse.json({
         settings: {
           timezone: "UTC",
           language: "en",
           notificationPrefs: { email: true, inApp: true, extension: true },
           dailyLimits: { applies: 15, posts: 2, scrapes: 50 },
+          resumeTailoringSource:
+            guest?.resumeTailoringSource === "data" ? "data" : "resume",
+          limitsEnforced: DAILY_LIMITS_ENFORCED,
         },
       });
     }
@@ -51,7 +60,11 @@ export async function GET() {
       return NextResponse.json({ error: "User not found" }, { status: 404 });
     }
 
-    return NextResponse.json({ settings: user.settings });
+    // limitsEnforced tells the UI whether the daily caps below actually block
+    // automation, or are just stored preferences (they are off by default).
+    return NextResponse.json({
+      settings: { ...user.settings, limitsEnforced: DAILY_LIMITS_ENFORCED },
+    });
   } catch (error) {
     console.error("[Settings/Automation] Error:", error);
     return NextResponse.json({ error: "Internal server error" }, { status: 500 });
@@ -66,14 +79,6 @@ export async function PATCH(req: Request) {
     }
     const { id: userId, isGuest } = actor;
 
-    // Guests cannot save automation settings
-    if (isGuest) {
-      return NextResponse.json(
-        { error: "Create a free account to save automation settings", requiresAuth: true },
-        { status: 403 }
-      );
-    }
-
     const rateLimit = await checkApiRateLimit(userId);
     if (!rateLimit.success) {
       return NextResponse.json({ error: "Too many requests" }, { status: 429 });
@@ -83,6 +88,37 @@ export async function PATCH(req: Request) {
     const parsed = automationSettingsSchema.safeParse(body);
     if (!parsed.success) {
       return NextResponse.json({ error: parsed.error.issues[0].message }, { status: 400 });
+    }
+
+    // Guests get one persisted preference — the AI resume source — because the
+    // tailoring pipeline reads it; limits/notifications still need an account.
+    if (isGuest) {
+      if (parsed.data.resumeTailoringSource === undefined) {
+        return NextResponse.json(
+          { error: "Create a free account to save automation settings", requiresAuth: true },
+          { status: 403 }
+        );
+      }
+
+      await connectDB();
+      await GuestSession.findByIdAndUpdate(userId, {
+        $set: { resumeTailoringSource: parsed.data.resumeTailoringSource },
+      });
+
+      const skippedOtherSettings =
+        parsed.data.dailyLimits !== undefined ||
+        parsed.data.notificationPrefs !== undefined ||
+        parsed.data.timezone !== undefined ||
+        parsed.data.useAIFormFilling !== undefined;
+
+      return NextResponse.json({
+        success: true,
+        guest: true,
+        savedFields: ["resumeTailoringSource"],
+        ...(skippedOtherSettings
+          ? { notice: "Create a free account to save daily limits and notifications." }
+          : {}),
+      });
     }
 
     await connectDB();
@@ -98,6 +134,9 @@ export async function PATCH(req: Request) {
     }
     if (parsed.data.useAIFormFilling !== undefined) {
       update["settings.useAIFormFilling"] = parsed.data.useAIFormFilling;
+    }
+    if (parsed.data.resumeTailoringSource !== undefined) {
+      update["settings.resumeTailoringSource"] = parsed.data.resumeTailoringSource;
     }
 
     await User.findByIdAndUpdate(userId, { $set: update });

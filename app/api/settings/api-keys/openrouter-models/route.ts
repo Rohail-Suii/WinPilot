@@ -10,6 +10,15 @@ interface OpenRouterModel {
   contextLength?: number;
 }
 
+/** Shape of a model entry as returned by the OpenRouter API (all fields untrusted). */
+interface RawOpenRouterModel {
+  id?: string;
+  name?: string;
+  description?: string;
+  context_length?: number;
+  pricing?: Record<string, unknown>;
+}
+
 const DEFAULT_OPENROUTER_MODEL = "meta-llama/llama-3.3-70b-instruct:free";
 
 function isFreePricing(value: unknown): boolean {
@@ -50,7 +59,7 @@ export async function GET() {
 
     const data = await response.json();
     const models: OpenRouterModel[] = (data?.data ?? [])
-      .filter((m: any) => {
+      .filter((m: RawOpenRouterModel) => {
         const id = typeof m?.id === "string" ? m.id : "";
         const pricing = m?.pricing ?? {};
         const freeBySuffix = id.includes(":free");
@@ -61,9 +70,9 @@ export async function GET() {
 
         return freeBySuffix || freeByPricing;
       })
-      .map((m: any) => ({
-        id: m.id,
-        name: m.name || m.id,
+      .map((m: RawOpenRouterModel) => ({
+        id: m.id ?? "",
+        name: m.name || m.id || "",
         description: m.description,
         contextLength: m.context_length,
       }))

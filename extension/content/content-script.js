@@ -554,7 +554,7 @@
           try {
             await waitForElement(
               ".jobs-search-results__list-item, .job-card-container, .scaffold-layout__list-item, " +
-              "[data-occludable-job-id], .job-card-list",
+              "[data-occludable-job-id], .job-card-list, a[href*='/jobs/view/']",
               12000
             );
             console.log("[WinPilot CS] SCRAPE_JOB_LISTINGS: Found listing container");
@@ -563,12 +563,16 @@
           }
           await new Promise((r) => setTimeout(r, 500));
           const jobs = scrapeJobListings();
-          console.log(`[WinPilot CS] SCRAPE_JOB_LISTINGS: Scraped ${jobs.length} jobs`);
+          const noResultsConfirmed = jobs.length === 0 && detectNoResultsState();
+          console.log(
+            `[WinPilot CS] SCRAPE_JOB_LISTINGS: Scraped ${jobs.length} jobs` +
+            (noResultsConfirmed ? " (no-results page confirmed)" : "")
+          );
           if (jobs.length > 0) console.log("[WinPilot CS] First job:", JSON.stringify(jobs[0]));
           return {
             status: "success",
             actionId: action.actionId,
-            data: { jobs },
+            data: { jobs, noResultsConfirmed },
           };
         }
 
@@ -703,6 +707,62 @@
             status: "success",
             actionId: action.actionId,
             data: uploadResult,
+          };
+        }
+
+        // --- Phase 4: Post-Application Outreach ---
+        case "GET_OUTREACH_TARGETS": {
+          return {
+            status: "success",
+            actionId: action.actionId,
+            data: {
+              company: getCompanyFromJob(),
+              hiringTeam: getHiringTeamTargets(),
+            },
+          };
+        }
+
+        case "OPEN_MESSAGE_COMPOSER": {
+          const openResult = await openMessageComposer(action.selector);
+          return {
+            status: "success",
+            actionId: action.actionId,
+            data: openResult,
+          };
+        }
+
+        case "SELECT_MESSAGE_TOPIC": {
+          const topicResult = await selectMessageTopic(action.preferred);
+          return {
+            status: "success",
+            actionId: action.actionId,
+            data: topicResult,
+          };
+        }
+
+        case "SEND_MESSAGE": {
+          const sendResult = await sendComposedMessage(action.text || "");
+          return {
+            status: "success",
+            actionId: action.actionId,
+            data: sendResult,
+          };
+        }
+
+        case "CLOSE_MESSAGE_OVERLAY": {
+          const closeResult = await closeMessageOverlay();
+          return {
+            status: "success",
+            actionId: action.actionId,
+            data: closeResult,
+          };
+        }
+
+        case "SCRAPE_COMPANY_PEOPLE": {
+          return {
+            status: "success",
+            actionId: action.actionId,
+            data: { people: scrapeCompanyPeople() },
           };
         }
 
@@ -861,7 +921,7 @@
       "[data-field='skill_card_skill_topic'] .t-bold span[aria-hidden='true'], " +
       "li.pvs-list__paged-list-item .display-flex .t-bold span[aria-hidden='true']"
     );
-    const skillsSet = new Set<string>();
+    const skillsSet = new Set();
     skillEls.forEach((el) => {
       const text = el.textContent?.trim();
       if (text && text.length < 60) skillsSet.add(text);
@@ -869,7 +929,7 @@
     const skills = [...skillsSet].slice(0, 30);
 
     // Experience
-    const experience: { title: string; company: string; duration: string; description: string }[] = [];
+    const experience = [];
     const expSection = document.querySelector(
       "#experience ~ .pvs-list__outer-container, section[id='experience-section']"
     );
@@ -879,7 +939,7 @@
         const spans = item.querySelectorAll("span[aria-hidden='true']");
         const texts = Array.from(spans)
           .map((s) => s.textContent?.trim())
-          .filter(Boolean) as string[];
+          .filter(Boolean);
         if (texts.length >= 2) {
           experience.push({
             title: texts[0] || "",
@@ -892,7 +952,7 @@
     }
 
     // Education
-    const education: { school: string; degree: string; field: string }[] = [];
+    const education = [];
     const eduSection = document.querySelector(
       "#education ~ .pvs-list__outer-container, section[id='education-section']"
     );
@@ -902,7 +962,7 @@
         const spans = item.querySelectorAll("span[aria-hidden='true']");
         const texts = Array.from(spans)
           .map((s) => s.textContent?.trim())
-          .filter(Boolean) as string[];
+          .filter(Boolean);
         if (texts.length >= 1) {
           education.push({
             school: texts[0] || "",
@@ -914,7 +974,7 @@
     }
 
     // Certifications / Licenses
-    const certifications: { name: string; issuingOrg: string }[] = [];
+    const certifications = [];
     const certSection = document.querySelector(
       "#licenses_and_certifications ~ .pvs-list__outer-container, " +
       "#certifications ~ .pvs-list__outer-container"
@@ -925,7 +985,7 @@
         const spans = item.querySelectorAll("span[aria-hidden='true']");
         const texts = Array.from(spans)
           .map((s) => s.textContent?.trim())
-          .filter(Boolean) as string[];
+          .filter(Boolean);
         if (texts.length >= 1) {
           certifications.push({
             name: texts[0] || "",
@@ -936,7 +996,7 @@
     }
 
     // Featured
-    const featured: { type: string; title: string }[] = [];
+    const featured = [];
     const featuredSection = document.querySelector(
       "#featured ~ .pvs-list__outer-container"
     );
@@ -960,64 +1020,248 @@
 
   // --- Phase 2: Job Scraping Helpers ---
 
+  /**
+   * Detect Easy Apply on a search-result card.
+   * Returns true / false / null (unknown). Never default unknown → false or all jobs get filtered out
+   * when Easy Apply-only mode is on (LinkedIn often hides the badge until hover / uses new SDUI markup).
+   */
+  function detectCardEasyApply(card) {
+    if (!card) return null;
+
+    const rawText = `${card.innerText || ""} ${card.textContent || ""}`;
+    const text = rawText.replace(/\u00a0/g, " ").replace(/\s+/g, " ").toLowerCase();
+
+    // Explicit Easy Apply signals (text, aria, icons, LinkedIn apply-method row)
+    if (/\beasy\s*apply\b/.test(text)) return true;
+
+    const easySelectors = [
+      "[data-test-job-card-easy-apply]",
+      "[aria-label*='Easy Apply']",
+      "[aria-label*='easy apply']",
+      "[data-control-name*='easy_apply']",
+      "li-icon[type='linkedin-bug']",
+      "svg[data-test-icon*='linkedin-bug']",
+      "use[*|href*='linkedin-bug']",
+      ".job-card-container__apply-method",
+      ".job-card-list__footer-wrapper .job-card-container__footer-item",
+      "[class*='job-card-container__apply-method']",
+      "[class*='easy-apply']",
+    ];
+    for (const sel of easySelectors) {
+      try {
+        if (card.querySelector(sel)) {
+          // Footer items can be non-Easy-Apply (promoted, etc.) — verify text when present
+          if (sel.includes("footer-item")) {
+            const items = card.querySelectorAll(sel);
+            for (const item of items) {
+              const t = (item.textContent || "").replace(/\s+/g, " ").toLowerCase();
+              if (/\beasy\s*apply\b/.test(t) || item.querySelector("li-icon[type='linkedin-bug']")) {
+                return true;
+              }
+            }
+            continue;
+          }
+          return true;
+        }
+      } catch {
+        /* ignore invalid sel */
+      }
+    }
+
+    // Footer highlighted apply row is almost always Easy Apply on classic layout
+    if (card.querySelector(".job-card-container__footer-item--highlighted")) {
+      const hl = card.querySelector(".job-card-container__footer-item--highlighted");
+      const ht = (hl?.textContent || "").toLowerCase();
+      if (!ht || /\beasy\s*apply\b/.test(ht) || ht.includes("apply")) return true;
+    }
+
+    // Clear external / company-site signals only
+    if (
+      /\bapply\s+on\s+company\b/.test(text) ||
+      text.includes("external apply") ||
+      text.includes("apply on company website") ||
+      text.includes("company website") && text.includes("apply")
+    ) {
+      return false;
+    }
+
+    // Unknown — keep eligible; detail pane + CLICK_EASY_APPLY will save true external jobs
+    return null;
+  }
+
+  function extractJobIdFromCard(card, url) {
+    const fromAttrs =
+      card.getAttribute("data-occludable-job-id") ||
+      card.getAttribute("data-job-id") ||
+      card.getAttribute("data-entity-urn")?.match(/jobPosting:(\d+)/)?.[1] ||
+      card.querySelector("[data-occludable-job-id]")?.getAttribute("data-occludable-job-id") ||
+      card.querySelector("[data-job-id]")?.getAttribute("data-job-id") ||
+      card.querySelector("[data-entity-urn*='jobPosting']")?.getAttribute("data-entity-urn")?.match(/jobPosting:(\d+)/)?.[1];
+    if (fromAttrs) return String(fromAttrs);
+
+    if (url) {
+      const fromUrl =
+        url.match(/\/view\/(\d+)/)?.[1] ||
+        url.match(/currentJobId=(\d+)/)?.[1] ||
+        url.match(/jobPosting[:/](\d+)/)?.[1];
+      if (fromUrl) return String(fromUrl);
+    }
+
+    // Any nested anchor carrying a job id
+    const anchors = card.querySelectorAll("a[href]");
+    for (const a of anchors) {
+      const href = a.href || a.getAttribute("href") || "";
+      const id =
+        href.match(/\/jobs\/view\/(\d+)/)?.[1] ||
+        href.match(/currentJobId=(\d+)/)?.[1];
+      if (id) return String(id);
+    }
+    return "";
+  }
+
   function scrapeJobListings() {
     const jobCards = document.querySelectorAll(
       ".jobs-search-results__list-item, .job-card-container, .scaffold-layout__list-item, " +
       ".jobs-search-results-list__list-item, [data-occludable-job-id], " +
-      "li.jobs-search-results__list-item, .job-card-list"
+      "li.jobs-search-results__list-item, .job-card-list, " +
+      "li[data-occludable-job-id], div[data-job-id], li.scaffold-layout__list-item"
     );
     const jobs = [];
+    const seenIds = new Set();
 
     for (const card of jobCards) {
+      // Prefer the outer list item so we don't double-count nested containers
+      const root =
+        card.closest?.("[data-occludable-job-id], li.jobs-search-results__list-item, li.scaffold-layout__list-item") ||
+        card;
+
       const titleEl =
-        card.querySelector(".job-card-list__title, .job-card-container__link, .job-card-list__title--link") ||
-        card.querySelector("a[data-control-name], a.job-card-container__link, a.job-card-list__title--link") ||
-        card.querySelector("a[href*='/jobs/view/']");
-      const companyEl = card.querySelector(
+        root.querySelector(
+          "a.job-card-list__title--link, a.job-card-container__link, a.job-card-list__title, " +
+          ".job-card-list__title a, .artdeco-entity-lockup__title a, " +
+          "a[href*='/jobs/view/'], a[href*='currentJobId=']"
+        ) ||
+        root.querySelector(".job-card-list__title, .job-card-container__link, strong a, h3 a");
+
+      const companyEl = root.querySelector(
         ".job-card-container__primary-description, .artdeco-entity-lockup__subtitle, " +
         ".job-card-container__company-name, .artdeco-entity-lockup__subtitle span"
       );
-      const locationEl = card.querySelector(
+      const locationEl = root.querySelector(
         ".job-card-container__metadata-item, .artdeco-entity-lockup__caption, " +
         ".job-card-container__metadata-wrapper span"
       );
-      const easyApplyBadge = card.querySelector(
-        ".job-card-container__apply-method, [data-test-job-card-easy-apply], " +
-        ".job-card-container__footer-item--highlighted, " +
-        "li-icon[type='linkedin-bug']"
-      );
-      const easyApplyLabel = card.querySelector(
-        "[aria-label*='Easy Apply'], [data-control-name*='easy_apply'], [class*='apply-method']"
-      );
-      const cardText = (card.textContent || "").toLowerCase();
-      const easyApplyByText = cardText.includes("easy apply");
-      const appliedBadge = card.querySelector(
-        ".job-card-container__footer-item--success, [data-test-job-card-applied], .artdeco-inline-feedback"
+      const cardText = (root.innerText || root.textContent || "").toLowerCase();
+      const easyApplyFlag = detectCardEasyApply(root);
+      const appliedBadge = root.querySelector(
+        ".job-card-container__footer-item--success, [data-test-job-card-applied], .artdeco-inline-feedback--success"
       );
       const alreadyApplied =
         !!appliedBadge ||
-        cardText.includes("applied") ||
-        cardText.includes("application submitted") ||
-        cardText.includes("submitted");
+        /\bapplied\b/.test(cardText) ||
+        cardText.includes("application submitted");
 
-      const title = titleEl?.textContent?.trim() || "";
-      const url = titleEl?.closest("a")?.href || "";
-      const jobId = url.match(/\/view\/(\d+)/)?.[1] || "";
+      const title = (titleEl?.textContent || "").replace(/\s+/g, " ").trim();
+      if (!title) continue;
 
-      if (title) {
-        jobs.push({
-          title,
-          company: companyEl?.textContent?.trim() || "",
-          location: locationEl?.textContent?.trim() || "",
-          easyApply: !!easyApplyBadge || !!easyApplyLabel || easyApplyByText,
-          applied: alreadyApplied,
-          url,
-          jobId,
-        });
+      let url = "";
+      if (titleEl?.href && /jobs|currentJobId/i.test(titleEl.href)) {
+        url = titleEl.href;
+      } else if (titleEl?.closest?.("a")?.href) {
+        url = titleEl.closest("a").href;
+      } else {
+        const anyJobLink =
+          root.querySelector("a[href*='/jobs/view/']") ||
+          root.querySelector("a[href*='currentJobId=']");
+        url = anyJobLink?.href || "";
       }
+
+      let jobId = extractJobIdFromCard(root, url);
+      if (!url && jobId) {
+        url = `https://www.linkedin.com/jobs/view/${jobId}/`;
+      }
+      if (!jobId && url) {
+        jobId = extractJobIdFromCard(root, url);
+      }
+
+      // Need at least a job id or url to process later
+      if (!url && !jobId) continue;
+
+      const dedupeKey = jobId || url || title;
+      if (seenIds.has(dedupeKey)) continue;
+      seenIds.add(dedupeKey);
+
+      jobs.push({
+        title,
+        company: (companyEl?.textContent || "").replace(/\s+/g, " ").trim(),
+        location: (locationEl?.textContent || "").replace(/\s+/g, " ").trim(),
+        // true | false | null (unknown). Background never gates eligibility on this alone.
+        easyApply: easyApplyFlag,
+        applied: alreadyApplied,
+        url,
+        jobId: String(jobId || ""),
+      });
+    }
+
+    // LinkedIn periodically redesigns the results page (e.g. the "AI job search"
+    // rollout) and renames the card wrapper classes above out from under us. The
+    // /jobs/view/{id} link pattern is far more stable than any CSS class, so when
+    // the card-based pass finds nothing, fall back to scanning those links directly
+    // instead of reporting a false "no jobs" failure.
+    if (jobs.length === 0) {
+      return scrapeJobListingsFallback();
     }
 
     return jobs;
+  }
+
+  function scrapeJobListingsFallback() {
+    const anchors = document.querySelectorAll("a[href*='/jobs/view/'], a[href*='currentJobId=']");
+    const jobs = [];
+    const seenIds = new Set();
+
+    for (const a of anchors) {
+      const href = a.href || a.getAttribute("href") || "";
+      const jobId = href.match(/\/jobs\/view\/(\d+)/)?.[1] || href.match(/currentJobId=(\d+)/)?.[1];
+      if (!jobId || seenIds.has(jobId)) continue;
+
+      const title = (a.textContent || "").replace(/\s+/g, " ").trim();
+      if (!title) continue;
+
+      const root =
+        a.closest("li") || a.closest("[role='listitem']") || a.parentElement?.parentElement || a.parentElement || a;
+      const lines = (root.innerText || "")
+        .split("\n")
+        .map((l) => l.trim())
+        .filter(Boolean);
+      const otherLines = lines.filter((l) => l !== title);
+      const cardText = (root.innerText || "").toLowerCase();
+
+      seenIds.add(jobId);
+      jobs.push({
+        title,
+        company: otherLines[0] || "",
+        location: otherLines[1] || "",
+        easyApply: detectCardEasyApply(root),
+        applied: /\bapplied\b/.test(cardText) || cardText.includes("application submitted"),
+        url: href.startsWith("http") ? href : `https://www.linkedin.com/jobs/view/${jobId}/`,
+        jobId: String(jobId),
+      });
+    }
+
+    return jobs;
+  }
+
+  // Distinguish a genuinely empty result set from a page we simply failed to parse,
+  // so the background script knows whether to retry or trust the "0 jobs" result.
+  function detectNoResultsState() {
+    const text = (document.body?.innerText || "").toLowerCase();
+    return (
+      /no matching jobs found/.test(text) ||
+      /no results found/.test(text) ||
+      /we couldn.?t find any (jobs|matches)/.test(text) ||
+      (/\bno jobs\b/.test(text) && /try (broadening|adjusting)/.test(text))
+    );
   }
 
   function normalizeTextForMatch(text) {
@@ -1440,6 +1684,7 @@
     salary = salaryEl?.textContent?.trim() || "";
 
     const qualification = detectQualificationStatus();
+    const isEasyApply = detectIsEasyApply();
 
     return {
       title,
@@ -1451,42 +1696,99 @@
       qualificationStatus: qualification.status,
       qualificationMatched: qualification.matched,
       qualificationText: qualification.text,
+      isEasyApply,
     };
   }
 
   // --- Phase 2: Easy Apply Helpers ---
+  // User filters Easy Apply on LinkedIn; always attempt the apply button / modal flow.
+
+  function getJobDetailRoot() {
+    return (
+      document.querySelector(".jobs-details") ||
+      document.querySelector(".jobs-search__job-details") ||
+      document.querySelector(".jobs-details__main-content") ||
+      document.querySelector(".job-view-layout") ||
+      document.querySelector(".scaffold-layout__detail") ||
+      document.querySelector(".jobs-unified-top-card")?.closest(
+        ".scaffold-layout__detail, .jobs-search__job-details, main, .jobs-details"
+      ) ||
+      document
+    );
+  }
+
+  function findEasyApplyButton(root = getJobDetailRoot()) {
+    if (!root) root = document;
+
+    // Prefer explicit Easy Apply controls inside the detail pane
+    const candidates = [
+      root.querySelector("a[aria-label*='Easy Apply']"),
+      root.querySelector("button[aria-label*='Easy Apply']"),
+      root.querySelector("[aria-label='Easy Apply to this job']"),
+      root.querySelector("[data-control-name*='easy_apply']"),
+      root.querySelector("button.jobs-apply-button--top-card"),
+      root.querySelector("a.jobs-apply-button--top-card"),
+      root.querySelector("button.jobs-apply-button"),
+      root.querySelector("a.jobs-apply-button"),
+      root.querySelector(".jobs-apply-button"),
+      root.querySelector("[data-control-name='jobdetails_topcard_inapply']"),
+      root.querySelector(".jobs-s-apply button"),
+      root.querySelector(".jobs-s-apply a"),
+    ].filter(Boolean);
+
+    for (const el of candidates) {
+      if (el.offsetParent === null && el.getClientRects?.().length === 0) continue;
+      return el;
+    }
+
+    // Text match within detail root, then document
+    for (const scope of [root, document]) {
+      for (const tag of ["button", "a"]) {
+        const nodes = scope.querySelectorAll(tag);
+        for (const el of nodes) {
+          const t = (el.textContent || "").replace(/\s+/g, " ").trim().toLowerCase();
+          const aria = (el.getAttribute("aria-label") || "").toLowerCase();
+          if (t.includes("easy apply") || aria.includes("easy apply")) return el;
+        }
+      }
+    }
+
+    // Last resort: any visible "Apply" in the detail top card (user guarantees Easy Apply filter)
+    for (const tag of ["button", "a"]) {
+      const nodes = root.querySelectorAll(tag);
+      for (const el of nodes) {
+        const t = (el.textContent || "").replace(/\s+/g, " ").trim().toLowerCase();
+        if (t === "apply" || t.startsWith("apply ")) return el;
+      }
+    }
+
+    return null;
+  }
+
+  function detectIsEasyApply(root = getJobDetailRoot()) {
+    // Always treat as Easy Apply when user filters LinkedIn results; still report button presence.
+    return !!findEasyApplyButton(root);
+  }
 
   async function clickEasyApply() {
-    // SDUI layout uses <a> with aria-label, legacy uses <button>
-    const btn =
-      document.querySelector("a[aria-label*='Easy Apply']") ||
-      document.querySelector("[aria-label='Easy Apply to this job']") ||
-      document.querySelector(".jobs-apply-button") ||
-      document.querySelector("[data-control-name='jobdetails_topcard_inapply']") ||
-      document.querySelector("button.jobs-apply-button--top-card") ||
-      getElementByText("a", "Easy Apply") ||
-      getElementByText("button", "Easy Apply") ||
-      getElementByText("button", "Apply");
+    const root = getJobDetailRoot();
+    const btn = findEasyApplyButton(root);
 
     if (!btn) {
       return { clicked: false, error: "Easy Apply button not found" };
     }
 
-    // Simulate reading the job before clicking apply (human behavior)
     await HumanBehavior.idleScroll();
     await HumanBehavior.sleep(HumanBehavior.clampedGaussian(500, 1500));
 
-    // Check if SDUI Easy Apply link (navigates to apply page instead of modal)
-    const isLink = btn.tagName === "A" && btn.href && btn.href.includes("/apply/");
+    const href = btn.tagName === "A" ? (btn.href || btn.getAttribute("href") || "") : "";
+    const isLink = btn.tagName === "A" && href && href.includes("/apply/");
 
     if (isLink) {
-      // Return immediately so the message channel can respond before navigation unloads the page.
       const urlBefore = window.location.href;
-      const targetUrl = btn.href;
-      // Human-like click on the link
+      const targetUrl = href;
       await dispatchNativeClickAsync(btn);
 
-      // If click doesn't navigate promptly, force it shortly after.
       setTimeout(() => {
         if (window.location.href === urlBefore && targetUrl) {
           window.location.href = targetUrl;
@@ -1498,10 +1800,9 @@
 
     await dispatchNativeClickAsync(btn);
 
-    // Legacy: wait for modal to appear
     try {
       await waitForElement(
-        ".jobs-easy-apply-modal, [data-test-modal], .artdeco-modal",
+        ".jobs-easy-apply-modal, [class*='jobs-easy-apply'], [data-test-modal], .artdeco-modal",
         5000
       );
     } catch (e) {
@@ -1523,43 +1824,139 @@
 
     const fields = [];
 
+    function cleanLabelText(text) {
+      return (text || "")
+        .replace(/\s+/g, " ")
+        .replace(/\*$/, "")
+        .trim();
+    }
+
+    function extractMaxLength(input) {
+      if (input.maxLength && input.maxLength > 0 && input.maxLength < 100000) {
+        return input.maxLength;
+      }
+      const describedBy = input.getAttribute("aria-describedby");
+      if (describedBy) {
+        for (const id of describedBy.split(/\s+/)) {
+          const helper = document.getElementById(id);
+          const helperText = helper?.textContent || "";
+          // LinkedIn helper: "0/20" or "0 of 20 characters"
+          const m = helperText.match(/(\d+)\s*(?:\/|of)\s*(\d+)/i);
+          if (m) return Number(m[2]);
+        }
+      }
+      const parent = input.closest("div");
+      const nearby = parent?.parentElement?.textContent || "";
+      const nearbyMatch = nearby.match(/(\d+)\s*(?:\/|of)\s*(\d+)\s*character/i) || nearby.match(/\b0\/(\d+)\b/);
+      if (nearbyMatch) {
+        return Number(nearbyMatch[2] || nearbyMatch[1]);
+      }
+      return undefined;
+    }
+
+    function findQuestionLabelNear(el) {
+      // Classic LinkedIn form label
+      const classic =
+        el.closest(".fb-dash-form-element")?.querySelector("label, .fb-dash-form-element__label")?.textContent ||
+        el.getAttribute("aria-label") ||
+        el.getAttribute("placeholder") ||
+        "";
+      if (classic && classic.trim()) return cleanLabelText(classic);
+
+      // SDUI / new Easy Apply: question text is often a preceding <p>
+      let node = el.parentElement;
+      for (let depth = 0; depth < 6 && node; depth++) {
+        let prev = node.previousElementSibling;
+        while (prev) {
+          if (prev.tagName === "P" || prev.getAttribute("role") === "heading") {
+            const t = cleanLabelText(prev.textContent);
+            if (t && t.length > 2 && t.length < 300) return t;
+          }
+          // Sometimes question is nested inside previous sibling
+          const nestedP = prev.querySelector?.("p, legend, label, [role='heading']");
+          if (nestedP) {
+            const t = cleanLabelText(nestedP.textContent);
+            if (t && t.length > 2 && t.length < 300) return t;
+          }
+          prev = prev.previousElementSibling;
+        }
+        node = node.parentElement;
+      }
+      return cleanLabelText(el.getAttribute("aria-label") || "");
+    }
+
+    function radioOptionLabel(radio) {
+      // Classic: label[for=id] or wrapping label
+      if (radio.id) {
+        const forLabel = document.querySelector(`label[for="${CSS.escape(radio.id)}"]`);
+        if (forLabel) {
+          const t = cleanLabelText(forLabel.textContent);
+          if (t) return t;
+        }
+      }
+      const wrap = radio.closest("label");
+      if (wrap) {
+        const t = cleanLabelText(wrap.textContent);
+        if (t) return t;
+      }
+
+      // LinkedIn SDUI: role="radio" container with sibling <p>Yes</p>
+      const roleRadio = radio.closest("[role='radio']");
+      if (roleRadio) {
+        const p = roleRadio.querySelector("p");
+        if (p) {
+          const t = cleanLabelText(p.textContent);
+          if (t) return t;
+        }
+        const t = cleanLabelText(roleRadio.textContent);
+        // Strip empty/placeholder chars
+        if (t) return t;
+      }
+
+      return cleanLabelText(radio.nextElementSibling?.textContent || radio.value || "");
+    }
+
     // Text inputs
     const inputs = modal.querySelectorAll("input[type='text'], input[type='number'], input[type='tel'], input[type='email'], input[type='url']");
     for (const input of inputs) {
-      const label = input.closest(".fb-dash-form-element")?.querySelector("label")?.textContent?.trim() ||
-        input.getAttribute("aria-label") || input.getAttribute("placeholder") || "";
+      // Skip radio-like hidden helpers
+      if (input.offsetParent === null && !input.required) continue;
+      const label = findQuestionLabelNear(input);
+      const maxLength = extractMaxLength(input);
       fields.push({
         type: "text",
         inputType: input.type || "text",
         label,
         value: input.value,
         selector: buildSelector(input),
-        required: input.required || input.getAttribute("aria-required") === "true",
+        required: input.required || input.getAttribute("aria-required") === "true" || /\*$/.test(label + (input.getAttribute("aria-label") || "")),
+        maxLength,
       });
     }
 
     // Textareas
     const textareas = modal.querySelectorAll("textarea");
     for (const ta of textareas) {
-      const label = ta.closest(".fb-dash-form-element")?.querySelector("label")?.textContent?.trim() ||
-        ta.getAttribute("aria-label") || "";
+      const label = findQuestionLabelNear(ta);
+      const maxLength = extractMaxLength(ta);
       fields.push({
         type: "textarea",
         label,
         value: ta.value,
         selector: buildSelector(ta),
-        required: ta.required,
+        required: ta.required || ta.getAttribute("aria-required") === "true",
+        maxLength,
       });
     }
 
     // Selects (dropdowns)
     const selects = modal.querySelectorAll("select");
     for (const sel of selects) {
-      const label = sel.closest(".fb-dash-form-element")?.querySelector("label")?.textContent?.trim() ||
-        sel.getAttribute("aria-label") || "";
+      const label = findQuestionLabelNear(sel);
       const options = Array.from(sel.options).map((o) => ({
         value: o.value,
         text: o.textContent?.trim() || "",
+        label: o.textContent?.trim() || "",
       }));
       fields.push({
         type: "select",
@@ -1580,8 +1977,7 @@
       if (control.getAttribute("aria-disabled") === "true") continue;
       if (control.offsetParent === null) continue;
 
-      const label = control.closest(".fb-dash-form-element")?.querySelector("label")?.textContent?.trim() ||
-        control.getAttribute("aria-label") || "";
+      const label = findQuestionLabelNear(control);
       const currentText = (control.textContent || "").trim();
       const isPlaceholder = /select|choose|please|pick|--|option/i.test(currentText);
 
@@ -1595,25 +1991,60 @@
       });
     }
 
-    // Radio buttons
+    // Radio buttons (classic fieldset + SDUI role=radiogroup)
     const radioGroups = modal.querySelectorAll("fieldset, [role='radiogroup']");
     for (const group of radioGroups) {
-      const legend = group.querySelector("legend, .fb-dash-form-element__label")?.textContent?.trim() || "";
+      let legend =
+        group.querySelector("legend, .fb-dash-form-element__label")?.textContent?.trim() || "";
+      if (!legend) {
+        // SDUI: question text is a sibling <p> before the fieldset/radiogroup
+        const prev = group.previousElementSibling;
+        if (prev && (prev.tagName === "P" || prev.querySelector?.("p"))) {
+          legend = (prev.tagName === "P" ? prev.textContent : prev.querySelector("p")?.textContent) || "";
+        }
+        if (!legend) {
+          const parent = group.parentElement;
+          const parentP = parent?.querySelector(":scope > p");
+          legend = parentP?.textContent || "";
+        }
+        // aria-labelledby
+        const labelledBy = group.getAttribute("aria-labelledby");
+        if (!legend && labelledBy) {
+          legend = document.getElementById(labelledBy)?.textContent || "";
+        }
+      }
+      legend = cleanLabelText(legend);
+
       const radios = group.querySelectorAll("input[type='radio']");
-      const options = Array.from(radios).map((r) => ({
-        value: r.value,
-        label: r.closest("label")?.textContent?.trim() || r.nextElementSibling?.textContent?.trim() || "",
-        selector: buildSelector(r),
-      }));
+      const options = Array.from(radios).map((r) => {
+        const optLabel = radioOptionLabel(r);
+        return {
+          value: r.value || optLabel,
+          label: optLabel,
+          text: optLabel,
+          selector: buildSelector(r),
+        };
+      });
       if (options.length > 0) {
+        const checked = group.querySelector("input[type='radio']:checked");
+        const checkedLabel = checked ? radioOptionLabel(checked) : "";
+        // Question with * in surrounding text is required; SDUI often omits required attrs
+        const rawTitle =
+          group.previousElementSibling?.textContent ||
+          group.parentElement?.querySelector(":scope > p")?.textContent ||
+          legend;
+        const titleHasRequired = /\*/.test(rawTitle || "");
         fields.push({
           type: "radio",
           label: legend,
           options,
-          value: group.querySelector("input[type='radio']:checked")?.value || "",
+          value: checked?.value || checkedLabel || "",
           required:
             group.querySelector("input[type='radio'][required]") !== null ||
-            group.getAttribute("aria-required") === "true",
+            group.getAttribute("aria-required") === "true" ||
+            titleHasRequired ||
+            // Additional Questions screening groups always need an answer to proceed
+            !!(legend && options.length >= 2),
         });
       }
     }
@@ -1622,10 +2053,12 @@
     const checkboxes = modal.querySelectorAll("input[type='checkbox']");
     for (const cb of checkboxes) {
       const label =
-        cb.closest("label")?.textContent?.trim() ||
-        cb.closest(".fb-dash-form-element")?.querySelector("label")?.textContent?.trim() ||
-        cb.getAttribute("aria-label") ||
-        "Consent checkbox";
+        cleanLabelText(
+          cb.closest("label")?.textContent ||
+          cb.closest(".fb-dash-form-element")?.querySelector("label")?.textContent ||
+          cb.getAttribute("aria-label") ||
+          "Consent checkbox"
+        );
       fields.push({
         type: "checkbox",
         label,
@@ -1638,8 +2071,7 @@
     // File inputs
     const fileInputs = modal.querySelectorAll("input[type='file']");
     for (const fi of fileInputs) {
-      const label = fi.closest(".fb-dash-form-element")?.querySelector("label")?.textContent?.trim() ||
-        fi.getAttribute("aria-label") || "Resume/CV Upload";
+      const label = findQuestionLabelNear(fi) || "Resume/CV Upload";
       fields.push({
         type: "file",
         label,
@@ -1794,14 +2226,48 @@
     } else if (fieldType === "radio") {
       const bySelector = resolveFromSelector();
       if (bySelector) {
-        dispatchNativeClick(bySelector);
+        // Prefer clicking the visible role=radio container or the input
+        const clickTarget =
+          bySelector.closest?.("[role='radio']") ||
+          bySelector.closest?.("label") ||
+          bySelector;
+        dispatchNativeClick(clickTarget);
+        if (bySelector instanceof HTMLInputElement && !bySelector.checked) {
+          dispatchNativeClick(bySelector);
+        }
         return;
       }
-      // Use CSS.escape to prevent selector injection
-      const escapedValue = CSS.escape(value);
-      const radios = modal.querySelectorAll(`input[type='radio'][value='${escapedValue}']`);
-      if (radios.length > 0) {
-        dispatchNativeClick(radios[0]);
+
+      // Match radio by value or visible option label (LinkedIn often uses empty value attrs)
+      const target = String(value || "").trim().toLowerCase();
+      const allRadios = modal.querySelectorAll("input[type='radio']");
+      let matched = null;
+      for (const r of allRadios) {
+        const val = (r.value || "").toString().trim().toLowerCase();
+        if (val && val === target) {
+          matched = r;
+          break;
+        }
+        const roleRadio = r.closest("[role='radio']");
+        const labelText = (
+          roleRadio?.querySelector("p")?.textContent ||
+          r.closest("label")?.textContent ||
+          (r.id ? document.querySelector(`label[for="${CSS.escape(r.id)}"]`)?.textContent : "") ||
+          r.nextElementSibling?.textContent ||
+          ""
+        )
+          .toString()
+          .trim()
+          .toLowerCase();
+        if (labelText === target || labelText.includes(target) || target.includes(labelText)) {
+          matched = r;
+          break;
+        }
+      }
+      if (matched) {
+        const clickTarget = matched.closest("[role='radio']") || matched.closest("label") || matched;
+        dispatchNativeClick(clickTarget);
+        if (!matched.checked) dispatchNativeClick(matched);
       }
     } else if (fieldType === "checkbox") {
       const bySelector = resolveFromSelector();
@@ -2232,6 +2698,569 @@
 
     await new Promise((r) => setTimeout(r, 2000));
     return { uploaded: true, fileName: file.name };
+  }
+
+  // --- Phase 4: Post-Application Outreach (Auto Messaging) ---
+  // Everything below drives LinkedIn's messaging UI: the hiring-team card on a
+  // job post, a company page's "Message" action (which asks for a topic first),
+  // and a connection's profile. Each helper reports what it found so the
+  // service worker can fall through to the next channel instead of guessing.
+
+  const MSG_EDITOR_SELECTORS = [
+    ".msg-form__contenteditable",
+    ".msg-overlay-conversation-bubble div[contenteditable='true']",
+    "div[role='textbox'][contenteditable='true'][aria-label*='message' i]",
+    "div[role='textbox'][contenteditable='true'][aria-label*='Message' i]",
+    "[role='dialog'] div[role='textbox'][contenteditable='true']",
+    "[role='dialog'] textarea",
+    ".org-page-message-modal textarea",
+    "textarea[name='message']",
+  ];
+
+  const MSG_SEND_SELECTORS = [
+    ".msg-form__send-button",
+    "button.msg-form__send-btn",
+    ".msg-form__right-actions button[type='submit']",
+    ".artdeco-modal__actionbar button.artdeco-button--primary",
+    "[role='dialog'] button[type='submit']",
+  ];
+
+  const TOPIC_CONTROL_WORDS = [
+    "cancel",
+    "close",
+    "send",
+    "next",
+    "back",
+    "continue",
+    "dismiss",
+    "skip",
+    "done",
+    "discard",
+  ];
+
+  function isVisible(el) {
+    if (!el) return false;
+    if (el.getAttribute?.("aria-hidden") === "true") return false;
+    return el.offsetParent !== null || (el.getClientRects?.().length || 0) > 0;
+  }
+
+  /** A control we may actually click. LinkedIn disables Send until the form validates. */
+  function isEnabled(el) {
+    if (!el) return false;
+    if (el.disabled) return false;
+    if (el.getAttribute?.("aria-disabled") === "true") return false;
+    if (el.classList?.contains("artdeco-button--disabled")) return false;
+    return true;
+  }
+
+  function normalizeLabel(el) {
+    return `${el.getAttribute?.("aria-label") || ""} ${el.textContent || ""}`
+      .replace(/\s+/g, " ")
+      .trim()
+      .toLowerCase();
+  }
+
+  function findVisibleBySelectors(selectors, root = document) {
+    for (const selector of selectors) {
+      for (const el of root.querySelectorAll(selector)) {
+        if (isVisible(el)) return el;
+      }
+    }
+    return null;
+  }
+
+  function findClickableByLabel(root, matches, { requireEnabled = true } = {}) {
+    const nodes = root.querySelectorAll("button, a, [role='button']");
+    for (const el of nodes) {
+      if (!isVisible(el)) continue;
+      if (requireEnabled && !isEnabled(el)) continue;
+      if (matches(normalizeLabel(el))) return el;
+    }
+    return null;
+  }
+
+  /** "Message" / "Message Jane Doe" — but never the left-nav "Messaging" entry. */
+  function isMessageActionLabel(label) {
+    if (!label) return false;
+    if (label.includes("messaging")) return false;
+    if (label.includes("message request")) return false;
+    if (label.includes("unread")) return false;
+    return /^message\b/.test(label) && label.length < 60;
+  }
+
+  function findMessageButton(root = document) {
+    return findClickableByLabel(root, isMessageActionLabel);
+  }
+
+  /** The topmost open modal/dialog, which is where LinkedIn puts message flows. */
+  function getOpenDialog() {
+    const dialogs = Array.from(
+      document.querySelectorAll("[role='dialog'], .artdeco-modal, .org-page-message-modal")
+    ).filter(isVisible);
+    return dialogs.length ? dialogs[dialogs.length - 1] : null;
+  }
+
+  function getMessageComposer() {
+    const dialog = getOpenDialog();
+    const editor =
+      (dialog && findVisibleBySelectors(MSG_EDITOR_SELECTORS, dialog)) ||
+      findVisibleBySelectors(MSG_EDITOR_SELECTORS);
+    if (!editor) return null;
+
+    const scope = editor.closest("form, [role='dialog'], .msg-form, .msg-overlay-conversation-bubble") || document;
+    const sendButton =
+      findVisibleBySelectors(MSG_SEND_SELECTORS, scope) ||
+      findClickableByLabel(scope, (label) => /^send\b/.test(label), { requireEnabled: false }) ||
+      findVisibleBySelectors(MSG_SEND_SELECTORS);
+
+    return { editor, sendButton: sendButton || null, scope };
+  }
+
+  async function waitForMessageComposer(timeout = 8000) {
+    const deadline = Date.now() + timeout;
+    while (Date.now() < deadline) {
+      const composer = getMessageComposer();
+      if (composer) return composer;
+      await new Promise((r) => setTimeout(r, 300));
+    }
+    return null;
+  }
+
+  const TOPIC_KEYWORDS = ["career", "job", "hiring", "recruit", "opportunit", "work with"];
+  const TOPIC_FALLBACK_PATTERN = /something else|other|general/i;
+
+  /** The topic control on a company-page message modal: a required <select>. */
+  function getTopicSelect(dialog = getOpenDialog()) {
+    if (!dialog) return null;
+    const select =
+      dialog.querySelector("select#msg-shared-modals-msg-page-modal-presenter-conversation-topic") ||
+      dialog.querySelector("select[id*='conversation-topic']") ||
+      dialog.querySelector("select");
+    return isVisible(select) ? select : null;
+  }
+
+  function setSelectValue(select, value) {
+    const setter = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, "value")?.set;
+    if (setter) setter.call(select, value);
+    else select.value = value;
+    select.dispatchEvent(new Event("input", { bubbles: true }));
+    select.dispatchEvent(new Event("change", { bubbles: true }));
+  }
+
+  function pickByTopicPreference(items, preferred, getText) {
+    const keywords = preferred?.length ? preferred : TOPIC_KEYWORDS;
+
+    for (const keyword of keywords) {
+      const hit = items.find((item) => getText(item).toLowerCase().includes(keyword));
+      if (hit) return hit;
+    }
+
+    // No careers-style topic on this page — "Other" still reaches a human
+    return items.find((item) => TOPIC_FALLBACK_PATTERN.test(getText(item))) || items[0] || null;
+  }
+
+  /** Choose the topic from a <select>, which is what company pages actually use. */
+  function selectTopicFromSelect(select, preferred) {
+    const options = Array.from(select.options).filter(
+      (option) => !option.disabled && (option.value || "").trim()
+    );
+    if (!options.length) return { selected: false, needed: true, topics: [] };
+
+    const optionText = (option) => (option.textContent || "").replace(/\s+/g, " ").trim();
+    const choice = pickByTopicPreference(options, preferred, optionText);
+    if (!choice) return { selected: false, needed: true, topics: options.map(optionText) };
+
+    setSelectValue(select, choice.value);
+
+    return {
+      selected: select.value === choice.value,
+      needed: true,
+      topic: optionText(choice),
+      topics: options.map(optionText),
+    };
+  }
+
+  /**
+   * Button/pill style topic choices, used by the variants that do not render a
+   * <select>. Field labels and the modal's own controls are filtered out.
+   */
+  function getMessageTopicOptions(dialog = getOpenDialog()) {
+    if (!dialog) return [];
+
+    const options = [];
+    const seen = new Set();
+    const nodes = dialog.querySelectorAll(
+      "button, [role='radio'], [role='option'], [role='menuitem'], li"
+    );
+
+    for (const el of nodes) {
+      if (!isVisible(el) || !isEnabled(el)) continue;
+      if (el.querySelector("button, [role='radio'], [role='option'], [role='menuitem']")) continue;
+      // Skip anything that labels a form field rather than being a choice
+      if (el.tagName === "LABEL" || el.querySelector("label, input, select, textarea")) continue;
+
+      const text = (el.textContent || "").replace(/\s+/g, " ").trim();
+      if (!text || text.length > 60) continue;
+
+      const lower = text.toLowerCase();
+      if (TOPIC_CONTROL_WORDS.includes(lower)) continue;
+      if (seen.has(lower)) continue;
+
+      seen.add(lower);
+      options.push({ el, text });
+    }
+
+    return options;
+  }
+
+  async function selectMessageTopic(preferred) {
+    const dialog = getOpenDialog();
+
+    // Company pages: a required <select> that keeps Send disabled until it is set
+    const topicSelect = getTopicSelect(dialog);
+    if (topicSelect) {
+      const result = selectTopicFromSelect(topicSelect, preferred);
+      await new Promise((r) => setTimeout(r, 600));
+      return result;
+    }
+
+    const options = getMessageTopicOptions(dialog);
+    if (!options.length) {
+      // No chooser — most message overlays drop you straight into the composer
+      return { selected: false, needed: false, topics: [] };
+    }
+
+    const choice = pickByTopicPreference(options, preferred, (option) => option.text);
+    if (!choice) {
+      return { selected: false, needed: true, topics: options.map((o) => o.text) };
+    }
+
+    await dispatchNativeClickAsync(choice.el);
+    await new Promise((r) => setTimeout(r, 900));
+
+    // Some variants need a Next/Continue press after picking the topic
+    const nextBtn = findClickableByLabel(
+      getOpenDialog() || document,
+      (label) => label === "next" || label === "continue"
+    );
+    if (nextBtn) {
+      await dispatchNativeClickAsync(nextBtn);
+      await new Promise((r) => setTimeout(r, 900));
+    }
+
+    return {
+      selected: true,
+      needed: true,
+      topic: choice.text,
+      topics: options.map((o) => o.text),
+    };
+  }
+
+  /** Open the message composer from whatever Message control this page offers. */
+  async function openMessageComposer(selector) {
+    const existing = getMessageComposer();
+    if (existing) return { opened: true, alreadyOpen: true };
+
+    let trigger = null;
+    if (selector) {
+      const el = document.querySelector(selector);
+      if (isVisible(el)) trigger = el;
+    }
+
+    let topCard = null;
+    if (!trigger) {
+      topCard =
+        document.querySelector(".org-top-card-primary-actions") ||
+        document.querySelector(".org-top-card__primary-actions") ||
+        document.querySelector(".pv-top-card-v2-ctas") ||
+        document.querySelector(".ph5.pb5") ||
+        null;
+      trigger = (topCard && findMessageButton(topCard)) || findMessageButton(document);
+    }
+
+    // Some pages tuck Message behind the top card's "More" menu
+    if (!trigger && topCard) {
+      const moreBtn = findClickableByLabel(
+        topCard,
+        (label) => label === "more" || label.startsWith("more actions") || label.startsWith("more options")
+      );
+      if (moreBtn) {
+        await dispatchNativeClickAsync(moreBtn);
+        await new Promise((r) => setTimeout(r, 1000));
+        trigger = findMessageButton(document);
+      }
+    }
+
+    if (!trigger) {
+      return { opened: false, error: "No Message button on this page" };
+    }
+
+    await HumanBehavior.hoverElement(trigger);
+    await dispatchNativeClickAsync(trigger);
+    await new Promise((r) => setTimeout(r, 1500));
+
+    // Company-page modals show the topic and the message box together, while
+    // the pill-style choosers only reveal the box after a topic is picked —
+    // so look for the box, answer the topic question, then look again.
+    let composer = await waitForMessageComposer(4000);
+    const topicResult = await selectMessageTopic();
+    if (!composer) composer = await waitForMessageComposer(6000);
+
+    if (!composer) {
+      return {
+        opened: false,
+        error: "Message composer did not open",
+        topic: topicResult.topic || "",
+        topics: topicResult.topics || [],
+      };
+    }
+
+    return {
+      opened: true,
+      topic: topicResult.topic || "",
+      topics: topicResult.topics || [],
+    };
+  }
+
+  async function sendComposedMessage(text) {
+    const composer = await waitForMessageComposer(5000);
+    if (!composer) return { sent: false, error: "Message composer not open" };
+
+    const { editor } = composer;
+
+    // Company-page modals cap the box (750 chars) and reject anything longer
+    const maxLength = Number(editor.getAttribute?.("maxlength")) || 0;
+    const body = maxLength > 0 && text.length > maxLength ? text.slice(0, maxLength) : text;
+
+    editor.focus();
+    editor.dispatchEvent(new FocusEvent("focus", { bubbles: true }));
+    await new Promise((r) => setTimeout(r, 400));
+
+    if (editor.tagName === "TEXTAREA" || editor.tagName === "INPUT") {
+      await dispatchNativeInput(editor, body);
+      // Some forms only validate on change/blur, not on each keystroke
+      editor.dispatchEvent(new Event("change", { bubbles: true }));
+    } else {
+      // contenteditable: clear anything LinkedIn pre-filled, then insert
+      const selection = window.getSelection();
+      const range = document.createRange();
+      range.selectNodeContents(editor);
+      selection.removeAllRanges();
+      selection.addRange(range);
+      document.execCommand("delete", false);
+      document.execCommand("insertText", false, body);
+      editor.dispatchEvent(new Event("input", { bubbles: true }));
+    }
+
+    await new Promise((r) => setTimeout(r, 1200));
+
+    // Send stays disabled until every required field validates — on a company
+    // page that means the conversation topic as well as the message body.
+    const currentSendButton = () => getMessageComposer()?.sendButton || composer.sendButton;
+    let sendButton = currentSendButton();
+    let retriedTopic = false;
+
+    for (let i = 0; i < 12; i++) {
+      sendButton = currentSendButton();
+      if (sendButton && isEnabled(sendButton)) break;
+
+      // Halfway through, assume the blocker is an unset topic and set it again
+      if (!retriedTopic && i === 5) {
+        retriedTopic = true;
+        const topicSelect = getTopicSelect();
+        if (topicSelect && !topicSelect.value) {
+          selectTopicFromSelect(topicSelect);
+          editor.dispatchEvent(new Event("input", { bubbles: true }));
+        }
+      }
+
+      await new Promise((r) => setTimeout(r, 500));
+    }
+
+    if (!sendButton) return { sent: false, error: "Send button not found" };
+    if (!isEnabled(sendButton)) {
+      const topicSelect = getTopicSelect();
+      const reason = topicSelect && !topicSelect.value ? "conversation topic was not accepted" : "form did not validate";
+      return { sent: false, error: `Send button stayed disabled (${reason})` };
+    }
+
+    await dispatchNativeClickAsync(sendButton);
+    await new Promise((r) => setTimeout(r, 2500));
+
+    // Sent when the composer clears or closes; text still sitting there means it failed
+    const after = getMessageComposer();
+    const leftover = after ? (after.editor.value ?? after.editor.textContent ?? "").trim() : "";
+    if (!after || leftover.length === 0) {
+      return { sent: true, length: body.length };
+    }
+
+    return { sent: false, error: "Message was still in the box after pressing Send" };
+  }
+
+  async function closeMessageOverlay() {
+    const dialog = getOpenDialog();
+    const composer = getMessageComposer();
+
+    // Only ever click inside something that is actually open. Searching the
+    // whole page for "close"/"dismiss" would hit the Dismiss button on a job card.
+    const scope =
+      dialog ||
+      composer?.editor.closest(".msg-overlay-conversation-bubble, .msg-form, form") ||
+      null;
+    if (!scope) return { closed: true };
+
+    const closeBtn = findClickableByLabel(
+      scope,
+      (label) => /^(close|dismiss|cancel)\b/.test(label) || label === "close conversation"
+    );
+    if (closeBtn) {
+      await dispatchNativeClickAsync(closeBtn);
+      await new Promise((r) => setTimeout(r, 800));
+    }
+
+    // "Discard draft?" confirmation, when a half-written message is open
+    const confirmDialog = getOpenDialog();
+    const discardBtn = confirmDialog
+      ? findClickableByLabel(confirmDialog, (label) => label === "discard" || label.startsWith("discard"))
+      : null;
+    if (discardBtn) {
+      await dispatchNativeClickAsync(discardBtn);
+      await new Promise((r) => setTimeout(r, 600));
+    }
+
+    return { closed: !getMessageComposer() };
+  }
+
+  /** The company behind the job currently shown, as a page URL we can open. */
+  function getCompanyFromJob() {
+    const root = getJobDetailRoot();
+    const link =
+      root.querySelector(".job-details-jobs-unified-top-card__company-name a") ||
+      root.querySelector(".jobs-unified-top-card__company-name a") ||
+      root.querySelector("a[href*='/company/']") ||
+      document.querySelector(".job-details-jobs-unified-top-card__company-name a") ||
+      document.querySelector("a[href*='/company/']");
+
+    if (!link) {
+      const nameEl =
+        root.querySelector(".job-details-jobs-unified-top-card__company-name") ||
+        root.querySelector(".jobs-unified-top-card__company-name");
+      const name = nameEl?.textContent?.replace(/\s+/g, " ").trim() || "";
+      return name ? { name, url: "" } : null;
+    }
+
+    const name = (link.textContent || "").replace(/\s+/g, " ").trim();
+    let url = "";
+    try {
+      const parsed = new URL(link.href, window.location.origin);
+      const slug = parsed.pathname.match(/\/company\/([^/?#]+)/i)?.[1];
+      url = slug ? `https://www.linkedin.com/company/${slug}/` : "";
+    } catch {
+      url = "";
+    }
+
+    return { name, url };
+  }
+
+  /** "Meet the hiring team" — the people LinkedIn says own this posting. */
+  function getHiringTeamTargets() {
+    const cards = document.querySelectorAll(
+      ".job-details-people-who-can-help__section, .hirer-card__container, " +
+      "[class*='hirer-card'], .jobs-poster, .job-details-module__hirer-card"
+    );
+
+    const targets = [];
+    const seen = new Set();
+
+    for (const card of cards) {
+      if (!isVisible(card)) continue;
+
+      const profileLink = card.querySelector("a[href*='/in/']");
+      const name =
+        card.querySelector(".jobs-poster__name")?.textContent ||
+        card.querySelector(".hirer-card__hirer-information span[aria-hidden='true']")?.textContent ||
+        profileLink?.textContent ||
+        "";
+      const cleanName = name.replace(/\s+/g, " ").trim();
+      if (!cleanName || seen.has(cleanName)) continue;
+
+      const headline =
+        card.querySelector(".hirer-card__hirer-job-title")?.textContent ||
+        card.querySelector(".t-14.t-black--light")?.textContent ||
+        "";
+
+      const messageBtn = findMessageButton(card);
+
+      seen.add(cleanName);
+      targets.push({
+        name: cleanName,
+        headline: headline.replace(/\s+/g, " ").trim(),
+        profileUrl: profileLink?.href || "",
+        canMessage: !!messageBtn,
+        selector: messageBtn ? buildSelector(messageBtn) : "",
+      });
+    }
+
+    return targets;
+  }
+
+  /** People listed on a company's People tab, with connection degree when shown. */
+  function scrapeCompanyPeople() {
+    const cards = document.querySelectorAll(
+      ".org-people-profile-card__profile-card-spacing, .org-people-profile-card, " +
+      ".artdeco-entity-lockup, li.grid"
+    );
+
+    const people = [];
+    const seen = new Set();
+
+    for (const card of cards) {
+      if (!isVisible(card)) continue;
+
+      const link = card.querySelector("a[href*='/in/']");
+      if (!link) continue;
+
+      let profileUrl = "";
+      try {
+        const parsed = new URL(link.href, window.location.origin);
+        profileUrl = `${parsed.origin}${parsed.pathname}`;
+      } catch {
+        continue;
+      }
+      if (seen.has(profileUrl)) continue;
+
+      const name = (
+        card.querySelector(".artdeco-entity-lockup__title")?.textContent ||
+        card.querySelector(".org-people-profile-card__profile-title")?.textContent ||
+        link.textContent ||
+        ""
+      )
+        .replace(/\s+/g, " ")
+        .trim();
+      if (!name || /^linkedin member$/i.test(name)) continue;
+
+      const headline = (
+        card.querySelector(".artdeco-entity-lockup__subtitle")?.textContent ||
+        card.querySelector(".lt-line-clamp--multi-line")?.textContent ||
+        ""
+      )
+        .replace(/\s+/g, " ")
+        .trim();
+
+      const degreeText = (
+        card.querySelector(".dist-value")?.textContent ||
+        card.querySelector(".artdeco-entity-lockup__degree")?.textContent ||
+        (card.textContent || "").match(/\b(1st|2nd|3rd)\b/)?.[0] ||
+        ""
+      )
+        .replace(/\s+/g, " ")
+        .trim();
+
+      seen.add(profileUrl);
+      people.push({ name, headline, profileUrl, degree: degreeText });
+    }
+
+    return people;
   }
 
   // --- Phase 2: Post Creation Helper ---

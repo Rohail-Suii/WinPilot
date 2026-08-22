@@ -100,6 +100,10 @@ export interface AutomationSettings {
   language: string;
   notificationPrefs: { email: boolean; inApp: boolean; extension: boolean };
   dailyLimits: { applies: number; posts: number; scrapes: number };
+  /** AI resume generation source for job automation */
+  resumeTailoringSource?: "resume" | "data";
+  /** false when server-side daily caps are disabled (the default) */
+  limitsEnforced?: boolean;
 }
 
 // ─── Constants ──────────────────────────────────
@@ -956,13 +960,76 @@ export function AutomationTab({
     inApp: settings?.notificationPrefs?.inApp ?? true,
     extension: settings?.notificationPrefs?.extension ?? true,
   });
+  const [tailoringSource, setTailoringSource] = useState<"resume" | "data">(
+    settings?.resumeTailoringSource === "data" ? "data" : "resume"
+  );
+  const [sourceSaving, setSourceSaving] = useState<"resume" | "data" | null>(null);
+  const [careerDataReady, setCareerDataReady] = useState<boolean | null>(null);
 
   useEffect(() => {
     if (settings) {
       setLimits(settings.dailyLimits);
       setNotifs(settings.notificationPrefs);
+      setTailoringSource(settings.resumeTailoringSource === "data" ? "data" : "resume");
     }
   }, [settings]);
+
+  // Selecting "career data" only works if that bank actually has content, so
+  // surface its state next to the option instead of failing at apply time.
+  useEffect(() => {
+    let active = true;
+    fetch("/api/career-profile")
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (!active) return;
+        const p = data?.profile;
+        setCareerDataReady(
+          !!p &&
+            ((p.experience?.length || 0) > 0 ||
+              (p.projects?.length || 0) > 0 ||
+              (p.skills?.length || 0) > 0 ||
+              !!p.summary?.trim())
+        );
+      })
+      .catch(() => active && setCareerDataReady(null));
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  /**
+   * Persist the resume source on click. The shared "Save Settings" button sits
+   * below two more cards, so a click-only selection was easy to lose on reload.
+   */
+  const selectSource = async (next: "resume" | "data") => {
+    const previous = tailoringSource;
+    if (next === previous || sourceSaving) return;
+
+    setTailoringSource(next);
+    setSourceSaving(next);
+    try {
+      const res = await fetch("/api/settings/automation", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ resumeTailoringSource: next }),
+      });
+      if (res.ok) {
+        toast.success(
+          next === "data"
+            ? "AI will rebuild resumes from your Career Data"
+            : "AI will optimize your uploaded resume"
+        );
+      } else {
+        const data = await res.json().catch(() => null);
+        setTailoringSource(previous);
+        toast.error(data?.error || "Failed to save resume source");
+      }
+    } catch {
+      setTailoringSource(previous);
+      toast.error("Network error. Please try again.");
+    }
+    setSourceSaving(null);
+  };
 
   const save = async () => {
     setSaving(true);
@@ -973,10 +1040,17 @@ export function AutomationTab({
         body: JSON.stringify({
           dailyLimits: limits,
           notificationPrefs: notifs,
+          resumeTailoringSource: tailoringSource,
         }),
       });
-      if (res.ok) toast.success("Settings saved");
-      else toast.error("Failed to save");
+      const data = await res.json().catch(() => null);
+      if (res.ok) {
+        // Guests can only persist the resume source; the API says so via `notice`.
+        if (data?.notice) toast.warning(data.notice);
+        else toast.success("Settings saved");
+      } else {
+        toast.error(data?.error || "Failed to save");
+      }
     } catch {
       toast.error("Network error. Please try again.");
     }
@@ -987,6 +1061,93 @@ export function AutomationTab({
     <div className="space-y-6">
       <Card>
         <CardHeader>
+          <CardTitle>AI Resume Source</CardTitle>
+          <CardDescription>
+            When AI Resume Tailoring is ON for job automation, choose what the AI builds each
+            tailored resume from. Upload/parse resumes stay available either way.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-3 max-w-xl">
+          {([
+            {
+              value: "resume" as const,
+              title: "From my resume",
+              body: (
+                <>
+                  Optimize your uploaded/default resume document (wording, keywords, summary).
+                  Best if your résumé already matches the roles you apply to.
+                </>
+              ),
+            },
+            {
+              value: "data" as const,
+              title: "From my career data",
+              body: (
+                <>
+                  Rebuild from your Career Data (experience, projects, skills). Add that under{" "}
+                  <span className="text-white/60">Settings → Resume → Career Data</span>. Morphs
+                  the resume for the job type with strong ATS keywords.
+                </>
+              ),
+            },
+          ]).map((option) => {
+            const selected = tailoringSource === option.value;
+            return (
+              <button
+                key={option.value}
+                type="button"
+                role="radio"
+                aria-checked={selected}
+                disabled={sourceSaving !== null}
+                onClick={() => selectSource(option.value)}
+                className={cn(
+                  "w-full flex gap-3 rounded-xl border px-4 py-3 text-left transition-colors disabled:opacity-60",
+                  selected
+                    ? "border-blue-500 bg-blue-500/10 ring-1 ring-blue-500/40"
+                    : "border-white/10 bg-white/[0.02] hover:bg-white/[0.06]"
+                )}
+              >
+                <span
+                  className={cn(
+                    "mt-0.5 h-4 w-4 shrink-0 rounded-full border flex items-center justify-center",
+                    selected ? "border-blue-400" : "border-white/30"
+                  )}
+                >
+                  {sourceSaving === option.value ? (
+                    <Loader2 className="h-3 w-3 animate-spin text-blue-400" />
+                  ) : (
+                    selected && <span className="h-2 w-2 rounded-full bg-blue-400" />
+                  )}
+                </span>
+                <span className="min-w-0">
+                  <span className="flex items-center gap-2">
+                    <span className="text-sm font-medium text-white">{option.title}</span>
+                    {selected && (
+                      <span className="text-[10px] uppercase tracking-wide text-blue-300">
+                        Active
+                      </span>
+                    )}
+                  </span>
+                  <span className="block text-xs text-white/40 mt-1">{option.body}</span>
+                  {option.value === "data" && careerDataReady === false && (
+                    <span className="block text-xs text-amber-400/90 mt-2">
+                      Your Career Data is empty — add experience, projects, or skills under
+                      Settings → Resume → Career Data, or tailoring will fall back to your
+                      uploaded resume.
+                    </span>
+                  )}
+                </span>
+              </button>
+            );
+          })}
+          <p className="text-xs text-white/30">
+            Saved as soon as you choose — the button below is only for limits and notifications.
+          </p>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
           <CardTitle>Daily Action Limits</CardTitle>
           <CardDescription>
             Set safe limits to avoid LinkedIn detection. Conservative defaults
@@ -994,6 +1155,14 @@ export function AutomationTab({
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4 max-w-md">
+          {settings?.limitsEnforced === false && (
+            <p className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-300/90">
+              Daily caps are currently <span className="font-medium">disabled</span> — automation
+              keeps running past these numbers. They are saved as preferences only. Set
+              <span className="font-mono"> ENFORCE_DAILY_LIMITS=true</span> on the server to make
+              them block again.
+            </p>
+          )}
           {[
             {
               key: "applies" as const,
@@ -1185,6 +1354,366 @@ export function ResumeTab() {
   const [editData, setEditData] = useState<Partial<ParsedResumeData> | null>(null);
   const [savingEdit, setSavingEdit] = useState(false);
 
+  // Career data (for AI source = "data")
+  type CareerForm = {
+    contactInfo: {
+      name: string;
+      email: string;
+      phone: string;
+      location: string;
+      linkedin: string;
+      github: string;
+      portfolio: string;
+    };
+    summary: string;
+    skillsText: string;
+    experience: {
+      company: string;
+      title: string;
+      startDate: string;
+      endDate: string;
+      current: boolean;
+      description: string;
+      highlightsText: string;
+    }[];
+    education: {
+      school: string;
+      degree: string;
+      field: string;
+      startDate: string;
+      endDate: string;
+      gpa: string;
+    }[];
+    projects: {
+      name: string;
+      description: string;
+      url: string;
+      techText: string;
+    }[];
+    certifications: { name: string; issuer: string; date: string }[];
+  };
+
+  const emptyCareerForm = (): CareerForm => ({
+    contactInfo: {
+      name: "",
+      email: "",
+      phone: "",
+      location: "",
+      linkedin: "",
+      github: "",
+      portfolio: "",
+    },
+    summary: "",
+    skillsText: "",
+    experience: [],
+    education: [],
+    projects: [],
+    certifications: [],
+  });
+
+  const [careerForm, setCareerForm] = useState<CareerForm>(emptyCareerForm);
+  const [careerLoading, setCareerLoading] = useState(true);
+  const [careerSaving, setCareerSaving] = useState(false);
+  const [careerOpen, setCareerOpen] = useState(true);
+  const [careerRawText, setCareerRawText] = useState("");
+  const [careerParsing, setCareerParsing] = useState(false);
+
+  const fetchCareerProfile = useCallback(async () => {
+    setCareerLoading(true);
+    try {
+      const res = await fetch("/api/career-profile");
+      if (res.ok) {
+        const data = await res.json();
+        const p = data.profile || {};
+        setCareerForm({
+          contactInfo: {
+            name: p.contactInfo?.name || "",
+            email: p.contactInfo?.email || "",
+            phone: p.contactInfo?.phone || "",
+            location: p.contactInfo?.location || "",
+            linkedin: p.contactInfo?.linkedin || "",
+            github: p.contactInfo?.github || "",
+            portfolio: p.contactInfo?.portfolio || "",
+          },
+          summary: p.summary || "",
+          skillsText: (p.skills || []).join(", "),
+          experience: (p.experience || []).map(
+            (e: {
+              company?: string;
+              title?: string;
+              startDate?: string;
+              endDate?: string;
+              current?: boolean;
+              description?: string;
+              highlights?: string[];
+            }) => ({
+              company: e.company || "",
+              title: e.title || "",
+              startDate: e.startDate || "",
+              endDate: e.endDate || "",
+              current: !!e.current,
+              description: e.description || "",
+              highlightsText: (e.highlights || []).join("\n"),
+            })
+          ),
+          education: (p.education || []).map(
+            (e: {
+              school?: string;
+              degree?: string;
+              field?: string;
+              startDate?: string;
+              endDate?: string;
+              gpa?: string;
+            }) => ({
+              school: e.school || "",
+              degree: e.degree || "",
+              field: e.field || "",
+              startDate: e.startDate || "",
+              endDate: e.endDate || "",
+              gpa: e.gpa || "",
+            })
+          ),
+          projects: (p.projects || []).map(
+            (pr: {
+              name?: string;
+              description?: string;
+              url?: string;
+              tech?: string[];
+            }) => ({
+              name: pr.name || "",
+              description: pr.description || "",
+              url: pr.url || "",
+              techText: (pr.tech || []).join(", "),
+            })
+          ),
+          certifications: (p.certifications || []).map(
+            (c: { name?: string; issuer?: string; date?: string }) => ({
+              name: c.name || "",
+              issuer: c.issuer || "",
+              date: c.date || "",
+            })
+          ),
+        });
+        // Auto-expand if empty so user sees they can add data
+        if (!data.exists || !(p.experience?.length || p.skills?.length || p.summary)) {
+          setCareerOpen(true);
+        }
+      }
+    } catch {
+      toast.error("Failed to load career data");
+    }
+    setCareerLoading(false);
+  }, []);
+
+  const saveCareerProfile = async () => {
+    setCareerSaving(true);
+    try {
+      const payload = {
+        contactInfo: careerForm.contactInfo,
+        summary: careerForm.summary,
+        skills: careerForm.skillsText
+          .split(",")
+          .map((s) => s.trim())
+          .filter(Boolean),
+        experience: careerForm.experience.map((e) => ({
+          company: e.company,
+          title: e.title,
+          startDate: e.startDate,
+          endDate: e.current ? null : e.endDate || null,
+          current: e.current,
+          description: e.description,
+          highlights: e.highlightsText
+            .split("\n")
+            .map((h) => h.trim())
+            .filter(Boolean),
+        })),
+        education: careerForm.education.map((e) => ({
+          school: e.school,
+          degree: e.degree,
+          field: e.field,
+          startDate: e.startDate || null,
+          endDate: e.endDate || null,
+          gpa: e.gpa || null,
+        })),
+        projects: careerForm.projects.map((p) => ({
+          name: p.name,
+          description: p.description,
+          url: p.url || null,
+          tech: p.techText
+            .split(",")
+            .map((t) => t.trim())
+            .filter(Boolean),
+        })),
+        certifications: careerForm.certifications.map((c) => ({
+          name: c.name,
+          issuer: c.issuer,
+          date: c.date || null,
+        })),
+      };
+
+      const res = await fetch("/api/career-profile", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      if (res.ok) {
+        toast.success("Career data saved");
+        fetchCareerProfile();
+      } else {
+        const err = await res.json().catch(() => ({}));
+        toast.error(err.error || "Failed to save career data");
+      }
+    } catch {
+      toast.error("Network error. Please try again.");
+    }
+    setCareerSaving(false);
+  };
+
+  const importCareerFromResume = (resume: ResumeItem) => {
+    setCareerForm({
+      contactInfo: {
+        name: resume.contactInfo?.name || "",
+        email: resume.contactInfo?.email || "",
+        phone: resume.contactInfo?.phone || "",
+        location: resume.contactInfo?.location || "",
+        linkedin: resume.contactInfo?.linkedin || "",
+        github: resume.contactInfo?.github || "",
+        portfolio: resume.contactInfo?.portfolio || "",
+      },
+      summary: resume.summary || "",
+      skillsText: (resume.skills || []).join(", "),
+      experience: (resume.experience || []).map((e) => ({
+        company: e.company || "",
+        title: e.title || "",
+        startDate: e.startDate || "",
+        endDate: e.endDate || "",
+        current: !!e.current,
+        description: e.description || "",
+        highlightsText: (e.highlights || []).join("\n"),
+      })),
+      education: (resume.education || []).map((e) => ({
+        school: e.school || "",
+        degree: e.degree || "",
+        field: e.field || "",
+        startDate: e.startDate || "",
+        endDate: e.endDate || "",
+        gpa: e.gpa || "",
+      })),
+      projects: (resume.projects || []).map((p) => ({
+        name: p.name || "",
+        description: p.description || "",
+        url: p.url || "",
+        techText: (p.tech || []).join(", "),
+      })),
+      certifications: (resume.certifications || []).map((c) => ({
+        name: c.name || "",
+        issuer: c.issuer || "",
+        date: c.date || "",
+      })),
+    });
+    setCareerOpen(true);
+    toast.success(`Imported from “${resume.name}” — review and Save Career Data`);
+  };
+
+  const applyParsedToCareerForm = (p: {
+    contactInfo?: Record<string, string | null | undefined>;
+    summary?: string;
+    skills?: string[];
+    experience?: {
+      company?: string;
+      title?: string;
+      startDate?: string;
+      endDate?: string | null;
+      current?: boolean;
+      description?: string;
+      highlights?: string[];
+    }[];
+    education?: {
+      school?: string;
+      degree?: string;
+      field?: string;
+      startDate?: string | null;
+      endDate?: string | null;
+      gpa?: string | null;
+    }[];
+    projects?: {
+      name?: string;
+      description?: string;
+      url?: string | null;
+      tech?: string[];
+    }[];
+    certifications?: { name?: string; issuer?: string; date?: string | null }[];
+  }) => {
+    setCareerForm({
+      contactInfo: {
+        name: p.contactInfo?.name || "",
+        email: p.contactInfo?.email || "",
+        phone: p.contactInfo?.phone || "",
+        location: p.contactInfo?.location || "",
+        linkedin: p.contactInfo?.linkedin || "",
+        github: p.contactInfo?.github || "",
+        portfolio: p.contactInfo?.portfolio || "",
+      },
+      summary: p.summary || "",
+      skillsText: (p.skills || []).join(", "),
+      experience: (p.experience || []).map((e) => ({
+        company: e.company || "",
+        title: e.title || "",
+        startDate: e.startDate || "",
+        endDate: e.endDate || "",
+        current: !!e.current,
+        description: e.description || "",
+        highlightsText: (e.highlights || []).join("\n"),
+      })),
+      education: (p.education || []).map((e) => ({
+        school: e.school || "",
+        degree: e.degree || "",
+        field: e.field || "",
+        startDate: e.startDate || "",
+        endDate: e.endDate || "",
+        gpa: e.gpa || "",
+      })),
+      projects: (p.projects || []).map((pr) => ({
+        name: pr.name || "",
+        description: pr.description || "",
+        url: pr.url || "",
+        techText: (pr.tech || []).join(", "),
+      })),
+      certifications: (p.certifications || []).map((c) => ({
+        name: c.name || "",
+        issuer: c.issuer || "",
+        date: c.date || "",
+      })),
+    });
+  };
+
+  const parseCareerWithAI = async () => {
+    if (!careerRawText.trim() || careerRawText.trim().length < 40) {
+      toast.error("Paste your full career details first (more than a few lines).");
+      return;
+    }
+    setCareerParsing(true);
+    try {
+      const res = await fetch("/api/career-profile?action=parse", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ rawText: careerRawText }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        applyParsedToCareerForm(data.parsed || {});
+        setCareerOpen(true);
+        toast.success("Parsed with AI — review the fields below, then Save Career Data");
+      } else {
+        const err = await res.json().catch(() => ({}));
+        toast.error(err.error || "Failed to parse career data");
+      }
+    } catch {
+      toast.error("Network error. Please try again.");
+    }
+    setCareerParsing(false);
+  };
+
   const fetchResumes = useCallback(async () => {
     setLoading(true);
     try {
@@ -1201,7 +1730,8 @@ export function ResumeTab() {
 
   useEffect(() => {
     fetchResumes();
-  }, [fetchResumes]);
+    fetchCareerProfile();
+  }, [fetchResumes, fetchCareerProfile]);
 
   // Auto-select the only resume for the prompt editor
   useEffect(() => {
@@ -1408,6 +1938,559 @@ export function ResumeTab() {
 
   return (
     <div className="space-y-6">
+      {/* ── Career Data Bank ────────────────────── */}
+      <Card>
+        <CardHeader>
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <CardTitle>Career Data</CardTitle>
+              <CardDescription>
+                Your experience, projects, skills, and education. Used when AI Resume Source is set
+                to “From my career data”. Separate from uploaded resumes.
+              </CardDescription>
+            </div>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setCareerOpen((o) => !o)}
+            >
+              {careerOpen ? "Collapse" : "Expand"}
+            </Button>
+          </div>
+        </CardHeader>
+        {careerOpen && (
+          <CardContent className="space-y-6">
+            {careerLoading ? (
+              <div className="animate-pulse space-y-3">
+                <div className="h-10 rounded-lg bg-[#1A1A1A]" />
+                <div className="h-24 rounded-lg bg-[#1A1A1A]" />
+              </div>
+            ) : (
+              <>
+                {/* Paste + AI parse */}
+                <div className="rounded-xl border border-[#00E5FF]/20 bg-[#00E5FF]/[0.04] p-4 space-y-3">
+                  <div className="flex items-start gap-2">
+                    <Sparkles className="h-4 w-4 text-[#00E5FF] mt-0.5 shrink-0" />
+                    <div>
+                      <p className="text-sm font-medium text-white">Paste &amp; parse with AI</p>
+                      <p className="text-xs text-white/40 mt-0.5">
+                        Paste your LinkedIn profile, resume text, notes, projects — everything.
+                        AI extracts experience, skills, education, and more into the form below.
+                      </p>
+                    </div>
+                  </div>
+                  <Textarea
+                    placeholder="Paste your full career data here — jobs, projects, skills, education, bio..."
+                    value={careerRawText}
+                    onChange={(e) => setCareerRawText(e.target.value)}
+                    rows={8}
+                    className="min-h-[140px] text-sm"
+                  />
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Button
+                      type="button"
+                      onClick={parseCareerWithAI}
+                      disabled={careerParsing || !careerRawText.trim()}
+                      size="sm"
+                    >
+                      {careerParsing ? (
+                        <>
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                          Parsing...
+                        </>
+                      ) : (
+                        <>
+                          <Sparkles className="h-4 w-4" />
+                          Parse with AI
+                        </>
+                      )}
+                    </Button>
+                    <span className="text-[11px] text-white/30">
+                      Requires an AI API key · Review fields after parse, then Save
+                    </span>
+                  </div>
+                </div>
+
+                {resumes.length > 0 && (
+                  <div className="flex flex-wrap items-center gap-2 rounded-xl border border-white/10 bg-white/[0.02] p-3">
+                    <p className="text-xs text-white/40 w-full sm:w-auto">
+                      Or import from an uploaded resume:
+                    </p>
+                    {resumes.map((r) => (
+                      <Button
+                        key={r._id}
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        className="text-xs"
+                        onClick={() => importCareerFromResume(r)}
+                      >
+                        Import “{r.name}”
+                      </Button>
+                    ))}
+                  </div>
+                )}
+
+                {/* Contact */}
+                <div className="space-y-2">
+                  <p className="text-xs font-medium text-white/50 uppercase tracking-wider">
+                    Contact
+                  </p>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    {(
+                      [
+                        ["name", "Full name"],
+                        ["email", "Email"],
+                        ["phone", "Phone"],
+                        ["location", "Location"],
+                        ["linkedin", "LinkedIn"],
+                        ["github", "GitHub"],
+                        ["portfolio", "Portfolio"],
+                      ] as const
+                    ).map(([key, label]) => (
+                      <Input
+                        key={key}
+                        placeholder={label}
+                        value={careerForm.contactInfo[key]}
+                        onChange={(e) =>
+                          setCareerForm((prev) => ({
+                            ...prev,
+                            contactInfo: { ...prev.contactInfo, [key]: e.target.value },
+                          }))
+                        }
+                      />
+                    ))}
+                  </div>
+                </div>
+
+                {/* Summary */}
+                <div className="space-y-2">
+                  <p className="text-xs font-medium text-white/50 uppercase tracking-wider">
+                    Professional summary
+                  </p>
+                  <Textarea
+                    placeholder="Short professional overview..."
+                    value={careerForm.summary}
+                    onChange={(e) =>
+                      setCareerForm((prev) => ({ ...prev, summary: e.target.value }))
+                    }
+                    rows={3}
+                  />
+                </div>
+
+                {/* Skills */}
+                <div className="space-y-2">
+                  <p className="text-xs font-medium text-white/50 uppercase tracking-wider">
+                    Skills (comma-separated)
+                  </p>
+                  <Input
+                    placeholder="React, Node.js, Python, AWS..."
+                    value={careerForm.skillsText}
+                    onChange={(e) =>
+                      setCareerForm((prev) => ({ ...prev, skillsText: e.target.value }))
+                    }
+                  />
+                </div>
+
+                {/* Experience */}
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between">
+                    <p className="text-xs font-medium text-white/50 uppercase tracking-wider">
+                      Experience
+                    </p>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      onClick={() =>
+                        setCareerForm((prev) => ({
+                          ...prev,
+                          experience: [
+                            ...prev.experience,
+                            {
+                              company: "",
+                              title: "",
+                              startDate: "",
+                              endDate: "",
+                              current: false,
+                              description: "",
+                              highlightsText: "",
+                            },
+                          ],
+                        }))
+                      }
+                    >
+                      <Plus className="h-3.5 w-3.5" />
+                      Add role
+                    </Button>
+                  </div>
+                  {careerForm.experience.length === 0 ? (
+                    <p className="text-xs text-white/30">
+                      No roles yet. Click “Add role” or import from a resume.
+                    </p>
+                  ) : (
+                    careerForm.experience.map((exp, idx) => (
+                      <div
+                        key={idx}
+                        className="rounded-xl border border-white/10 bg-[#0A0A0A] p-3 space-y-2"
+                      >
+                        <div className="flex justify-between gap-2">
+                          <p className="text-xs text-white/40">Role {idx + 1}</p>
+                          <button
+                            type="button"
+                            className="text-xs text-red-400/80 hover:text-red-400"
+                            onClick={() =>
+                              setCareerForm((prev) => ({
+                                ...prev,
+                                experience: prev.experience.filter((_, i) => i !== idx),
+                              }))
+                            }
+                          >
+                            Remove
+                          </button>
+                        </div>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                          <Input
+                            placeholder="Job title"
+                            value={exp.title}
+                            onChange={(e) => {
+                              const experience = [...careerForm.experience];
+                              experience[idx] = { ...exp, title: e.target.value };
+                              setCareerForm((prev) => ({ ...prev, experience }));
+                            }}
+                          />
+                          <Input
+                            placeholder="Company"
+                            value={exp.company}
+                            onChange={(e) => {
+                              const experience = [...careerForm.experience];
+                              experience[idx] = { ...exp, company: e.target.value };
+                              setCareerForm((prev) => ({ ...prev, experience }));
+                            }}
+                          />
+                          <Input
+                            placeholder="Start date (e.g. Jan 2022)"
+                            value={exp.startDate}
+                            onChange={(e) => {
+                              const experience = [...careerForm.experience];
+                              experience[idx] = { ...exp, startDate: e.target.value };
+                              setCareerForm((prev) => ({ ...prev, experience }));
+                            }}
+                          />
+                          <Input
+                            placeholder="End date"
+                            value={exp.endDate}
+                            disabled={exp.current}
+                            onChange={(e) => {
+                              const experience = [...careerForm.experience];
+                              experience[idx] = { ...exp, endDate: e.target.value };
+                              setCareerForm((prev) => ({ ...prev, experience }));
+                            }}
+                          />
+                        </div>
+                        <label className="flex items-center gap-2 text-xs text-white/50">
+                          <input
+                            type="checkbox"
+                            checked={exp.current}
+                            onChange={(e) => {
+                              const experience = [...careerForm.experience];
+                              experience[idx] = { ...exp, current: e.target.checked };
+                              setCareerForm((prev) => ({ ...prev, experience }));
+                            }}
+                          />
+                          Current role
+                        </label>
+                        <Textarea
+                          placeholder="Short role description"
+                          rows={2}
+                          value={exp.description}
+                          onChange={(e) => {
+                            const experience = [...careerForm.experience];
+                            experience[idx] = { ...exp, description: e.target.value };
+                            setCareerForm((prev) => ({ ...prev, experience }));
+                          }}
+                        />
+                        <Textarea
+                          placeholder="Achievements (one per line)"
+                          rows={3}
+                          value={exp.highlightsText}
+                          onChange={(e) => {
+                            const experience = [...careerForm.experience];
+                            experience[idx] = { ...exp, highlightsText: e.target.value };
+                            setCareerForm((prev) => ({ ...prev, experience }));
+                          }}
+                        />
+                      </div>
+                    ))
+                  )}
+                </div>
+
+                {/* Projects */}
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between">
+                    <p className="text-xs font-medium text-white/50 uppercase tracking-wider">
+                      Projects
+                    </p>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      onClick={() =>
+                        setCareerForm((prev) => ({
+                          ...prev,
+                          projects: [
+                            ...prev.projects,
+                            { name: "", description: "", url: "", techText: "" },
+                          ],
+                        }))
+                      }
+                    >
+                      <Plus className="h-3.5 w-3.5" />
+                      Add project
+                    </Button>
+                  </div>
+                  {careerForm.projects.map((pr, idx) => (
+                    <div
+                      key={idx}
+                      className="rounded-xl border border-white/10 bg-[#0A0A0A] p-3 space-y-2"
+                    >
+                      <div className="flex justify-between">
+                        <p className="text-xs text-white/40">Project {idx + 1}</p>
+                        <button
+                          type="button"
+                          className="text-xs text-red-400/80"
+                          onClick={() =>
+                            setCareerForm((prev) => ({
+                              ...prev,
+                              projects: prev.projects.filter((_, i) => i !== idx),
+                            }))
+                          }
+                        >
+                          Remove
+                        </button>
+                      </div>
+                      <Input
+                        placeholder="Project name"
+                        value={pr.name}
+                        onChange={(e) => {
+                          const projects = [...careerForm.projects];
+                          projects[idx] = { ...pr, name: e.target.value };
+                          setCareerForm((prev) => ({ ...prev, projects }));
+                        }}
+                      />
+                      <Textarea
+                        placeholder="What you built / impact"
+                        rows={2}
+                        value={pr.description}
+                        onChange={(e) => {
+                          const projects = [...careerForm.projects];
+                          projects[idx] = { ...pr, description: e.target.value };
+                          setCareerForm((prev) => ({ ...prev, projects }));
+                        }}
+                      />
+                      <Input
+                        placeholder="Tech stack (comma-separated)"
+                        value={pr.techText}
+                        onChange={(e) => {
+                          const projects = [...careerForm.projects];
+                          projects[idx] = { ...pr, techText: e.target.value };
+                          setCareerForm((prev) => ({ ...prev, projects }));
+                        }}
+                      />
+                      <Input
+                        placeholder="URL (optional)"
+                        value={pr.url}
+                        onChange={(e) => {
+                          const projects = [...careerForm.projects];
+                          projects[idx] = { ...pr, url: e.target.value };
+                          setCareerForm((prev) => ({ ...prev, projects }));
+                        }}
+                      />
+                    </div>
+                  ))}
+                </div>
+
+                {/* Education */}
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between">
+                    <p className="text-xs font-medium text-white/50 uppercase tracking-wider">
+                      Education
+                    </p>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      onClick={() =>
+                        setCareerForm((prev) => ({
+                          ...prev,
+                          education: [
+                            ...prev.education,
+                            {
+                              school: "",
+                              degree: "",
+                              field: "",
+                              startDate: "",
+                              endDate: "",
+                              gpa: "",
+                            },
+                          ],
+                        }))
+                      }
+                    >
+                      <Plus className="h-3.5 w-3.5" />
+                      Add education
+                    </Button>
+                  </div>
+                  {careerForm.education.map((edu, idx) => (
+                    <div
+                      key={idx}
+                      className="rounded-xl border border-white/10 bg-[#0A0A0A] p-3 space-y-2"
+                    >
+                      <div className="flex justify-between">
+                        <p className="text-xs text-white/40">Education {idx + 1}</p>
+                        <button
+                          type="button"
+                          className="text-xs text-red-400/80"
+                          onClick={() =>
+                            setCareerForm((prev) => ({
+                              ...prev,
+                              education: prev.education.filter((_, i) => i !== idx),
+                            }))
+                          }
+                        >
+                          Remove
+                        </button>
+                      </div>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                        <Input
+                          placeholder="School"
+                          value={edu.school}
+                          onChange={(e) => {
+                            const education = [...careerForm.education];
+                            education[idx] = { ...edu, school: e.target.value };
+                            setCareerForm((prev) => ({ ...prev, education }));
+                          }}
+                        />
+                        <Input
+                          placeholder="Degree"
+                          value={edu.degree}
+                          onChange={(e) => {
+                            const education = [...careerForm.education];
+                            education[idx] = { ...edu, degree: e.target.value };
+                            setCareerForm((prev) => ({ ...prev, education }));
+                          }}
+                        />
+                        <Input
+                          placeholder="Field of study"
+                          value={edu.field}
+                          onChange={(e) => {
+                            const education = [...careerForm.education];
+                            education[idx] = { ...edu, field: e.target.value };
+                            setCareerForm((prev) => ({ ...prev, education }));
+                          }}
+                        />
+                        <Input
+                          placeholder="GPA (optional)"
+                          value={edu.gpa}
+                          onChange={(e) => {
+                            const education = [...careerForm.education];
+                            education[idx] = { ...edu, gpa: e.target.value };
+                            setCareerForm((prev) => ({ ...prev, education }));
+                          }}
+                        />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+                {/* Certifications */}
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between">
+                    <p className="text-xs font-medium text-white/50 uppercase tracking-wider">
+                      Certifications
+                    </p>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      onClick={() =>
+                        setCareerForm((prev) => ({
+                          ...prev,
+                          certifications: [
+                            ...prev.certifications,
+                            { name: "", issuer: "", date: "" },
+                          ],
+                        }))
+                      }
+                    >
+                      <Plus className="h-3.5 w-3.5" />
+                      Add cert
+                    </Button>
+                  </div>
+                  {careerForm.certifications.map((c, idx) => (
+                    <div key={idx} className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                      <Input
+                        placeholder="Name"
+                        value={c.name}
+                        onChange={(e) => {
+                          const certifications = [...careerForm.certifications];
+                          certifications[idx] = { ...c, name: e.target.value };
+                          setCareerForm((prev) => ({ ...prev, certifications }));
+                        }}
+                      />
+                      <Input
+                        placeholder="Issuer"
+                        value={c.issuer}
+                        onChange={(e) => {
+                          const certifications = [...careerForm.certifications];
+                          certifications[idx] = { ...c, issuer: e.target.value };
+                          setCareerForm((prev) => ({ ...prev, certifications }));
+                        }}
+                      />
+                      <div className="flex gap-2">
+                        <Input
+                          placeholder="Date"
+                          value={c.date}
+                          onChange={(e) => {
+                            const certifications = [...careerForm.certifications];
+                            certifications[idx] = { ...c, date: e.target.value };
+                            setCareerForm((prev) => ({ ...prev, certifications }));
+                          }}
+                        />
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon"
+                          onClick={() =>
+                            setCareerForm((prev) => ({
+                              ...prev,
+                              certifications: prev.certifications.filter((_, i) => i !== idx),
+                            }))
+                          }
+                        >
+                          <Trash2 className="h-4 w-4 text-red-400/80" />
+                        </Button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+                <Button onClick={saveCareerProfile} disabled={careerSaving} className="w-full sm:w-auto">
+                  {careerSaving ? (
+                    <>
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                      Saving...
+                    </>
+                  ) : (
+                    "Save Career Data"
+                  )}
+                </Button>
+              </>
+            )}
+          </CardContent>
+        )}
+      </Card>
+
       {/* ── Resume List ────────────────────────── */}
       <Card>
         <CardHeader>

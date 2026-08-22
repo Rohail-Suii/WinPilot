@@ -65,7 +65,7 @@ const LeadGenCampaignSchema = new Schema<ILeadGenCampaign>(
       enum: ["active", "paused", "stopped"],
       default: "paused",
     },
-    dailyCommentLimit: { type: Number, default: 10, min: 1, max: 15 },
+    dailyCommentLimit: { type: Number, default: 10, min: 1 },
     postsPerKeyword: { type: Number, default: 5, min: 1, max: 20 },
     stats: {
       totalCommented: { type: Number, default: 0 },

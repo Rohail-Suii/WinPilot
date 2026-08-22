@@ -33,6 +33,8 @@ export interface IUser extends Document {
       posts: number;
       scrapes: number;
     };
+    /** How AI builds per-job resumes during automation: uploaded resume doc vs full career data */
+    resumeTailoringSource?: "resume" | "data";
   };
   subscription: {
     plan: string;
@@ -83,6 +85,11 @@ const UserSchema = new Schema<IUser>(
         applies: { type: Number, default: 15 },
         posts: { type: Number, default: 2 },
         scrapes: { type: Number, default: 50 },
+      },
+      resumeTailoringSource: {
+        type: String,
+        enum: ["resume", "data"],
+        default: "resume",
       },
     },
     subscription: {

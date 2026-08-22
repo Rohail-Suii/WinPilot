@@ -16,7 +16,9 @@ async function syncUserPreferences() {
       return;
     }
 
-    const url = apiUrl || "https://winpilot.tech";
+    const stale = /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i;
+    const trimmed = (apiUrl || "").replace(/\/$/, "");
+    const url = trimmed && !stale.test(trimmed) ? trimmed : "https://winpilot.onrender.com";
     const response = await fetch(`${url}/api/settings/automation`, {
       method: "GET",
       headers: {

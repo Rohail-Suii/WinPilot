@@ -54,7 +54,7 @@ export async function parseResumeWithAI(
   }
 
   const messages = buildResumeParsingPrompt(rawText);
-  const parsed = await ai.generateJSON<ParsedResume>(messages);
+  const parsed = await ai.generateJSON<ParsedResume>(messages, { maxTokens: 4096 });
   return parsed;
 }
 

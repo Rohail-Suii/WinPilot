@@ -7,6 +7,7 @@ import ScrapedData from "@/lib/db/models/scraped-data";
 import ActivityLog from "@/lib/db/models/activity-log";
 import DailyUsage from "@/lib/db/models/daily-usage";
 import { checkApiRateLimit } from "@/lib/utils/rate-limit";
+import { DAILY_LIMITS_ENFORCED } from "@/lib/anti-detection/rate-limiter";
 
 export async function GET(req: Request) {
   try {
@@ -234,6 +235,8 @@ export async function GET(req: Request) {
       comments: 0,
       connectionRequests: 0,
     };
+    // Reference volumes for the safety score only — these no longer cap
+    // anything unless ENFORCE_DAILY_LIMITS is set (see lib/anti-detection/rate-limiter).
     const maxLimits = { applies: 15, posts: 2, scrapes: 50, profileViews: 30, messages: 10, comments: 15 };
     const usageRatios = [
       todayActions.applies / maxLimits.applies,
@@ -260,6 +263,7 @@ export async function GET(req: Request) {
       activityByModule: activityByModule.map((d) => ({ module: d._id, count: d.count })),
       safetyScore,
       dailyLimits: maxLimits,
+      limitsEnforced: DAILY_LIMITS_ENFORCED,
     }, {
       headers: {
         "Cache-Control": "private, max-age=30, stale-while-revalidate=60",

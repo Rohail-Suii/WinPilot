@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { toast } from "sonner";
@@ -32,6 +32,10 @@ import {
   Key,
   SlidersHorizontal,
   Check,
+  Pencil,
+  FormInput,
+  Link2,
+  Send,
 } from "lucide-react";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Card, CardContent } from "@/components/ui/card";
@@ -52,6 +56,7 @@ import {
 import { jobSearchSchema } from "@/lib/validators";
 import { useExtensionStore } from "@/lib/hooks/use-stores";
 import { useWebSocket } from "@/lib/websocket/client";
+import { parseLinkedInJobUrl, parseLinkedInJobListUrl } from "@/lib/utils/linkedin-url";
 import { z } from "zod";
 import {
   AIKeysTab,
@@ -105,6 +110,15 @@ interface JobApplicationItem {
     keywordsUsed?: string[];
   };
   formAnswers?: { question: string; answer: string }[];
+  outreach?: {
+    attempted?: boolean;
+    sent?: boolean;
+    channel?: "hiring_team" | "company_page" | "connection";
+    recipient?: string;
+    message?: string;
+    reason?: string;
+    at?: string;
+  };
   createdAt: string;
 }
 
@@ -116,6 +130,12 @@ interface ApplicationStats {
   thisMonth: number;
 }
 
+const OUTREACH_CHANNEL_LABEL: Record<string, string> = {
+  hiring_team: "messaged hiring team",
+  company_page: "messaged company page",
+  connection: "messaged a connection",
+};
+
 export function JobsClient() {
   const [activeTab, setActiveTab] = useState("searches");
   const [searches, setSearches] = useState<JobSearchItem[]>([]);
@@ -124,6 +144,7 @@ export function JobsClient() {
   const [stats, setStats] = useState<ApplicationStats | null>(null);
   const [loading, setLoading] = useState(true);
   const [addOpen, setAddOpen] = useState(false);
+  const [editingSearch, setEditingSearch] = useState<JobSearchItem | null>(null);
   const [statusFilter, setStatusFilter] = useState("");
   const [expandedApp, setExpandedApp] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
@@ -146,9 +167,15 @@ export function JobsClient() {
   const [automationSettings, setAutomationSettings] = useState<AutomationSettings | null>(null);
 
   const { isConnected, currentTask, lastTaskError, aiQuotaStatus, automationRunning, automationLogs, clearLogs, setAutomationRunning } = useExtensionStore();
-  const { startAutomation, stopAutomation } = useWebSocket();
+  const { startAutomation, applyJobUrl, applyJobList, stopAutomation } = useWebSocket();
+  const [jobLink, setJobLink] = useState("");
+  // What the pasted link supports: one job, a whole results page, or both
+  const parsedJobLink = useMemo(() => parseLinkedInJobUrl(jobLink), [jobLink]);
+  const parsedListLink = useMemo(() => parseLinkedInJobListUrl(jobLink), [jobLink]);
   const [useAI, setUseAI] = useState(true);
   const [useJobMatching, setUseJobMatching] = useState(true);
+  const [useAIFormFilling, setUseAIFormFilling] = useState(false);
+  const [useAutoMessaging, setUseAutoMessaging] = useState(false);
   const logsEndRef = useRef<HTMLDivElement>(null);
   const [autoScroll, setAutoScroll] = useState(true);
 
@@ -158,6 +185,10 @@ export function JobsClient() {
     if (savedAI === "false") setUseAI(false);
     const savedMatch = window.localStorage.getItem("jobs-automation-use-matching");
     if (savedMatch === "false") setUseJobMatching(false);
+    const savedForm = window.localStorage.getItem("jobs-automation-use-ai-form-filling");
+    if (savedForm === "true") setUseAIFormFilling(true);
+    const savedMessaging = window.localStorage.getItem("jobs-automation-use-auto-messaging");
+    if (savedMessaging === "true") setUseAutoMessaging(true);
   }, []);
 
   const handleAiToggle = (checked: boolean) => {
@@ -181,6 +212,30 @@ export function JobsClient() {
       checked
         ? "Job Matching ON: AI scores jobs against your resume before applying (uses AI credits)"
         : "Job Matching OFF: applies to all eligible jobs without scoring",
+    );
+  };
+
+  const handleFormFillingToggle = (checked: boolean) => {
+    setUseAIFormFilling(checked);
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem("jobs-automation-use-ai-form-filling", String(checked));
+    }
+    toast.info(
+      checked
+        ? "AI Form Filling ON: AI answers screening questions from your resume (uses AI credits)"
+        : "AI Form Filling OFF: uses built-in rule-based answers",
+    );
+  };
+
+  const handleAutoMessagingToggle = (checked: boolean) => {
+    setUseAutoMessaging(checked);
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem("jobs-automation-use-auto-messaging", String(checked));
+    }
+    toast.info(
+      checked
+        ? "Auto Messaging ON: after each application, WinPilot messages the hiring team, the company page, or a connection there (slower, uses AI credits)"
+        : "Auto Messaging OFF: applications are submitted without any follow-up message",
     );
   };
 
@@ -288,18 +343,59 @@ export function JobsClient() {
     fetchSearches();
   };
 
+  const openEditDialog = (search: JobSearchItem) => {
+    setEditingSearch(search);
+    setAddOpen(true);
+  };
+
   const handleStartAutomation = (searchId: string) => {
     if (!isConnected) {
       toast.error("Extension not connected. Open LinkedIn in Chrome with the extension enabled.");
       return;
     }
-    startAutomation(searchId, { useAI, useJobMatching });
+    startAutomation(searchId, { useAI, useJobMatching, useAIFormFilling, useAutoMessaging });
     setAutomationRunning(true);
+    const modes = [
+      useAI ? "AI resume" : null,
+      useJobMatching ? "matching" : null,
+      useAIFormFilling ? "AI form fill" : null,
+      useAutoMessaging ? "auto messaging" : null,
+    ].filter(Boolean);
     toast.success(
-      useAI
-        ? "Automation started with AI Resume Tailoring."
-        : "Automation started without AI tailoring.",
+      modes.length
+        ? `Automation started (${modes.join(", ")}).`
+        : "Automation started (rule-based only).",
     );
+  };
+
+  const handleApplyFromLink = () => {
+    if (!parsedJobLink) {
+      toast.error("Paste a LinkedIn job link — the job page, a search URL with the job open, or the job id.");
+      return;
+    }
+    if (!isConnected) {
+      toast.error("Extension not connected. Open LinkedIn in Chrome with the extension enabled.");
+      return;
+    }
+    applyJobUrl(parsedJobLink.jobUrl, { useAI, useJobMatching, useAIFormFilling, useAutoMessaging });
+    setAutomationRunning(true);
+    setActiveTab("logs");
+    toast.success("Checking the job and applying — watch the logs for progress.");
+  };
+
+  const handleApplyAllFromLink = () => {
+    if (!parsedListLink) {
+      toast.error("Paste a LinkedIn jobs list — a search, a collection, or a \"jobs for you\" results page.");
+      return;
+    }
+    if (!isConnected) {
+      toast.error("Extension not connected. Open LinkedIn in Chrome with the extension enabled.");
+      return;
+    }
+    applyJobList(parsedListLink.listUrl, { useAI, useJobMatching, useAIFormFilling, useAutoMessaging });
+    setAutomationRunning(true);
+    setActiveTab("logs");
+    toast.success("Reading the jobs on that page and applying to each one — watch the logs.");
   };
 
   const handleStopAutomation = () => {
@@ -342,7 +438,7 @@ export function JobsClient() {
           <h2 className="text-2xl font-bold text-white">Job Automation</h2>
           <p className="text-white/50 mt-1">Configure searches and track applications</p>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-3 flex-wrap justify-end">
           <div className="flex items-center gap-2 rounded-lg border border-white/10 bg-white/[0.03] px-3 py-1.5">
             <Sparkles className="h-3.5 w-3.5 text-purple-400/70" />
             <span className="text-xs text-white/70">AI Resume Tailoring</span>
@@ -355,6 +451,18 @@ export function JobsClient() {
             <Switch checked={useJobMatching} onCheckedChange={handleMatchToggle} />
             <span className="text-xs text-white/40">{useJobMatching ? "ON" : "OFF"}</span>
           </div>
+          <div className="flex items-center gap-2 rounded-lg border border-white/10 bg-white/[0.03] px-3 py-1.5">
+            <FormInput className="h-3.5 w-3.5 text-emerald-400/70" />
+            <span className="text-xs text-white/70">AI Form Filling</span>
+            <Switch checked={useAIFormFilling} onCheckedChange={handleFormFillingToggle} />
+            <span className="text-xs text-white/40">{useAIFormFilling ? "ON" : "OFF"}</span>
+          </div>
+          <div className="flex items-center gap-2 rounded-lg border border-white/10 bg-white/[0.03] px-3 py-1.5">
+            <Send className="h-3.5 w-3.5 text-amber-400/70" />
+            <span className="text-xs text-white/70">Auto Messaging</span>
+            <Switch checked={useAutoMessaging} onCheckedChange={handleAutoMessagingToggle} />
+            <span className="text-xs text-white/40">{useAutoMessaging ? "ON" : "OFF"}</span>
+          </div>
           <div className="flex items-center gap-2 text-sm">
             <span className={`h-2 w-2 rounded-full ${isConnected ? "bg-emerald-400" : "bg-red-400"}`} />
             <span className="text-white/40">{isConnected ? "Extension connected" : "Extension offline"}</span>
@@ -364,7 +472,7 @@ export function JobsClient() {
               <Square className="h-3.5 w-3.5 mr-1.5" />Stop
             </Button>
           )}
-          <Button onClick={() => setAddOpen(true)}>
+          <Button onClick={() => { setEditingSearch(null); setAddOpen(true); }}>
             <Plus className="h-4 w-4" />New Search
           </Button>
         </div>
@@ -420,6 +528,75 @@ export function JobsClient() {
         </TabsList>
 
         <TabsContent value="searches">
+          {/* Apply straight from a pasted LinkedIn link — one job or a whole page */}
+          <Card className="mb-4 border-white/10">
+            <CardContent className="p-5 space-y-3">
+              <div className="flex items-center gap-2">
+                <Link2 className="h-4 w-4 text-emerald-400" />
+                <h3 className="font-semibold text-white">Apply from a link</h3>
+              </div>
+              <p className="text-sm text-white/50">
+                Found jobs yourself? Paste a LinkedIn link and WinPilot checks each posting, tailors your
+                resume, fills the Easy Apply form, and submits it — no saved search needed. Apply to the one
+                job in the link, or to every job on the results page it points at.
+              </p>
+              <Input
+                placeholder="Paste a LinkedIn job link or a jobs results page link"
+                value={jobLink}
+                onChange={(e) => setJobLink(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && !automationRunning) handleApplyFromLink();
+                }}
+              />
+              <div className="flex flex-col gap-2 sm:flex-row">
+                <Button
+                  onClick={handleApplyFromLink}
+                  disabled={automationRunning || !isConnected || !parsedJobLink}
+                  title={
+                    !isConnected
+                      ? "Extension not connected"
+                      : automationRunning
+                        ? "Automation running"
+                        : !parsedJobLink
+                          ? "Paste a link that points at one job"
+                          : "Check this job and apply"
+                  }
+                >
+                  <Play className="h-4 w-4" />
+                  Apply to this job
+                </Button>
+                <Button
+                  variant="outline"
+                  onClick={handleApplyAllFromLink}
+                  disabled={automationRunning || !isConnected || !parsedListLink}
+                  title={
+                    !isConnected
+                      ? "Extension not connected"
+                      : automationRunning
+                        ? "Automation running"
+                        : !parsedListLink
+                          ? "Paste a jobs search, collection, or \"jobs for you\" page link"
+                          : "Apply to every job on this page"
+                  }
+                >
+                  <Briefcase className="h-4 w-4" />
+                  Apply to all jobs on this page
+                </Button>
+              </div>
+              <p className="text-xs text-white/35">
+                {jobLink.trim() && !parsedJobLink && !parsedListLink
+                  ? "That link isn't a LinkedIn job or jobs list — copy the URL from the LinkedIn jobs page."
+                  : parsedListLink && parsedJobLink
+                    ? "This link works both ways: apply only to the open job, or to every job on the page (up to 25 per run)."
+                    : parsedListLink
+                      ? "Applies to every job on this results page, up to 25 per run."
+                      : parsedJobLink
+                        ? `Job ${parsedJobLink.jobId} — WinPilot will open it and apply.`
+                        : "Works with job pages, search and \u201cjobs for you\u201d results pages, collections, and bare job ids. Easy Apply jobs only — external application sites can't be automated."}
+              </p>
+            </CardContent>
+          </Card>
+
           {loading ? (
             <div className="animate-pulse space-y-4">
               {[1, 2, 3].map((i) => <div key={i} className="h-24 rounded-xl bg-white/5" />)}
@@ -429,7 +606,7 @@ export function JobsClient() {
               icon={<Briefcase className="h-10 w-10 text-white/20" />}
               title="No saved searches"
               description="Create a job search configuration to start auto-applying"
-              action={<Button onClick={() => setAddOpen(true)} size="sm"><Plus className="h-4 w-4" />Create Search</Button>}
+              action={<Button onClick={() => { setEditingSearch(null); setAddOpen(true); }} size="sm"><Plus className="h-4 w-4" />Create Search</Button>}
             />
           ) : (
             <div className="grid gap-4 md:grid-cols-2">
@@ -472,7 +649,10 @@ export function JobsClient() {
                         >
                           <Play className="h-4 w-4 text-emerald-400" />
                         </Button>
-                        <Button variant="ghost" size="icon" onClick={() => deleteSearch(search._id)}>
+                        <Button variant="ghost" size="icon" onClick={() => openEditDialog(search)} title="Edit search">
+                          <Pencil className="h-4 w-4 text-white/60" />
+                        </Button>
+                        <Button variant="ghost" size="icon" onClick={() => deleteSearch(search._id)} title="Delete search">
                           <Trash2 className="h-4 w-4 text-red-400" />
                         </Button>
                       </div>
@@ -553,7 +733,11 @@ export function JobsClient() {
                       </div>
                     </div>
                     <div className="flex items-center gap-3">
-                      <Badge variant={statusVariant(app.status)}>{app.status}</Badge>
+                      <Badge variant={statusVariant(app.status)}>
+                        {app.status === "skipped" && /external/i.test(app.notes || "")
+                          ? "external link"
+                          : app.status}
+                      </Badge>
                       <span className="text-xs text-white/30">
                         {new Date(app.appliedAt || app.createdAt).toLocaleDateString()}
                       </span>
@@ -702,6 +886,27 @@ export function JobsClient() {
                         </div>
                       )}
 
+                      {app.outreach?.attempted && (
+                        <div className="space-y-1">
+                          <p className="text-xs font-medium text-white/60">
+                            Follow-up message
+                            <Badge variant={app.outreach.sent ? "success" : "default"} className="ml-2">
+                              {app.outreach.sent ? OUTREACH_CHANNEL_LABEL[app.outreach.channel ?? "company_page"] : "not sent"}
+                            </Badge>
+                          </p>
+                          {app.outreach.sent ? (
+                            <p className="text-xs text-white/70 whitespace-pre-line">
+                              {app.outreach.recipient && (
+                                <span className="text-white/50">To {app.outreach.recipient}: </span>
+                              )}
+                              {app.outreach.message}
+                            </p>
+                          ) : (
+                            <p className="text-xs text-white/40">{app.outreach.reason}</p>
+                          )}
+                        </div>
+                      )}
+
                       {app.notes && (
                         <p className="text-xs text-white/40">
                           <span className="text-white/60">Notes:</span> {app.notes}
@@ -841,7 +1046,16 @@ export function JobsClient() {
         </TabsContent>
       </Tabs>
 
-      <AddSearchDialog open={addOpen} onOpenChange={setAddOpen} onSuccess={fetchSearches} />
+      <AddSearchDialog
+        key={editingSearch?._id ?? "create"}
+        open={addOpen}
+        onOpenChange={(open) => {
+          setAddOpen(open);
+          if (!open) setEditingSearch(null);
+        }}
+        onSuccess={fetchSearches}
+        editingSearch={editingSearch}
+      />
     </div>
   );
 }
@@ -1034,42 +1248,58 @@ function AddSearchDialog({
   open,
   onOpenChange,
   onSuccess,
+  editingSearch,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onSuccess: () => void;
+  editingSearch?: JobSearchItem | null;
 }) {
+  const isEditing = !!editingSearch;
   const [saving, setSaving] = useState(false);
   const { register, handleSubmit, reset, formState: { errors } } = useForm<JobSearchFormValues>({
     resolver: zodResolver(jobSearchSchema),
-    defaultValues: {
-      name: "",
-      keywords: "",
-      location: "",
-      remote: false,
-      experienceLevel: [],
-      datePosted: "any",
-      easyApplyOnly: true,
-    },
+    defaultValues: editingSearch
+      ? {
+          name: editingSearch.name,
+          keywords: editingSearch.keywords,
+          location: editingSearch.location || "",
+          remote: editingSearch.remote,
+          experienceLevel: editingSearch.experienceLevel as JobSearchFormValues["experienceLevel"],
+          datePosted: editingSearch.datePosted as JobSearchFormValues["datePosted"],
+          easyApplyOnly: editingSearch.easyApplyOnly,
+        }
+      : {
+          name: "",
+          keywords: "",
+          location: "",
+          remote: false,
+          experienceLevel: [],
+          datePosted: "any",
+          easyApplyOnly: true,
+        },
   });
 
   const onSubmit = async (data: JobSearchFormValues) => {
     setSaving(true);
-    const res = await fetch("/api/jobs", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(data),
-    });
+    const res = await fetch(
+      isEditing ? `/api/jobs?id=${editingSearch._id}` : "/api/jobs",
+      {
+        method: isEditing ? "PUT" : "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(data),
+      }
+    );
     setSaving(false);
 
     if (res.ok) {
-      toast.success("Search created");
+      toast.success(isEditing ? "Search updated" : "Search created");
       onOpenChange(false);
       reset();
       onSuccess();
     } else {
       const err = await res.json();
-      toast.error(err.error || "Failed to create search");
+      toast.error(err.error || `Failed to ${isEditing ? "update" : "create"} search`);
     }
   };
 
@@ -1086,8 +1316,10 @@ function AddSearchDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>Create Job Search</DialogTitle>
-          <DialogDescription>Configure a new job search for auto-apply</DialogDescription>
+          <DialogTitle>{isEditing ? "Edit Job Search" : "Create Job Search"}</DialogTitle>
+          <DialogDescription>
+            {isEditing ? "Update this job search's configuration" : "Configure a new job search for auto-apply"}
+          </DialogDescription>
         </DialogHeader>
         <form onSubmit={handleSubmit(onSubmit)} className="space-y-4 max-h-[60vh] overflow-y-auto pr-1">
           <div className="space-y-2">
@@ -1144,7 +1376,9 @@ function AddSearchDialog({
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
             <Button type="submit" disabled={saving}>
-              {saving ? <><Loader2 className="h-4 w-4 animate-spin" />Creating...</> : "Create Search"}
+              {saving
+                ? <><Loader2 className="h-4 w-4 animate-spin" />{isEditing ? "Saving..." : "Creating..."}</>
+                : isEditing ? "Save Changes" : "Create Search"}
             </Button>
           </DialogFooter>
         </form>
