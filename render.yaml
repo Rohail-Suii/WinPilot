@@ -13,7 +13,10 @@ services:
     plan: starter
     region: oregon
     branch: master
-    buildCommand: npm install && npm run build
+    # --include=dev is REQUIRED: NODE_ENV=production makes npm omit
+    # devDependencies, but next build needs typescript, tailwindcss,
+    # @tailwindcss/postcss and the @types/* packages.
+    buildCommand: npm install --include=dev && npm run build
     startCommand: npm start
     healthCheckPath: /api/health
     envVars:

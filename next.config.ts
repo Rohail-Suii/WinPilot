@@ -1,9 +1,19 @@
 import type { NextConfig } from "next";
-import bundleAnalyzer from "@next/bundle-analyzer";
 
-const withBundleAnalyzer = bundleAnalyzer({
-  enabled: process.env.ANALYZE === "true",
-});
+/**
+ * Wraps the config with @next/bundle-analyzer, but only when ANALYZE=true.
+ *
+ * The analyzer is a devDependency and is loaded lazily so that a production
+ * install (`npm install` with NODE_ENV=production, which omits devDependencies)
+ * can still build. A static import here fails the build with MODULE_NOT_FOUND.
+ */
+function withBundleAnalyzer(config: NextConfig): NextConfig {
+  if (process.env.ANALYZE !== "true") return config;
+
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const bundleAnalyzer = require("@next/bundle-analyzer");
+  return bundleAnalyzer({ enabled: true })(config);
+}
 
 const nextConfig: NextConfig = {
   serverExternalPackages: ["mongoose", "bcryptjs", "pdfkit", "mongodb"],
