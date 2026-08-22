@@ -15,8 +15,14 @@ import next from "next";
 import { initSocketServer, initRawWebSocketServer } from "./lib/websocket/server";
 
 const dev = process.env.NODE_ENV !== "production";
-const hostname = process.env.HOSTNAME || (dev ? "localhost" : "0.0.0.0");
 const port = parseInt(process.env.PORT || "3000", 10);
+
+// Address to bind. Deliberately does NOT read HOSTNAME: container runtimes
+// (Docker, Kubernetes, Render) set that to the container's *name*, which
+// resolves to a single interface. Binding to it leaves nothing listening on
+// localhost, so the platform's port detection and health checks fail and every
+// request 502s. Use BIND_HOST for an explicit override.
+const hostname = process.env.BIND_HOST || (dev ? "localhost" : "0.0.0.0");
 
 // Optional: bind a second HTTP listener for the WebSocket server. Only used by
 // deployments that expose more than one port (e.g. the docker-compose stack).

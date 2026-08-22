@@ -69,7 +69,9 @@ WORKDIR /app
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
 ENV PORT=3000
-ENV HOSTNAME=0.0.0.0
+# Bind all interfaces. BIND_HOST (not HOSTNAME) — the runtime sets HOSTNAME to
+# the container name, which is not a usable bind address.
+ENV BIND_HOST=0.0.0.0
 
 # Install dumb-init for proper signal handling
 RUN apk add --no-cache dumb-init
