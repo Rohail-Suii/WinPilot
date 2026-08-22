@@ -149,3 +149,49 @@ describe('Rate Limiter - DAILY_LIMITS and SPEED_PRESETS', () => {
     expect(balancedApplies).toBeLessThan(aggressiveApplies);
   });
 });
+
+describe('Rate Limiter - daily cap enforcement switch', () => {
+  const usageAbove = (n: number) => ({
+    findOne: vi.fn().mockReturnValue({
+      lean: vi.fn().mockResolvedValue({ actions: { applies: n } }),
+    }),
+    findOneAndUpdate: vi.fn().mockResolvedValue(null),
+  });
+
+  it('never blocks an action while ENFORCE_DAILY_LIMITS is unset', async () => {
+    vi.resetModules();
+    vi.doMock('@/lib/db/models/daily-usage', () => ({ default: usageAbove(9999) }));
+    const { canPerformAction, DAILY_LIMITS_ENFORCED } = await import(
+      '@/lib/anti-detection/rate-limiter'
+    );
+
+    expect(DAILY_LIMITS_ENFORCED).toBe(false);
+    const result = await canPerformAction('user-1', 'applies');
+    expect(result.allowed).toBe(true);
+    expect(Number.isFinite(result.limit)).toBe(false);
+  });
+
+  it('blocks past the cap when ENFORCE_DAILY_LIMITS=true', async () => {
+    vi.resetModules();
+    vi.stubEnv('ENFORCE_DAILY_LIMITS', 'true');
+    vi.doMock('@/lib/db/models/daily-usage', () => ({ default: usageAbove(9999) }));
+    const { canPerformAction } = await import('@/lib/anti-detection/rate-limiter');
+
+    const result = await canPerformAction('user-1', 'applies');
+    expect(result.allowed).toBe(false);
+    expect(Number.isFinite(result.limit)).toBe(true);
+    vi.unstubAllEnvs();
+  });
+
+  it('reports no usage percentage while uncapped, so no near-limit warnings fire', async () => {
+    vi.resetModules();
+    vi.doMock('@/lib/db/models/daily-usage', () => ({ default: usageAbove(9999) }));
+    const { getUsageSummary, isApproachingLimits } = await import(
+      '@/lib/anti-detection/rate-limiter'
+    );
+
+    const summary = await getUsageSummary('user-1');
+    expect(summary.every((s) => s.percentage === 0)).toBe(true);
+    expect((await isApproachingLimits('user-1')).approaching).toBe(false);
+  });
+});

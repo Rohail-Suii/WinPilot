@@ -9,12 +9,28 @@ import { DAILY_LIMITS, SPEED_PRESETS, type SpeedPreset } from "./human-simulator
 
 type ActionType = keyof typeof DAILY_LIMITS;
 
+/**
+ * Daily action caps are OFF by default — automation runs uncapped. Usage is
+ * still counted so analytics keep working; only the blocking is gone.
+ * Set ENFORCE_DAILY_LIMITS=true to bring the DAILY_LIMITS caps back.
+ */
+export const DAILY_LIMITS_ENFORCED = process.env.ENFORCE_DAILY_LIMITS === "true";
+
+/** Sentinel for "no cap". Callers must use Number.isFinite() before doing math on a limit. */
+export const UNLIMITED = Infinity;
+
 function getTodayKey(): string {
   return new Date().toISOString().split("T")[0];
 }
 
+function limitFor(actionType: ActionType, speed: SpeedPreset): number {
+  if (!DAILY_LIMITS_ENFORCED) return UNLIMITED;
+  return Math.floor(DAILY_LIMITS[actionType] * SPEED_PRESETS[speed]);
+}
+
 /**
- * Check if an action can be performed without exceeding daily limits
+ * Check if an action can be performed without exceeding daily limits.
+ * With enforcement off, `allowed` is always true and `limit` is Infinity.
  */
 export async function canPerformAction(
   userId: string,
@@ -26,7 +42,7 @@ export async function canPerformAction(
 
   const usage = await DailyUsage.findOne({ userId, date: today }).lean();
   const current = usage?.actions?.[actionType] ?? 0;
-  const limit = Math.floor(DAILY_LIMITS[actionType] * SPEED_PRESETS[speed]);
+  const limit = limitFor(actionType, speed);
 
   return { allowed: current < limit, current, limit };
 }
@@ -77,12 +93,14 @@ export async function getUsageSummary(
 
   return (Object.keys(DAILY_LIMITS) as ActionType[]).map((actionType) => {
     const current = usage[actionType] ?? 0;
-    const limit = Math.floor(DAILY_LIMITS[actionType] * SPEED_PRESETS[speed]);
+    const limit = limitFor(actionType, speed);
     return {
       actionType,
       current,
+      // An uncapped action is never a percentage of anything, so it reports 0
+      // and never trips the "approaching limit" warnings below.
+      percentage: Number.isFinite(limit) && limit > 0 ? Math.round((current / limit) * 100) : 0,
       limit,
-      percentage: limit > 0 ? Math.round((current / limit) * 100) : 0,
     };
   });
 }

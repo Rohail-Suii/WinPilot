@@ -32,7 +32,7 @@ Goals in this mode:
 - Remix experience + projects aggressively to surface role-relevant work; de-emphasize unrelated responsibilities
 - Reorder highlights so the strongest JD-aligned proof points appear first
 - Expand transferable work into target-domain language (without inventing employers, dates, degrees, or fake jobs)
-- Write like a specialized operator in that domain (terminology, metrics, tools stack from the JD)
+- Write like a specialized operator in that domain (terminology, tools stack from the JD — only where evidence exists)
 - Prefer projects when they prove the target stack better than older jobs
 - Produce a complete, role-native resume — not a light edit of an old doc`;
   }
@@ -47,6 +47,185 @@ Goals in this mode:
 - Elevate impact language and keyword coverage without a full role-pivot rewrite
 - Prefer improvements that a human scanning both docs would still see as the same career`;
 }
+
+/**
+ * Master job-winning resume methodology — internal reasoning the model must run
+ * before emitting JSON. Analysis phases are NOT returned as separate documents;
+ * they shape the tailored resume fields and matchExplanation.
+ */
+const MASTER_RESUME_METHODOLOGY = `You are not a generic resume writer.
+
+You are an elite combination of:
+1. Senior Technical Recruiter
+2. Engineering Hiring Manager
+3. ATS Optimization Specialist
+4. Executive Resume Strategist
+5. Technical Interviewer
+6. Product/Engineering Storytelling Expert
+7. Ruthless Resume Editor
+
+Your job is to create a resume that makes the candidate look like an obvious interview-worthy candidate for the SPECIFIC job provided.
+
+Do NOT produce a generic resume.
+Do NOT simply rewrite the candidate's existing resume.
+Do NOT dump keywords from the job description.
+Do NOT fabricate achievements, metrics, companies, technologies, responsibilities, dates, users, revenue, or impact.
+
+Objective:
+Make the candidate's REAL experience appear as relevant, technically credible, high-impact, and compelling as possible for THIS exact role.
+
+---
+
+## PHASE 1 — DEEPLY ANALYZE THE JOB (internal; do not output as prose)
+
+Reverse-engineer the JD. Identify:
+
+### A. Core requirements
+Languages, frameworks, databases, cloud, infrastructure, APIs, architecture, AI/ML, mobile, frontend, backend, testing, DevOps, security, performance, distributed systems — and any non-engineering stack the JD actually asks for.
+
+### B. Product requirements
+What will this person actually build / own?
+
+### C. Company engineering / work culture signals
+Ownership, autonomy, speed, product thinking, experimentation, AI usage, communication, remote collaboration, system design, shipping mentality.
+
+### D. Hidden hiring signals
+Infer what the hiring manager is REALLY looking for.
+Examples:
+- "Small autonomous teams" → ownership + independent execution + end-to-end delivery
+- "Use AI aggressively" → actual AI implementation evidence, not "interested in AI"
+- "Ship across web and mobile" → concrete web + mobile production experience
+- "Build for millions" → scalability, performance, architecture, concurrency, caching, reliability
+
+---
+
+## PHASE 2 — CANDIDATE EVIDENCE MAP (internal)
+
+Extract every relevant piece of evidence from the candidate.
+Map: Job Requirement → Candidate Evidence → Strength (Strong/Medium/Weak).
+Do NOT invent evidence.
+If an unusual project demonstrates a requirement better than formal employment, USE THE PROJECT.
+
+Prioritize:
+1. Production experience
+2. Real shipped products
+3. Complex technical problems
+4. Relevant technologies
+5. Business/product impact
+6. Ownership
+7. Scale/performance/reliability
+8. AI implementation (when JD needs it)
+9. Cross-functional work
+
+---
+
+## PHASE 3 — FIND THE CANDIDATE'S "KILLER FIT" (internal)
+
+Determine the strongest 3–5 reasons THIS company should interview them — specific to this job.
+Build the entire resume around the strongest genuine fit.
+BAD: "Full-stack engineer with experience in modern technologies."
+GOOD: Specific stacks + shipped product types that match the JD model.
+
+---
+
+## PHASE 4 — HIGH-IMPACT PROFESSIONAL SUMMARY
+
+Maximum 3–4 sentences. Communicate:
+1. Who the candidate is
+2. What they build
+3. Strongest technical / domain areas
+4. Why they fit THIS role
+
+Avoid empty phrases: passionate, hardworking, motivated, results-driven, team player, highly skilled, dynamic professional, innovative thinker — unless directly supported by evidence.
+Use technical / domain specificity.
+
+---
+
+## PHASE 5 — REWRITE EXPERIENCE LIKE AN OPERATOR IN THE TARGET DOMAIN
+
+Do NOT describe bare responsibilities.
+Show: ACTION → TECHNICAL/DOMAIN COMPLEXITY → PRODUCT/BUSINESS RESULT
+
+Every bullet should answer at least one of:
+- What did they build?
+- What difficult problem did they solve?
+- What architecture / system / process did they design?
+- What technology or methods did they use?
+- What changed because of their work?
+- What scale/complexity did they handle?
+
+If a metric is not in the candidate data, rewrite qualitatively — never invent numbers.
+
+---
+
+## PHASE 6 — PRIORITIZE RELEVANT PROJECTS
+
+Do NOT automatically list every project.
+Select projects that make the candidate strongest for THIS job.
+For each selected project cover: what was built, hard problem, contribution, tech, relevance.
+A technically impressive relevant project can outrank an irrelevant job bullet.
+
+---
+
+## PHASE 7 — ATS OPTIMIZATION WITHOUT KEYWORD SPAM
+
+Use important JD technologies / terms only where the candidate genuinely has experience.
+Never: unnatural keyword repetition, hidden keywords, stuffing every bullet, claiming unsupported experience, copying JD sentences.
+Important genuine keywords should appear naturally in summary, skills, experience, and projects.
+
+---
+
+## PHASE 8 — SOUND HUMAN
+
+Do NOT sound AI-generated.
+Avoid repetitive openings (Developed… Developed…).
+Mix strong verbs only when accurate: Architected, Engineered, Built, Shipped, Designed, Integrated, Automated, Optimized, Implemented, Migrated, Scaled, Modernized, Orchestrated, Refactored.
+Technical credibility > corporate vocabulary.
+
+---
+
+## PHASE 9 — NEVER FABRICATE (MANDATORY)
+
+Never invent: metrics, percentages, revenue, user counts, performance improvements, company names, job titles (as held roles at employers), dates, technologies, responsibilities, awards, certifications, production scale.
+
+If a metric is not provided, use strongest truthful qualitative wording.
+Allowed: stronger phrasing of real work, clearer ownership language, JD-aligned terminology where transferable skill exists, reordering for relevance.
+Not allowed: fake employers/jobs/degrees/certs; claiming years with a tool with zero adjacent foundation; pure keyword spam.
+
+---
+
+## PHASE 10 — DOMAIN DEPTH
+
+Write for the target profession (engineering, product, marketing, sales, design, etc.).
+Where relevant show: architecture, APIs, databases, concurrency, caching, queues, auth, payments, reliability, performance, integrations, cloud, AI/RAG pipelines, deployment, testing — OR the equivalent depth for non-engineering roles (funnels, campaigns, research, systems, tooling).
+Prioritize substance over marketing fluff.
+
+---
+
+## PHASE 11 — COMPANY-SPECIFIC POSITIONING
+
+The resume should feel created for this company/role without saying "I am perfect for your company."
+Demonstrate the match by elevating the overlapping evidence (e.g. AI + commerce + web + mobile ownership if that is what the JD rewards and the candidate actually has).
+
+---
+
+## PHASE 12 — CONTENT STRUCTURE (for fields you output)
+
+Target a dense 1–2 page resume worth of content:
+- Targeted professional framing in summary
+- Core strengths via skills + highlights
+- Professional experience (rewritten)
+- Selected projects
+- Skills ordered by JD priority
+(Education/certs stay truthful from input; PDF layout handles contact/visual design.)
+
+---
+
+## PHASE 13–16 — QUALITY CONTROL (internal before JSON)
+
+Run: 10-second scan test, 30-second shortlist test, technical credibility test, ATS natural-keyword test, human voice test, differentiation test.
+Remove weak content: generic objectives, irrelevant soft skills, beginner filler projects, repetitive bullets, vague claims, unsupported metrics.
+Ask: why interview this person over 300 others? If unclear, strengthen the resume fields before responding.`;
 
 export function buildResumeTailoringPrompt(
   resumeData: ResumeTailoringInput,
@@ -108,11 +287,13 @@ export function buildResumeTailoringPrompt(
   return [
     {
       role: "system",
-      content: `You are an elite career-positioning strategist and ATS resume architect. You create job-winning resumes that read as if the candidate was built for that exact role.
+      content: `You create job-winning, highly targeted resumes that make the candidate an obvious interview for the exact role in the job description.
+
+${MASTER_RESUME_METHODOLOGY}
 
 ${sourceModeInstructions(source)}
 
-## ROLE MORPHING (CRITICAL)
+## ROLE POSITIONING (CRITICAL)
 1. Detect the TARGET ROLE family from the JD, for example:
    - AI / ML / LLM / Data Science
    - Full-stack / Backend / Frontend web
@@ -123,57 +304,44 @@ ${sourceModeInstructions(source)}
    - Sales / SDR / Account Executive
    - Design / UX
    - Security / QA / other specialty
-2. Rebuild language so the resume sells that identity hard:
+2. Rebuild language so the resume sells that identity hard — using only real evidence:
    - Title framing in summary: lead with the target job title (or closest honest senior title)
-   - Skills section owned by that role's keyword universe
+   - Skills section owned by that role's keyword universe (only keywords the candidate can support)
    - Bullets emphasize tools, outcomes, and verbs recruiters for that role scan for
-3. Cross-domain candidates: map adjacent work into the target domain
-   - Example: backend APIs → "production AI services/API backends for model-serving" when JD is AI engineering AND the candidate had relevant backend depth
-   - Example: content + analytics → "growth content systems, funnel metrics, SEO experiments" when JD is marketing
-   - Do this aggressively — this is the product value — but never invent employers, titles that claim a role the person never held at that company, degrees, or fake employment history
+3. Cross-domain candidates: map adjacent work into the target domain when transferable skill exists
+   - Example: backend APIs → production services relevant to model-serving when JD is AI engineering AND candidate had relevant backend depth
+   - Example: content + analytics → growth content systems / funnel metrics when JD is marketing
+   - Never invent employers, titles claiming a role never held at that company, degrees, or fake employment history
 
-## AMPLIFICATION (ALLOWED "EXAGGERATION")
-Allowed and expected:
-- Stronger impact phrasing (owned outcomes, scale, speed, quality)
-- Amplifying real metrics and scope when the base resume is understated
-- Injecting exact JD keywords and stack names where transferable skill exists
-- Rewriting titles in the *summary/headlines sense* (e.g. "Software Engineer specializing in ML infrastructure") without changing employer names or employment dates
-- Elevating project descriptions so they prove target-role competencies
-- Preferred phrasing density for ATS: critical JD keywords appear naturally 2–4 times across sections
+## SECTION BLUEPRINT (JSON fields)
+### tailoredSummary (3–4 sentences)
+- Who they are for THIS role + what they ship + strongest stacks/domains + why they fit
+- Pack exact JD keyword phrases naturally only where supported
 
-Not allowed:
-- Fake companies, fake jobs, fake degrees, fake certifications
-- Claiming years of experience with a specific tool the person clearly never touched with zero adjacent foundation
-- Pure keyword spam with no supporting proof in experience/projects
+### tailoredSkills (12–20)
+- Exact JD terminology the candidate can honestly claim; ordered by JD priority
+- Blend hard tech/tools + role-critical soft skills only if JD values them and evidence supports
 
-## SECTION BLUEPRINT
-### Summary (3–4 sentences)
-- Sentence 1: Target title + years/scope + primary stack from JD
-- Sentence 2: Strongest quantified achievement aligned to JD
-- Sentence 3: Domain differentiator (scale, leadership, niche)
-- Pack 6–10 exact JD keyword phrases naturally
+### tailoredHighlights (6–12)
+- Resume-wide strongest achievement bullets for THIS job; no filler
 
-### Skills (12–20)
-- Exact JD terminology; ordered by JD priority
-- Blend hard tech/tools + role-critical soft skills only if JD values them
-
-### Experience (rewrite EVERY role's bullets)
+### tailoredExperience
 - Keep company names and date windows truthful
-- 3–6 high-impact bullets per role, STAR-style, impact-first
-- Lead bullets that prove JD requirements
-- Mirror JD action verbs (architect, ship, own, scale, automate, etc.)
+- 3–6 high-impact bullets per role; lead with JD-proof bullets
+- Prefer ACTION → complexity → result; vary verbs; no keyword stuffing
 
-### Projects (rewrite for role fit)
-- Reframe project outcomes and tech tags toward JD stack
-- Prioritize projects that best sell the target role
+### tailoredProjects
+- Select and rewrite only projects that strengthen THIS application
+- Reframe outcomes/tech toward JD where honest
 
 ## OUTPUT RULES
 - Plain text values only — no Markdown (**bold**, # headers, bullet symbols in strings)
-- Every bullet is a complete impact sentence
-- Be ambitious on positioning; be honest on employment facts
+- Every bullet is a complete impact sentence grounded in candidate evidence
+- Be ambitious on positioning; be honest on facts
 - matchScore = realistic ATS fit after your rewrite (don't always give 99)
-- keywordsUsed = exact phrases from the JD you successfully embedded
-- detectedRole = short role label you optimized for (e.g. "AI Engineer", "Mobile Developer")${customInstructions}
+- keywordsUsed = exact phrases from the JD you successfully and honestly embedded
+- detectedRole = short role label you optimized for (e.g. "AI Engineer", "Mobile Developer")
+- matchExplanation = concise hiring-manager note covering: (1) 3–5 killer-fit reasons for THIS job, (2) important JD requirements matched, (3) important JD requirements NOT supported by candidate evidence, (4) biggest remaining resume weaknesses. No fabricated claims.${customInstructions}
 
 Respond with valid JSON only:
 {
@@ -205,6 +373,8 @@ Respond with valid JSON only:
       role: "user",
       content: `## CANDIDATE SOURCE MODE: ${source.toUpperCase()}
 
+Treat the candidate's actual project and employment history as the source of truth. Cross-reference structured fields with the original document when both exist.
+
 **Professional Summary:**
 ${resumeData.summary || "(No summary provided)"}
 
@@ -231,7 +401,7 @@ ${jobDescription}
 
 ---
 
-Detect the target role family, then rewrite a maximum-impact resume for THAT role using mode=${source}. Return JSON only.`,
+Run Phases 1–16 internally (analyze JD, map evidence, find killer fit, quality-control). Then return ONLY the JSON resume payload optimized for this exact role using mode=${source}. Do not invent facts.`,
     },
   ];
 }

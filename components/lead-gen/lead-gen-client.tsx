@@ -605,14 +605,14 @@ function CampaignForm({ form, setForm, onSave, onCancel, saving, title }: Campai
       {/* Limits & AI toggle */}
       <div className="grid grid-cols-3 gap-4">
         <div>
-          <label className="text-xs text-white/50 mb-1 block">Daily Limit (max 15)</label>
+          <label className="text-xs text-white/50 mb-1 block">Daily Limit</label>
           <Input
             type="number"
             min={1}
-            max={15}
+            max={500}
             value={form.dailyCommentLimit}
             onChange={(e) =>
-              setForm({ ...form, dailyCommentLimit: Math.min(15, Math.max(1, parseInt(e.target.value) || 10)) })
+              setForm({ ...form, dailyCommentLimit: Math.min(500, Math.max(1, parseInt(e.target.value) || 10)) })
             }
             className="bg-[#0A0A0A] border-[#2A2A2A] text-white"
           />

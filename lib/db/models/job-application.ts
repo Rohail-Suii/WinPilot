@@ -54,6 +54,17 @@ export interface IJobApplication extends Document {
     }[];
   };
   matchBreakdown?: IMatchBreakdown;
+  /** Follow-up message sent on LinkedIn after applying (Auto Messaging). */
+  outreach?: {
+    attempted: boolean;
+    sent: boolean;
+    channel?: "hiring_team" | "company_page" | "connection";
+    recipient?: string;
+    message?: string;
+    /** Why nothing was sent — e.g. the company page has messaging turned off. */
+    reason?: string;
+    at?: Date;
+  };
   formAnswers: {
     question: string;
     answer: string;
@@ -123,6 +134,15 @@ const JobApplicationSchema = new Schema<IJobApplication>(
       strengths: [String],
       concerns: [String],
       recommendation: String,
+    },
+    outreach: {
+      attempted: { type: Boolean, default: false },
+      sent: { type: Boolean, default: false },
+      channel: { type: String, enum: ["hiring_team", "company_page", "connection"] },
+      recipient: String,
+      message: String,
+      reason: String,
+      at: Date,
     },
     formAnswers: [
       {

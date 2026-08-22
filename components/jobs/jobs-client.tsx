@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { toast } from "sonner";
@@ -34,6 +34,8 @@ import {
   Check,
   Pencil,
   FormInput,
+  Link2,
+  Send,
 } from "lucide-react";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Card, CardContent } from "@/components/ui/card";
@@ -54,6 +56,7 @@ import {
 import { jobSearchSchema } from "@/lib/validators";
 import { useExtensionStore } from "@/lib/hooks/use-stores";
 import { useWebSocket } from "@/lib/websocket/client";
+import { parseLinkedInJobUrl, parseLinkedInJobListUrl } from "@/lib/utils/linkedin-url";
 import { z } from "zod";
 import {
   AIKeysTab,
@@ -107,6 +110,15 @@ interface JobApplicationItem {
     keywordsUsed?: string[];
   };
   formAnswers?: { question: string; answer: string }[];
+  outreach?: {
+    attempted?: boolean;
+    sent?: boolean;
+    channel?: "hiring_team" | "company_page" | "connection";
+    recipient?: string;
+    message?: string;
+    reason?: string;
+    at?: string;
+  };
   createdAt: string;
 }
 
@@ -117,6 +129,12 @@ interface ApplicationStats {
   thisWeek: number;
   thisMonth: number;
 }
+
+const OUTREACH_CHANNEL_LABEL: Record<string, string> = {
+  hiring_team: "messaged hiring team",
+  company_page: "messaged company page",
+  connection: "messaged a connection",
+};
 
 export function JobsClient() {
   const [activeTab, setActiveTab] = useState("searches");
@@ -149,10 +167,15 @@ export function JobsClient() {
   const [automationSettings, setAutomationSettings] = useState<AutomationSettings | null>(null);
 
   const { isConnected, currentTask, lastTaskError, aiQuotaStatus, automationRunning, automationLogs, clearLogs, setAutomationRunning } = useExtensionStore();
-  const { startAutomation, stopAutomation } = useWebSocket();
+  const { startAutomation, applyJobUrl, applyJobList, stopAutomation } = useWebSocket();
+  const [jobLink, setJobLink] = useState("");
+  // What the pasted link supports: one job, a whole results page, or both
+  const parsedJobLink = useMemo(() => parseLinkedInJobUrl(jobLink), [jobLink]);
+  const parsedListLink = useMemo(() => parseLinkedInJobListUrl(jobLink), [jobLink]);
   const [useAI, setUseAI] = useState(true);
   const [useJobMatching, setUseJobMatching] = useState(true);
   const [useAIFormFilling, setUseAIFormFilling] = useState(false);
+  const [useAutoMessaging, setUseAutoMessaging] = useState(false);
   const logsEndRef = useRef<HTMLDivElement>(null);
   const [autoScroll, setAutoScroll] = useState(true);
 
@@ -164,6 +187,8 @@ export function JobsClient() {
     if (savedMatch === "false") setUseJobMatching(false);
     const savedForm = window.localStorage.getItem("jobs-automation-use-ai-form-filling");
     if (savedForm === "true") setUseAIFormFilling(true);
+    const savedMessaging = window.localStorage.getItem("jobs-automation-use-auto-messaging");
+    if (savedMessaging === "true") setUseAutoMessaging(true);
   }, []);
 
   const handleAiToggle = (checked: boolean) => {
@@ -199,6 +224,18 @@ export function JobsClient() {
       checked
         ? "AI Form Filling ON: AI answers screening questions from your resume (uses AI credits)"
         : "AI Form Filling OFF: uses built-in rule-based answers",
+    );
+  };
+
+  const handleAutoMessagingToggle = (checked: boolean) => {
+    setUseAutoMessaging(checked);
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem("jobs-automation-use-auto-messaging", String(checked));
+    }
+    toast.info(
+      checked
+        ? "Auto Messaging ON: after each application, WinPilot messages the hiring team, the company page, or a connection there (slower, uses AI credits)"
+        : "Auto Messaging OFF: applications are submitted without any follow-up message",
     );
   };
 
@@ -316,18 +353,49 @@ export function JobsClient() {
       toast.error("Extension not connected. Open LinkedIn in Chrome with the extension enabled.");
       return;
     }
-    startAutomation(searchId, { useAI, useJobMatching, useAIFormFilling });
+    startAutomation(searchId, { useAI, useJobMatching, useAIFormFilling, useAutoMessaging });
     setAutomationRunning(true);
     const modes = [
       useAI ? "AI resume" : null,
       useJobMatching ? "matching" : null,
       useAIFormFilling ? "AI form fill" : null,
+      useAutoMessaging ? "auto messaging" : null,
     ].filter(Boolean);
     toast.success(
       modes.length
         ? `Automation started (${modes.join(", ")}).`
         : "Automation started (rule-based only).",
     );
+  };
+
+  const handleApplyFromLink = () => {
+    if (!parsedJobLink) {
+      toast.error("Paste a LinkedIn job link — the job page, a search URL with the job open, or the job id.");
+      return;
+    }
+    if (!isConnected) {
+      toast.error("Extension not connected. Open LinkedIn in Chrome with the extension enabled.");
+      return;
+    }
+    applyJobUrl(parsedJobLink.jobUrl, { useAI, useJobMatching, useAIFormFilling, useAutoMessaging });
+    setAutomationRunning(true);
+    setActiveTab("logs");
+    toast.success("Checking the job and applying — watch the logs for progress.");
+  };
+
+  const handleApplyAllFromLink = () => {
+    if (!parsedListLink) {
+      toast.error("Paste a LinkedIn jobs list — a search, a collection, or a \"jobs for you\" results page.");
+      return;
+    }
+    if (!isConnected) {
+      toast.error("Extension not connected. Open LinkedIn in Chrome with the extension enabled.");
+      return;
+    }
+    applyJobList(parsedListLink.listUrl, { useAI, useJobMatching, useAIFormFilling, useAutoMessaging });
+    setAutomationRunning(true);
+    setActiveTab("logs");
+    toast.success("Reading the jobs on that page and applying to each one — watch the logs.");
   };
 
   const handleStopAutomation = () => {
@@ -388,6 +456,12 @@ export function JobsClient() {
             <span className="text-xs text-white/70">AI Form Filling</span>
             <Switch checked={useAIFormFilling} onCheckedChange={handleFormFillingToggle} />
             <span className="text-xs text-white/40">{useAIFormFilling ? "ON" : "OFF"}</span>
+          </div>
+          <div className="flex items-center gap-2 rounded-lg border border-white/10 bg-white/[0.03] px-3 py-1.5">
+            <Send className="h-3.5 w-3.5 text-amber-400/70" />
+            <span className="text-xs text-white/70">Auto Messaging</span>
+            <Switch checked={useAutoMessaging} onCheckedChange={handleAutoMessagingToggle} />
+            <span className="text-xs text-white/40">{useAutoMessaging ? "ON" : "OFF"}</span>
           </div>
           <div className="flex items-center gap-2 text-sm">
             <span className={`h-2 w-2 rounded-full ${isConnected ? "bg-emerald-400" : "bg-red-400"}`} />
@@ -454,6 +528,75 @@ export function JobsClient() {
         </TabsList>
 
         <TabsContent value="searches">
+          {/* Apply straight from a pasted LinkedIn link — one job or a whole page */}
+          <Card className="mb-4 border-white/10">
+            <CardContent className="p-5 space-y-3">
+              <div className="flex items-center gap-2">
+                <Link2 className="h-4 w-4 text-emerald-400" />
+                <h3 className="font-semibold text-white">Apply from a link</h3>
+              </div>
+              <p className="text-sm text-white/50">
+                Found jobs yourself? Paste a LinkedIn link and WinPilot checks each posting, tailors your
+                resume, fills the Easy Apply form, and submits it — no saved search needed. Apply to the one
+                job in the link, or to every job on the results page it points at.
+              </p>
+              <Input
+                placeholder="Paste a LinkedIn job link or a jobs results page link"
+                value={jobLink}
+                onChange={(e) => setJobLink(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && !automationRunning) handleApplyFromLink();
+                }}
+              />
+              <div className="flex flex-col gap-2 sm:flex-row">
+                <Button
+                  onClick={handleApplyFromLink}
+                  disabled={automationRunning || !isConnected || !parsedJobLink}
+                  title={
+                    !isConnected
+                      ? "Extension not connected"
+                      : automationRunning
+                        ? "Automation running"
+                        : !parsedJobLink
+                          ? "Paste a link that points at one job"
+                          : "Check this job and apply"
+                  }
+                >
+                  <Play className="h-4 w-4" />
+                  Apply to this job
+                </Button>
+                <Button
+                  variant="outline"
+                  onClick={handleApplyAllFromLink}
+                  disabled={automationRunning || !isConnected || !parsedListLink}
+                  title={
+                    !isConnected
+                      ? "Extension not connected"
+                      : automationRunning
+                        ? "Automation running"
+                        : !parsedListLink
+                          ? "Paste a jobs search, collection, or \"jobs for you\" page link"
+                          : "Apply to every job on this page"
+                  }
+                >
+                  <Briefcase className="h-4 w-4" />
+                  Apply to all jobs on this page
+                </Button>
+              </div>
+              <p className="text-xs text-white/35">
+                {jobLink.trim() && !parsedJobLink && !parsedListLink
+                  ? "That link isn't a LinkedIn job or jobs list — copy the URL from the LinkedIn jobs page."
+                  : parsedListLink && parsedJobLink
+                    ? "This link works both ways: apply only to the open job, or to every job on the page (up to 25 per run)."
+                    : parsedListLink
+                      ? "Applies to every job on this results page, up to 25 per run."
+                      : parsedJobLink
+                        ? `Job ${parsedJobLink.jobId} — WinPilot will open it and apply.`
+                        : "Works with job pages, search and \u201cjobs for you\u201d results pages, collections, and bare job ids. Easy Apply jobs only — external application sites can't be automated."}
+              </p>
+            </CardContent>
+          </Card>
+
           {loading ? (
             <div className="animate-pulse space-y-4">
               {[1, 2, 3].map((i) => <div key={i} className="h-24 rounded-xl bg-white/5" />)}
@@ -740,6 +883,27 @@ export function JobsClient() {
                               </div>
                             ))}
                           </div>
+                        </div>
+                      )}
+
+                      {app.outreach?.attempted && (
+                        <div className="space-y-1">
+                          <p className="text-xs font-medium text-white/60">
+                            Follow-up message
+                            <Badge variant={app.outreach.sent ? "success" : "default"} className="ml-2">
+                              {app.outreach.sent ? OUTREACH_CHANNEL_LABEL[app.outreach.channel ?? "company_page"] : "not sent"}
+                            </Badge>
+                          </p>
+                          {app.outreach.sent ? (
+                            <p className="text-xs text-white/70 whitespace-pre-line">
+                              {app.outreach.recipient && (
+                                <span className="text-white/50">To {app.outreach.recipient}: </span>
+                              )}
+                              {app.outreach.message}
+                            </p>
+                          ) : (
+                            <p className="text-xs text-white/40">{app.outreach.reason}</p>
+                          )}
                         </div>
                       )}
 

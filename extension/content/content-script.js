@@ -554,7 +554,7 @@
           try {
             await waitForElement(
               ".jobs-search-results__list-item, .job-card-container, .scaffold-layout__list-item, " +
-              "[data-occludable-job-id], .job-card-list",
+              "[data-occludable-job-id], .job-card-list, a[href*='/jobs/view/']",
               12000
             );
             console.log("[WinPilot CS] SCRAPE_JOB_LISTINGS: Found listing container");
@@ -563,12 +563,16 @@
           }
           await new Promise((r) => setTimeout(r, 500));
           const jobs = scrapeJobListings();
-          console.log(`[WinPilot CS] SCRAPE_JOB_LISTINGS: Scraped ${jobs.length} jobs`);
+          const noResultsConfirmed = jobs.length === 0 && detectNoResultsState();
+          console.log(
+            `[WinPilot CS] SCRAPE_JOB_LISTINGS: Scraped ${jobs.length} jobs` +
+            (noResultsConfirmed ? " (no-results page confirmed)" : "")
+          );
           if (jobs.length > 0) console.log("[WinPilot CS] First job:", JSON.stringify(jobs[0]));
           return {
             status: "success",
             actionId: action.actionId,
-            data: { jobs },
+            data: { jobs, noResultsConfirmed },
           };
         }
 
@@ -703,6 +707,62 @@
             status: "success",
             actionId: action.actionId,
             data: uploadResult,
+          };
+        }
+
+        // --- Phase 4: Post-Application Outreach ---
+        case "GET_OUTREACH_TARGETS": {
+          return {
+            status: "success",
+            actionId: action.actionId,
+            data: {
+              company: getCompanyFromJob(),
+              hiringTeam: getHiringTeamTargets(),
+            },
+          };
+        }
+
+        case "OPEN_MESSAGE_COMPOSER": {
+          const openResult = await openMessageComposer(action.selector);
+          return {
+            status: "success",
+            actionId: action.actionId,
+            data: openResult,
+          };
+        }
+
+        case "SELECT_MESSAGE_TOPIC": {
+          const topicResult = await selectMessageTopic(action.preferred);
+          return {
+            status: "success",
+            actionId: action.actionId,
+            data: topicResult,
+          };
+        }
+
+        case "SEND_MESSAGE": {
+          const sendResult = await sendComposedMessage(action.text || "");
+          return {
+            status: "success",
+            actionId: action.actionId,
+            data: sendResult,
+          };
+        }
+
+        case "CLOSE_MESSAGE_OVERLAY": {
+          const closeResult = await closeMessageOverlay();
+          return {
+            status: "success",
+            actionId: action.actionId,
+            data: closeResult,
+          };
+        }
+
+        case "SCRAPE_COMPANY_PEOPLE": {
+          return {
+            status: "success",
+            actionId: action.actionId,
+            data: { people: scrapeCompanyPeople() },
           };
         }
 
@@ -1143,7 +1203,65 @@
       });
     }
 
+    // LinkedIn periodically redesigns the results page (e.g. the "AI job search"
+    // rollout) and renames the card wrapper classes above out from under us. The
+    // /jobs/view/{id} link pattern is far more stable than any CSS class, so when
+    // the card-based pass finds nothing, fall back to scanning those links directly
+    // instead of reporting a false "no jobs" failure.
+    if (jobs.length === 0) {
+      return scrapeJobListingsFallback();
+    }
+
     return jobs;
+  }
+
+  function scrapeJobListingsFallback() {
+    const anchors = document.querySelectorAll("a[href*='/jobs/view/'], a[href*='currentJobId=']");
+    const jobs = [];
+    const seenIds = new Set();
+
+    for (const a of anchors) {
+      const href = a.href || a.getAttribute("href") || "";
+      const jobId = href.match(/\/jobs\/view\/(\d+)/)?.[1] || href.match(/currentJobId=(\d+)/)?.[1];
+      if (!jobId || seenIds.has(jobId)) continue;
+
+      const title = (a.textContent || "").replace(/\s+/g, " ").trim();
+      if (!title) continue;
+
+      const root =
+        a.closest("li") || a.closest("[role='listitem']") || a.parentElement?.parentElement || a.parentElement || a;
+      const lines = (root.innerText || "")
+        .split("\n")
+        .map((l) => l.trim())
+        .filter(Boolean);
+      const otherLines = lines.filter((l) => l !== title);
+      const cardText = (root.innerText || "").toLowerCase();
+
+      seenIds.add(jobId);
+      jobs.push({
+        title,
+        company: otherLines[0] || "",
+        location: otherLines[1] || "",
+        easyApply: detectCardEasyApply(root),
+        applied: /\bapplied\b/.test(cardText) || cardText.includes("application submitted"),
+        url: href.startsWith("http") ? href : `https://www.linkedin.com/jobs/view/${jobId}/`,
+        jobId: String(jobId),
+      });
+    }
+
+    return jobs;
+  }
+
+  // Distinguish a genuinely empty result set from a page we simply failed to parse,
+  // so the background script knows whether to retry or trust the "0 jobs" result.
+  function detectNoResultsState() {
+    const text = (document.body?.innerText || "").toLowerCase();
+    return (
+      /no matching jobs found/.test(text) ||
+      /no results found/.test(text) ||
+      /we couldn.?t find any (jobs|matches)/.test(text) ||
+      (/\bno jobs\b/.test(text) && /try (broadening|adjusting)/.test(text))
+    );
   }
 
   function normalizeTextForMatch(text) {
@@ -2580,6 +2698,569 @@
 
     await new Promise((r) => setTimeout(r, 2000));
     return { uploaded: true, fileName: file.name };
+  }
+
+  // --- Phase 4: Post-Application Outreach (Auto Messaging) ---
+  // Everything below drives LinkedIn's messaging UI: the hiring-team card on a
+  // job post, a company page's "Message" action (which asks for a topic first),
+  // and a connection's profile. Each helper reports what it found so the
+  // service worker can fall through to the next channel instead of guessing.
+
+  const MSG_EDITOR_SELECTORS = [
+    ".msg-form__contenteditable",
+    ".msg-overlay-conversation-bubble div[contenteditable='true']",
+    "div[role='textbox'][contenteditable='true'][aria-label*='message' i]",
+    "div[role='textbox'][contenteditable='true'][aria-label*='Message' i]",
+    "[role='dialog'] div[role='textbox'][contenteditable='true']",
+    "[role='dialog'] textarea",
+    ".org-page-message-modal textarea",
+    "textarea[name='message']",
+  ];
+
+  const MSG_SEND_SELECTORS = [
+    ".msg-form__send-button",
+    "button.msg-form__send-btn",
+    ".msg-form__right-actions button[type='submit']",
+    ".artdeco-modal__actionbar button.artdeco-button--primary",
+    "[role='dialog'] button[type='submit']",
+  ];
+
+  const TOPIC_CONTROL_WORDS = [
+    "cancel",
+    "close",
+    "send",
+    "next",
+    "back",
+    "continue",
+    "dismiss",
+    "skip",
+    "done",
+    "discard",
+  ];
+
+  function isVisible(el) {
+    if (!el) return false;
+    if (el.getAttribute?.("aria-hidden") === "true") return false;
+    return el.offsetParent !== null || (el.getClientRects?.().length || 0) > 0;
+  }
+
+  /** A control we may actually click. LinkedIn disables Send until the form validates. */
+  function isEnabled(el) {
+    if (!el) return false;
+    if (el.disabled) return false;
+    if (el.getAttribute?.("aria-disabled") === "true") return false;
+    if (el.classList?.contains("artdeco-button--disabled")) return false;
+    return true;
+  }
+
+  function normalizeLabel(el) {
+    return `${el.getAttribute?.("aria-label") || ""} ${el.textContent || ""}`
+      .replace(/\s+/g, " ")
+      .trim()
+      .toLowerCase();
+  }
+
+  function findVisibleBySelectors(selectors, root = document) {
+    for (const selector of selectors) {
+      for (const el of root.querySelectorAll(selector)) {
+        if (isVisible(el)) return el;
+      }
+    }
+    return null;
+  }
+
+  function findClickableByLabel(root, matches, { requireEnabled = true } = {}) {
+    const nodes = root.querySelectorAll("button, a, [role='button']");
+    for (const el of nodes) {
+      if (!isVisible(el)) continue;
+      if (requireEnabled && !isEnabled(el)) continue;
+      if (matches(normalizeLabel(el))) return el;
+    }
+    return null;
+  }
+
+  /** "Message" / "Message Jane Doe" — but never the left-nav "Messaging" entry. */
+  function isMessageActionLabel(label) {
+    if (!label) return false;
+    if (label.includes("messaging")) return false;
+    if (label.includes("message request")) return false;
+    if (label.includes("unread")) return false;
+    return /^message\b/.test(label) && label.length < 60;
+  }
+
+  function findMessageButton(root = document) {
+    return findClickableByLabel(root, isMessageActionLabel);
+  }
+
+  /** The topmost open modal/dialog, which is where LinkedIn puts message flows. */
+  function getOpenDialog() {
+    const dialogs = Array.from(
+      document.querySelectorAll("[role='dialog'], .artdeco-modal, .org-page-message-modal")
+    ).filter(isVisible);
+    return dialogs.length ? dialogs[dialogs.length - 1] : null;
+  }
+
+  function getMessageComposer() {
+    const dialog = getOpenDialog();
+    const editor =
+      (dialog && findVisibleBySelectors(MSG_EDITOR_SELECTORS, dialog)) ||
+      findVisibleBySelectors(MSG_EDITOR_SELECTORS);
+    if (!editor) return null;
+
+    const scope = editor.closest("form, [role='dialog'], .msg-form, .msg-overlay-conversation-bubble") || document;
+    const sendButton =
+      findVisibleBySelectors(MSG_SEND_SELECTORS, scope) ||
+      findClickableByLabel(scope, (label) => /^send\b/.test(label), { requireEnabled: false }) ||
+      findVisibleBySelectors(MSG_SEND_SELECTORS);
+
+    return { editor, sendButton: sendButton || null, scope };
+  }
+
+  async function waitForMessageComposer(timeout = 8000) {
+    const deadline = Date.now() + timeout;
+    while (Date.now() < deadline) {
+      const composer = getMessageComposer();
+      if (composer) return composer;
+      await new Promise((r) => setTimeout(r, 300));
+    }
+    return null;
+  }
+
+  const TOPIC_KEYWORDS = ["career", "job", "hiring", "recruit", "opportunit", "work with"];
+  const TOPIC_FALLBACK_PATTERN = /something else|other|general/i;
+
+  /** The topic control on a company-page message modal: a required <select>. */
+  function getTopicSelect(dialog = getOpenDialog()) {
+    if (!dialog) return null;
+    const select =
+      dialog.querySelector("select#msg-shared-modals-msg-page-modal-presenter-conversation-topic") ||
+      dialog.querySelector("select[id*='conversation-topic']") ||
+      dialog.querySelector("select");
+    return isVisible(select) ? select : null;
+  }
+
+  function setSelectValue(select, value) {
+    const setter = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, "value")?.set;
+    if (setter) setter.call(select, value);
+    else select.value = value;
+    select.dispatchEvent(new Event("input", { bubbles: true }));
+    select.dispatchEvent(new Event("change", { bubbles: true }));
+  }
+
+  function pickByTopicPreference(items, preferred, getText) {
+    const keywords = preferred?.length ? preferred : TOPIC_KEYWORDS;
+
+    for (const keyword of keywords) {
+      const hit = items.find((item) => getText(item).toLowerCase().includes(keyword));
+      if (hit) return hit;
+    }
+
+    // No careers-style topic on this page — "Other" still reaches a human
+    return items.find((item) => TOPIC_FALLBACK_PATTERN.test(getText(item))) || items[0] || null;
+  }
+
+  /** Choose the topic from a <select>, which is what company pages actually use. */
+  function selectTopicFromSelect(select, preferred) {
+    const options = Array.from(select.options).filter(
+      (option) => !option.disabled && (option.value || "").trim()
+    );
+    if (!options.length) return { selected: false, needed: true, topics: [] };
+
+    const optionText = (option) => (option.textContent || "").replace(/\s+/g, " ").trim();
+    const choice = pickByTopicPreference(options, preferred, optionText);
+    if (!choice) return { selected: false, needed: true, topics: options.map(optionText) };
+
+    setSelectValue(select, choice.value);
+
+    return {
+      selected: select.value === choice.value,
+      needed: true,
+      topic: optionText(choice),
+      topics: options.map(optionText),
+    };
+  }
+
+  /**
+   * Button/pill style topic choices, used by the variants that do not render a
+   * <select>. Field labels and the modal's own controls are filtered out.
+   */
+  function getMessageTopicOptions(dialog = getOpenDialog()) {
+    if (!dialog) return [];
+
+    const options = [];
+    const seen = new Set();
+    const nodes = dialog.querySelectorAll(
+      "button, [role='radio'], [role='option'], [role='menuitem'], li"
+    );
+
+    for (const el of nodes) {
+      if (!isVisible(el) || !isEnabled(el)) continue;
+      if (el.querySelector("button, [role='radio'], [role='option'], [role='menuitem']")) continue;
+      // Skip anything that labels a form field rather than being a choice
+      if (el.tagName === "LABEL" || el.querySelector("label, input, select, textarea")) continue;
+
+      const text = (el.textContent || "").replace(/\s+/g, " ").trim();
+      if (!text || text.length > 60) continue;
+
+      const lower = text.toLowerCase();
+      if (TOPIC_CONTROL_WORDS.includes(lower)) continue;
+      if (seen.has(lower)) continue;
+
+      seen.add(lower);
+      options.push({ el, text });
+    }
+
+    return options;
+  }
+
+  async function selectMessageTopic(preferred) {
+    const dialog = getOpenDialog();
+
+    // Company pages: a required <select> that keeps Send disabled until it is set
+    const topicSelect = getTopicSelect(dialog);
+    if (topicSelect) {
+      const result = selectTopicFromSelect(topicSelect, preferred);
+      await new Promise((r) => setTimeout(r, 600));
+      return result;
+    }
+
+    const options = getMessageTopicOptions(dialog);
+    if (!options.length) {
+      // No chooser — most message overlays drop you straight into the composer
+      return { selected: false, needed: false, topics: [] };
+    }
+
+    const choice = pickByTopicPreference(options, preferred, (option) => option.text);
+    if (!choice) {
+      return { selected: false, needed: true, topics: options.map((o) => o.text) };
+    }
+
+    await dispatchNativeClickAsync(choice.el);
+    await new Promise((r) => setTimeout(r, 900));
+
+    // Some variants need a Next/Continue press after picking the topic
+    const nextBtn = findClickableByLabel(
+      getOpenDialog() || document,
+      (label) => label === "next" || label === "continue"
+    );
+    if (nextBtn) {
+      await dispatchNativeClickAsync(nextBtn);
+      await new Promise((r) => setTimeout(r, 900));
+    }
+
+    return {
+      selected: true,
+      needed: true,
+      topic: choice.text,
+      topics: options.map((o) => o.text),
+    };
+  }
+
+  /** Open the message composer from whatever Message control this page offers. */
+  async function openMessageComposer(selector) {
+    const existing = getMessageComposer();
+    if (existing) return { opened: true, alreadyOpen: true };
+
+    let trigger = null;
+    if (selector) {
+      const el = document.querySelector(selector);
+      if (isVisible(el)) trigger = el;
+    }
+
+    let topCard = null;
+    if (!trigger) {
+      topCard =
+        document.querySelector(".org-top-card-primary-actions") ||
+        document.querySelector(".org-top-card__primary-actions") ||
+        document.querySelector(".pv-top-card-v2-ctas") ||
+        document.querySelector(".ph5.pb5") ||
+        null;
+      trigger = (topCard && findMessageButton(topCard)) || findMessageButton(document);
+    }
+
+    // Some pages tuck Message behind the top card's "More" menu
+    if (!trigger && topCard) {
+      const moreBtn = findClickableByLabel(
+        topCard,
+        (label) => label === "more" || label.startsWith("more actions") || label.startsWith("more options")
+      );
+      if (moreBtn) {
+        await dispatchNativeClickAsync(moreBtn);
+        await new Promise((r) => setTimeout(r, 1000));
+        trigger = findMessageButton(document);
+      }
+    }
+
+    if (!trigger) {
+      return { opened: false, error: "No Message button on this page" };
+    }
+
+    await HumanBehavior.hoverElement(trigger);
+    await dispatchNativeClickAsync(trigger);
+    await new Promise((r) => setTimeout(r, 1500));
+
+    // Company-page modals show the topic and the message box together, while
+    // the pill-style choosers only reveal the box after a topic is picked —
+    // so look for the box, answer the topic question, then look again.
+    let composer = await waitForMessageComposer(4000);
+    const topicResult = await selectMessageTopic();
+    if (!composer) composer = await waitForMessageComposer(6000);
+
+    if (!composer) {
+      return {
+        opened: false,
+        error: "Message composer did not open",
+        topic: topicResult.topic || "",
+        topics: topicResult.topics || [],
+      };
+    }
+
+    return {
+      opened: true,
+      topic: topicResult.topic || "",
+      topics: topicResult.topics || [],
+    };
+  }
+
+  async function sendComposedMessage(text) {
+    const composer = await waitForMessageComposer(5000);
+    if (!composer) return { sent: false, error: "Message composer not open" };
+
+    const { editor } = composer;
+
+    // Company-page modals cap the box (750 chars) and reject anything longer
+    const maxLength = Number(editor.getAttribute?.("maxlength")) || 0;
+    const body = maxLength > 0 && text.length > maxLength ? text.slice(0, maxLength) : text;
+
+    editor.focus();
+    editor.dispatchEvent(new FocusEvent("focus", { bubbles: true }));
+    await new Promise((r) => setTimeout(r, 400));
+
+    if (editor.tagName === "TEXTAREA" || editor.tagName === "INPUT") {
+      await dispatchNativeInput(editor, body);
+      // Some forms only validate on change/blur, not on each keystroke
+      editor.dispatchEvent(new Event("change", { bubbles: true }));
+    } else {
+      // contenteditable: clear anything LinkedIn pre-filled, then insert
+      const selection = window.getSelection();
+      const range = document.createRange();
+      range.selectNodeContents(editor);
+      selection.removeAllRanges();
+      selection.addRange(range);
+      document.execCommand("delete", false);
+      document.execCommand("insertText", false, body);
+      editor.dispatchEvent(new Event("input", { bubbles: true }));
+    }
+
+    await new Promise((r) => setTimeout(r, 1200));
+
+    // Send stays disabled until every required field validates — on a company
+    // page that means the conversation topic as well as the message body.
+    const currentSendButton = () => getMessageComposer()?.sendButton || composer.sendButton;
+    let sendButton = currentSendButton();
+    let retriedTopic = false;
+
+    for (let i = 0; i < 12; i++) {
+      sendButton = currentSendButton();
+      if (sendButton && isEnabled(sendButton)) break;
+
+      // Halfway through, assume the blocker is an unset topic and set it again
+      if (!retriedTopic && i === 5) {
+        retriedTopic = true;
+        const topicSelect = getTopicSelect();
+        if (topicSelect && !topicSelect.value) {
+          selectTopicFromSelect(topicSelect);
+          editor.dispatchEvent(new Event("input", { bubbles: true }));
+        }
+      }
+
+      await new Promise((r) => setTimeout(r, 500));
+    }
+
+    if (!sendButton) return { sent: false, error: "Send button not found" };
+    if (!isEnabled(sendButton)) {
+      const topicSelect = getTopicSelect();
+      const reason = topicSelect && !topicSelect.value ? "conversation topic was not accepted" : "form did not validate";
+      return { sent: false, error: `Send button stayed disabled (${reason})` };
+    }
+
+    await dispatchNativeClickAsync(sendButton);
+    await new Promise((r) => setTimeout(r, 2500));
+
+    // Sent when the composer clears or closes; text still sitting there means it failed
+    const after = getMessageComposer();
+    const leftover = after ? (after.editor.value ?? after.editor.textContent ?? "").trim() : "";
+    if (!after || leftover.length === 0) {
+      return { sent: true, length: body.length };
+    }
+
+    return { sent: false, error: "Message was still in the box after pressing Send" };
+  }
+
+  async function closeMessageOverlay() {
+    const dialog = getOpenDialog();
+    const composer = getMessageComposer();
+
+    // Only ever click inside something that is actually open. Searching the
+    // whole page for "close"/"dismiss" would hit the Dismiss button on a job card.
+    const scope =
+      dialog ||
+      composer?.editor.closest(".msg-overlay-conversation-bubble, .msg-form, form") ||
+      null;
+    if (!scope) return { closed: true };
+
+    const closeBtn = findClickableByLabel(
+      scope,
+      (label) => /^(close|dismiss|cancel)\b/.test(label) || label === "close conversation"
+    );
+    if (closeBtn) {
+      await dispatchNativeClickAsync(closeBtn);
+      await new Promise((r) => setTimeout(r, 800));
+    }
+
+    // "Discard draft?" confirmation, when a half-written message is open
+    const confirmDialog = getOpenDialog();
+    const discardBtn = confirmDialog
+      ? findClickableByLabel(confirmDialog, (label) => label === "discard" || label.startsWith("discard"))
+      : null;
+    if (discardBtn) {
+      await dispatchNativeClickAsync(discardBtn);
+      await new Promise((r) => setTimeout(r, 600));
+    }
+
+    return { closed: !getMessageComposer() };
+  }
+
+  /** The company behind the job currently shown, as a page URL we can open. */
+  function getCompanyFromJob() {
+    const root = getJobDetailRoot();
+    const link =
+      root.querySelector(".job-details-jobs-unified-top-card__company-name a") ||
+      root.querySelector(".jobs-unified-top-card__company-name a") ||
+      root.querySelector("a[href*='/company/']") ||
+      document.querySelector(".job-details-jobs-unified-top-card__company-name a") ||
+      document.querySelector("a[href*='/company/']");
+
+    if (!link) {
+      const nameEl =
+        root.querySelector(".job-details-jobs-unified-top-card__company-name") ||
+        root.querySelector(".jobs-unified-top-card__company-name");
+      const name = nameEl?.textContent?.replace(/\s+/g, " ").trim() || "";
+      return name ? { name, url: "" } : null;
+    }
+
+    const name = (link.textContent || "").replace(/\s+/g, " ").trim();
+    let url = "";
+    try {
+      const parsed = new URL(link.href, window.location.origin);
+      const slug = parsed.pathname.match(/\/company\/([^/?#]+)/i)?.[1];
+      url = slug ? `https://www.linkedin.com/company/${slug}/` : "";
+    } catch {
+      url = "";
+    }
+
+    return { name, url };
+  }
+
+  /** "Meet the hiring team" — the people LinkedIn says own this posting. */
+  function getHiringTeamTargets() {
+    const cards = document.querySelectorAll(
+      ".job-details-people-who-can-help__section, .hirer-card__container, " +
+      "[class*='hirer-card'], .jobs-poster, .job-details-module__hirer-card"
+    );
+
+    const targets = [];
+    const seen = new Set();
+
+    for (const card of cards) {
+      if (!isVisible(card)) continue;
+
+      const profileLink = card.querySelector("a[href*='/in/']");
+      const name =
+        card.querySelector(".jobs-poster__name")?.textContent ||
+        card.querySelector(".hirer-card__hirer-information span[aria-hidden='true']")?.textContent ||
+        profileLink?.textContent ||
+        "";
+      const cleanName = name.replace(/\s+/g, " ").trim();
+      if (!cleanName || seen.has(cleanName)) continue;
+
+      const headline =
+        card.querySelector(".hirer-card__hirer-job-title")?.textContent ||
+        card.querySelector(".t-14.t-black--light")?.textContent ||
+        "";
+
+      const messageBtn = findMessageButton(card);
+
+      seen.add(cleanName);
+      targets.push({
+        name: cleanName,
+        headline: headline.replace(/\s+/g, " ").trim(),
+        profileUrl: profileLink?.href || "",
+        canMessage: !!messageBtn,
+        selector: messageBtn ? buildSelector(messageBtn) : "",
+      });
+    }
+
+    return targets;
+  }
+
+  /** People listed on a company's People tab, with connection degree when shown. */
+  function scrapeCompanyPeople() {
+    const cards = document.querySelectorAll(
+      ".org-people-profile-card__profile-card-spacing, .org-people-profile-card, " +
+      ".artdeco-entity-lockup, li.grid"
+    );
+
+    const people = [];
+    const seen = new Set();
+
+    for (const card of cards) {
+      if (!isVisible(card)) continue;
+
+      const link = card.querySelector("a[href*='/in/']");
+      if (!link) continue;
+
+      let profileUrl = "";
+      try {
+        const parsed = new URL(link.href, window.location.origin);
+        profileUrl = `${parsed.origin}${parsed.pathname}`;
+      } catch {
+        continue;
+      }
+      if (seen.has(profileUrl)) continue;
+
+      const name = (
+        card.querySelector(".artdeco-entity-lockup__title")?.textContent ||
+        card.querySelector(".org-people-profile-card__profile-title")?.textContent ||
+        link.textContent ||
+        ""
+      )
+        .replace(/\s+/g, " ")
+        .trim();
+      if (!name || /^linkedin member$/i.test(name)) continue;
+
+      const headline = (
+        card.querySelector(".artdeco-entity-lockup__subtitle")?.textContent ||
+        card.querySelector(".lt-line-clamp--multi-line")?.textContent ||
+        ""
+      )
+        .replace(/\s+/g, " ")
+        .trim();
+
+      const degreeText = (
+        card.querySelector(".dist-value")?.textContent ||
+        card.querySelector(".artdeco-entity-lockup__degree")?.textContent ||
+        (card.textContent || "").match(/\b(1st|2nd|3rd)\b/)?.[0] ||
+        ""
+      )
+        .replace(/\s+/g, " ")
+        .trim();
+
+      seen.add(profileUrl);
+      people.push({ name, headline, profileUrl, degree: degreeText });
+    }
+
+    return people;
   }
 
   // --- Phase 2: Post Creation Helper ---

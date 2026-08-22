@@ -15,13 +15,16 @@ import mongoose from "mongoose";
 import connectDB from "@/lib/db/connection";
 import JobSearch from "@/lib/db/models/job-search";
 import JobApplication from "@/lib/db/models/job-application";
+import ActivityLog from "@/lib/db/models/activity-log";
 import User from "@/lib/db/models/user";
 import { checkApiRateLimit } from "@/lib/utils/rate-limit";
 import { processDiscoveredJobs, prepareJobApplication, completeApplication, updateApplicationStatus } from "@/lib/services/job-analysis";
 import { answerFormQuestions } from "@/lib/services/form-answerer";
 import { generateTailoredResumePDF } from "@/lib/services/resume-pdf";
-import { canPerformAction } from "@/lib/anti-detection/rate-limiter";
+import { generateOutreachMessage } from "@/lib/services/company-outreach";
+import { canPerformAction, incrementUsage } from "@/lib/anti-detection/rate-limiter";
 import { getActorId } from "@/lib/utils/get-actor-id";
+import { parseLinkedInJobUrl, parseLinkedInJobListUrl, buildJobUrl } from "@/lib/utils/linkedin-url";
 
 /**
  * Resolve userId from NextAuth session, guest cookie, OR extension x-auth-token header.
@@ -100,6 +103,14 @@ function buildLinkedInSearchURL(
   return `https://www.linkedin.com/jobs/search/?${params.toString()}`;
 }
 
+/**
+ * Applications left today, or null when daily caps are disabled — Infinity is
+ * not representable in JSON, and the extension renders null as "unlimited".
+ */
+function remainingOrNull(limit: number, current: number): number | null {
+  return Number.isFinite(limit) ? limit - current : null;
+}
+
 function extractGeminiQuotaInfo(errorMessage: string) {
   const text = (errorMessage || "").toString();
   const isGemini = /gemini/i.test(text);
@@ -159,7 +170,8 @@ export async function POST(req: Request) {
         return NextResponse.json({ error: "Search not found" }, { status: 404 });
       }
 
-      // Check if we can still apply today
+      // Check if we can still apply today. Daily caps are disabled unless
+      // ENFORCE_DAILY_LIMITS is set, in which case this still gates the run.
       const { allowed, current, limit } = await canPerformAction(userId, "applies");
       if (!allowed) {
         return NextResponse.json({ error: "Daily application limit reached", remaining: 0 }, { status: 429 });
@@ -177,7 +189,7 @@ export async function POST(req: Request) {
       return NextResponse.json({
         command: "NAVIGATE",
         searchId,
-        remaining: limit - current,
+        remaining: remainingOrNull(limit, current),
         searches,
         searchConfig: {
           keywords: search.keywords,
@@ -258,8 +270,9 @@ export async function POST(req: Request) {
         };
       };
 
-      if (!searchId || !job?.url || !job?.title || !job?.company) {
-        return NextResponse.json({ error: "searchId and job(title/company/url) are required" }, { status: 400 });
+      // searchId is optional: single-link applies have no saved search behind them
+      if (!job?.url || !job?.title || !job?.company) {
+        return NextResponse.json({ error: "job(title/company/url) is required" }, { status: 400 });
       }
 
       const application = await JobApplication.findOneAndUpdate(
@@ -267,7 +280,7 @@ export async function POST(req: Request) {
         {
           $setOnInsert: {
             userId,
-            jobSearchId: searchId,
+            ...(searchId ? { jobSearchId: searchId } : {}),
             jobTitle: job.title,
             company: job.company,
             location: job.location || "",
@@ -293,6 +306,102 @@ export async function POST(req: Request) {
           matchScore: application?.matchScore ?? 0,
         },
       });
+    }
+
+    // ── Step 2c: Resolve a user-pasted LinkedIn link into one job to apply to
+    if (step === "single-apply") {
+      const { url } = body as { url?: string };
+      if (!url) {
+        return NextResponse.json({ error: "url is required" }, { status: 400 });
+      }
+
+      const parsed = parseLinkedInJobUrl(url);
+      if (!parsed) {
+        return NextResponse.json(
+          {
+            error:
+              "That does not look like a LinkedIn job link. Paste a job page URL, a search URL with a job open, or the numeric job id.",
+          },
+          { status: 400 }
+        );
+      }
+
+      const { allowed, current, limit } = await canPerformAction(userId, "applies");
+      if (!allowed) {
+        return NextResponse.json({ error: "Daily application limit reached", remaining: 0 }, { status: 429 });
+      }
+
+      // A job the user already applied to is reported back rather than reapplied.
+      const existing = await JobApplication.findOne({ userId, jobUrl: parsed.jobUrl }).lean();
+
+      return NextResponse.json({
+        command: "APPLY_JOB_URL",
+        jobId: parsed.jobId,
+        jobUrl: parsed.jobUrl,
+        remaining: remainingOrNull(limit, current),
+        alreadyApplied: existing?.status === "applied",
+        existing: existing
+          ? {
+              _id: existing._id.toString(),
+              jobTitle: existing.jobTitle,
+              company: existing.company,
+              status: existing.status,
+              appliedAt: existing.appliedAt ?? null,
+            }
+          : null,
+      });
+    }
+
+    // ── Step 2d: Resolve a pasted results page into a list of jobs to apply to
+    if (step === "list-apply") {
+      const { url } = body as { url?: string };
+      if (!url) {
+        return NextResponse.json({ error: "url is required" }, { status: 400 });
+      }
+
+      const parsed = parseLinkedInJobListUrl(url);
+      if (!parsed) {
+        return NextResponse.json(
+          {
+            error:
+              "That link is not a LinkedIn jobs list. Paste a job search, a collection, or a \"jobs for you\" results page.",
+          },
+          { status: 400 }
+        );
+      }
+
+      const { allowed, current, limit } = await canPerformAction(userId, "applies");
+      if (!allowed) {
+        return NextResponse.json({ error: "Daily application limit reached", remaining: 0 }, { status: 429 });
+      }
+
+      const remaining = remainingOrNull(limit, current);
+
+      return NextResponse.json({
+        command: "APPLY_JOB_LIST",
+        listUrl: parsed.listUrl,
+        // Ids named by the link itself, used only if the page renders no readable list
+        jobIds: parsed.jobIds,
+        jobUrls: parsed.jobIds.map(buildJobUrl),
+        remaining,
+        // One LinkedIn results page holds 25 jobs; that is the cap for one run
+        maxJobs: remaining == null ? 25 : Math.max(0, Math.min(25, remaining)),
+      });
+    }
+
+    // ── Step 2e: Which of these job URLs has this user already applied to?
+    if (step === "filter-applied") {
+      const { jobUrls } = body as { jobUrls?: string[] };
+      if (!Array.isArray(jobUrls) || jobUrls.length === 0) {
+        return NextResponse.json({ error: "jobUrls is required" }, { status: 400 });
+      }
+
+      const applied = await JobApplication.find(
+        { userId, jobUrl: { $in: jobUrls.slice(0, 100) }, status: "applied" },
+        { jobUrl: 1 }
+      ).lean();
+
+      return NextResponse.json({ appliedUrls: applied.map((a) => a.jobUrl) });
     }
 
     // ── Step 3: Prepare single application — tailor resume + generate PDF
@@ -331,13 +440,17 @@ export async function POST(req: Request) {
       }
 
       // Generate tailored PDF
-      const pdf = await generateTailoredResumePDF(userId, {
-        summary: application.tailoredResume?.summary,
-        skills: application.tailoredResume?.skills,
-        highlights: application.tailoredResume?.highlights,
-        experience: application.tailoredResume?.experience,
-        projects: application.tailoredResume?.projects,
-      });
+      const pdf = await generateTailoredResumePDF(
+        userId,
+        {
+          summary: application.tailoredResume?.summary,
+          skills: application.tailoredResume?.skills,
+          highlights: application.tailoredResume?.highlights,
+          experience: application.tailoredResume?.experience,
+          projects: application.tailoredResume?.projects,
+        },
+        application.tailoredResume?.source
+      );
 
       return NextResponse.json({
         applicationId,
@@ -408,6 +521,92 @@ export async function POST(req: Request) {
       });
     }
 
+    // ── Step 4b: Write the follow-up message for a job we just applied to
+    if (step === "outreach-message") {
+      const { applicationId, channel, recipientName, recipientHeadline } = body as {
+        applicationId?: string;
+        channel?: "hiring_team" | "company_page" | "connection";
+        recipientName?: string;
+        recipientHeadline?: string;
+      };
+
+      if (!applicationId || !channel) {
+        return NextResponse.json({ error: "applicationId and channel are required" }, { status: 400 });
+      }
+
+      const application = await JobApplication.findOne({ _id: applicationId, userId }).lean();
+      if (!application) {
+        return NextResponse.json({ error: "Application not found" }, { status: 404 });
+      }
+
+      const { allowed } = await canPerformAction(userId, "messages");
+      if (!allowed) {
+        return NextResponse.json({ error: "Daily message limit reached" }, { status: 429 });
+      }
+
+      const outreach = await generateOutreachMessage(userId, {
+        channel,
+        jobTitle: application.jobTitle,
+        company: application.company,
+        recipientName,
+        recipientHeadline,
+        jobDescription: application.jobDescription,
+      });
+
+      return NextResponse.json(outreach);
+    }
+
+    // ── Step 4c: Record the outcome of an outreach attempt
+    if (step === "outreach-complete") {
+      const { applicationId, sent, channel, recipient, message, reason } = body as {
+        applicationId?: string;
+        sent?: boolean;
+        channel?: "hiring_team" | "company_page" | "connection";
+        recipient?: string;
+        message?: string;
+        reason?: string;
+      };
+
+      if (!applicationId || typeof sent !== "boolean") {
+        return NextResponse.json({ error: "applicationId and sent are required" }, { status: 400 });
+      }
+
+      const updated = await JobApplication.findOneAndUpdate(
+        { _id: applicationId, userId },
+        {
+          outreach: {
+            attempted: true,
+            sent,
+            channel,
+            recipient: recipient || undefined,
+            message: sent ? message || undefined : undefined,
+            reason: sent ? undefined : reason || "Messaging not available",
+            at: new Date(),
+          },
+        },
+        { new: true }
+      ).lean();
+
+      if (!updated) {
+        return NextResponse.json({ error: "Application not found" }, { status: 404 });
+      }
+
+      if (sent) {
+        await incrementUsage(userId, "messages");
+      }
+
+      await ActivityLog.create({
+        userId,
+        action: sent ? "company_messaged" : "company_message_skipped",
+        module: "jobs",
+        details: { applicationId, channel, recipient, reason },
+        status: sent ? "success" : "skipped",
+        timestamp: new Date(),
+      });
+
+      return NextResponse.json({ success: true });
+    }
+
     // ── Step 5: Mark application complete
     if (step === "complete") {
       const { applicationId, success, notes } = body;
@@ -420,7 +619,7 @@ export async function POST(req: Request) {
       // Check remaining
       const { current, limit } = await canPerformAction(userId, "applies");
 
-      return NextResponse.json({ success: true, remaining: limit - current });
+      return NextResponse.json({ success: true, remaining: remainingOrNull(limit, current) });
     }
 
     // ── Step 6: Update status

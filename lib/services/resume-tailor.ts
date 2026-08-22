@@ -166,9 +166,16 @@ export async function getResumeTailoringSource(
   try {
     await connectDB();
     const user = await User.findById(userId).select("settings").lean();
-    const source = (user as { settings?: { resumeTailoringSource?: string } } | null)
-      ?.settings?.resumeTailoringSource;
-    return source === "data" ? "data" : "resume";
+    if (user) {
+      const source = (user as { settings?: { resumeTailoringSource?: string } })
+        .settings?.resumeTailoringSource;
+      return source === "data" ? "data" : "resume";
+    }
+
+    // Guests have no User document; their preference lives on the session doc.
+    const { default: GuestSession } = await import("@/lib/db/models/guest-session");
+    const guest = await GuestSession.findById(userId).select("resumeTailoringSource").lean();
+    return guest?.resumeTailoringSource === "data" ? "data" : "resume";
   } catch {
     return "resume";
   }
@@ -328,7 +335,7 @@ export async function tailorResumeForJob(
     customPrompt,
     source
   );
-  const result = await ai.generateJSON<unknown>(messages);
+  const result = await ai.generateJSON<unknown>(messages, { maxTokens: 4096 });
 
   return normalizeTailoredResumeResult(result, source);
 }

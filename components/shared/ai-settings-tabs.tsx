@@ -102,6 +102,8 @@ export interface AutomationSettings {
   dailyLimits: { applies: number; posts: number; scrapes: number };
   /** AI resume generation source for job automation */
   resumeTailoringSource?: "resume" | "data";
+  /** false when server-side daily caps are disabled (the default) */
+  limitsEnforced?: boolean;
 }
 
 // ─── Constants ──────────────────────────────────
@@ -961,6 +963,8 @@ export function AutomationTab({
   const [tailoringSource, setTailoringSource] = useState<"resume" | "data">(
     settings?.resumeTailoringSource === "data" ? "data" : "resume"
   );
+  const [sourceSaving, setSourceSaving] = useState<"resume" | "data" | null>(null);
+  const [careerDataReady, setCareerDataReady] = useState<boolean | null>(null);
 
   useEffect(() => {
     if (settings) {
@@ -969,6 +973,63 @@ export function AutomationTab({
       setTailoringSource(settings.resumeTailoringSource === "data" ? "data" : "resume");
     }
   }, [settings]);
+
+  // Selecting "career data" only works if that bank actually has content, so
+  // surface its state next to the option instead of failing at apply time.
+  useEffect(() => {
+    let active = true;
+    fetch("/api/career-profile")
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (!active) return;
+        const p = data?.profile;
+        setCareerDataReady(
+          !!p &&
+            ((p.experience?.length || 0) > 0 ||
+              (p.projects?.length || 0) > 0 ||
+              (p.skills?.length || 0) > 0 ||
+              !!p.summary?.trim())
+        );
+      })
+      .catch(() => active && setCareerDataReady(null));
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  /**
+   * Persist the resume source on click. The shared "Save Settings" button sits
+   * below two more cards, so a click-only selection was easy to lose on reload.
+   */
+  const selectSource = async (next: "resume" | "data") => {
+    const previous = tailoringSource;
+    if (next === previous || sourceSaving) return;
+
+    setTailoringSource(next);
+    setSourceSaving(next);
+    try {
+      const res = await fetch("/api/settings/automation", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ resumeTailoringSource: next }),
+      });
+      if (res.ok) {
+        toast.success(
+          next === "data"
+            ? "AI will rebuild resumes from your Career Data"
+            : "AI will optimize your uploaded resume"
+        );
+      } else {
+        const data = await res.json().catch(() => null);
+        setTailoringSource(previous);
+        toast.error(data?.error || "Failed to save resume source");
+      }
+    } catch {
+      setTailoringSource(previous);
+      toast.error("Network error. Please try again.");
+    }
+    setSourceSaving(null);
+  };
 
   const save = async () => {
     setSaving(true);
@@ -982,8 +1043,14 @@ export function AutomationTab({
           resumeTailoringSource: tailoringSource,
         }),
       });
-      if (res.ok) toast.success("Settings saved");
-      else toast.error("Failed to save");
+      const data = await res.json().catch(() => null);
+      if (res.ok) {
+        // Guests can only persist the resume source; the API says so via `notice`.
+        if (data?.notice) toast.warning(data.notice);
+        else toast.success("Settings saved");
+      } else {
+        toast.error(data?.error || "Failed to save");
+      }
     } catch {
       toast.error("Network error. Please try again.");
     }
@@ -1001,39 +1068,81 @@ export function AutomationTab({
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-3 max-w-xl">
-          <button
-            type="button"
-            onClick={() => setTailoringSource("resume")}
-            className={cn(
-              "w-full rounded-xl border px-4 py-3 text-left transition-colors",
-              tailoringSource === "resume"
-                ? "border-blue-500/50 bg-blue-500/10"
-                : "border-white/10 bg-white/[0.02] hover:bg-white/[0.04]"
-            )}
-          >
-            <p className="text-sm font-medium text-white">From my resume</p>
-            <p className="text-xs text-white/40 mt-1">
-              Optimize your uploaded/default resume document (wording, keywords, summary). Best if
-              your résumé already matches the roles you apply to.
-            </p>
-          </button>
-          <button
-            type="button"
-            onClick={() => setTailoringSource("data")}
-            className={cn(
-              "w-full rounded-xl border px-4 py-3 text-left transition-colors",
-              tailoringSource === "data"
-                ? "border-blue-500/50 bg-blue-500/10"
-                : "border-white/10 bg-white/[0.02] hover:bg-white/[0.04]"
-            )}
-          >
-            <p className="text-sm font-medium text-white">From my career data</p>
-            <p className="text-xs text-white/40 mt-1">
-              Rebuild from your Career Data (experience, projects, skills). Add that under{" "}
-              <span className="text-white/60">Settings → Resume → Career Data</span>. Morphs the
-              resume for the job type with strong ATS keywords.
-            </p>
-          </button>
+          {([
+            {
+              value: "resume" as const,
+              title: "From my resume",
+              body: (
+                <>
+                  Optimize your uploaded/default resume document (wording, keywords, summary).
+                  Best if your résumé already matches the roles you apply to.
+                </>
+              ),
+            },
+            {
+              value: "data" as const,
+              title: "From my career data",
+              body: (
+                <>
+                  Rebuild from your Career Data (experience, projects, skills). Add that under{" "}
+                  <span className="text-white/60">Settings → Resume → Career Data</span>. Morphs
+                  the resume for the job type with strong ATS keywords.
+                </>
+              ),
+            },
+          ]).map((option) => {
+            const selected = tailoringSource === option.value;
+            return (
+              <button
+                key={option.value}
+                type="button"
+                role="radio"
+                aria-checked={selected}
+                disabled={sourceSaving !== null}
+                onClick={() => selectSource(option.value)}
+                className={cn(
+                  "w-full flex gap-3 rounded-xl border px-4 py-3 text-left transition-colors disabled:opacity-60",
+                  selected
+                    ? "border-blue-500 bg-blue-500/10 ring-1 ring-blue-500/40"
+                    : "border-white/10 bg-white/[0.02] hover:bg-white/[0.06]"
+                )}
+              >
+                <span
+                  className={cn(
+                    "mt-0.5 h-4 w-4 shrink-0 rounded-full border flex items-center justify-center",
+                    selected ? "border-blue-400" : "border-white/30"
+                  )}
+                >
+                  {sourceSaving === option.value ? (
+                    <Loader2 className="h-3 w-3 animate-spin text-blue-400" />
+                  ) : (
+                    selected && <span className="h-2 w-2 rounded-full bg-blue-400" />
+                  )}
+                </span>
+                <span className="min-w-0">
+                  <span className="flex items-center gap-2">
+                    <span className="text-sm font-medium text-white">{option.title}</span>
+                    {selected && (
+                      <span className="text-[10px] uppercase tracking-wide text-blue-300">
+                        Active
+                      </span>
+                    )}
+                  </span>
+                  <span className="block text-xs text-white/40 mt-1">{option.body}</span>
+                  {option.value === "data" && careerDataReady === false && (
+                    <span className="block text-xs text-amber-400/90 mt-2">
+                      Your Career Data is empty — add experience, projects, or skills under
+                      Settings → Resume → Career Data, or tailoring will fall back to your
+                      uploaded resume.
+                    </span>
+                  )}
+                </span>
+              </button>
+            );
+          })}
+          <p className="text-xs text-white/30">
+            Saved as soon as you choose — the button below is only for limits and notifications.
+          </p>
         </CardContent>
       </Card>
 
@@ -1046,6 +1155,14 @@ export function AutomationTab({
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4 max-w-md">
+          {settings?.limitsEnforced === false && (
+            <p className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-300/90">
+              Daily caps are currently <span className="font-medium">disabled</span> — automation
+              keeps running past these numbers. They are saved as preferences only. Set
+              <span className="font-mono"> ENFORCE_DAILY_LIMITS=true</span> on the server to make
+              them block again.
+            </p>
+          )}
           {[
             {
               key: "applies" as const,

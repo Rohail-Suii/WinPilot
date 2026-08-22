@@ -101,6 +101,8 @@ interface OverviewData {
   activityByModule: ModuleBreakdown[];
   safetyScore: number;
   dailyLimits: DailyLimits;
+  /** false when server-side daily caps are disabled */
+  limitsEnforced?: boolean;
 }
 
 interface JobsData {
@@ -210,18 +212,22 @@ function UsageBar({
   label,
   value,
   limit,
+  enforced,
   color,
   icon: Icon,
 }: {
   label: string;
   value: number;
   limit: number;
+  enforced: boolean;
   color: string;
   icon: React.ElementType;
 }) {
+  // With daily caps off, the bar is a volume indicator against a reference
+  // level — nothing will block, so it never turns amber/red.
   const pct = limit > 0 ? Math.min((value / limit) * 100, 100) : 0;
-  const isWarning = pct >= 80;
-  const isDanger = pct >= 95;
+  const isWarning = enforced && pct >= 80;
+  const isDanger = enforced && pct >= 95;
 
   return (
     <div className="space-y-1.5">
@@ -231,7 +237,7 @@ function UsageBar({
           <span>{label}</span>
         </div>
         <span className={cn("text-xs font-medium", isDanger ? "text-red-400" : isWarning ? "text-amber-400" : "text-white/50")}>
-          {value}/{limit}
+          {enforced ? `${value}/${limit}` : `${value} · no limit`}
         </span>
       </div>
       <div className="h-2 rounded-full bg-white/5 overflow-hidden">
@@ -541,13 +547,14 @@ export function AnalyticsClient() {
   const usageItems = useMemo(() => {
     if (!overviewData) return [];
     const { todayUsage, dailyLimits } = overviewData;
+    const enforced = overviewData.limitsEnforced !== false;
     return [
-      { label: "Applications", value: todayUsage.applies, limit: dailyLimits.applies, color: "bg-blue-500", icon: Send },
-      { label: "Posts", value: todayUsage.posts, limit: dailyLimits.posts, color: "bg-purple-500", icon: FileText },
-      { label: "Scrapes", value: todayUsage.scrapes, limit: dailyLimits.scrapes, color: "bg-amber-500", icon: Search },
-      { label: "Profile Views", value: todayUsage.profileViews, limit: dailyLimits.profileViews, color: "bg-emerald-500", icon: Eye },
-      { label: "Messages", value: todayUsage.messages, limit: dailyLimits.messages, color: "bg-pink-500", icon: MessageSquare },
-      { label: "Comments", value: todayUsage.comments, limit: dailyLimits.comments, color: "bg-indigo-500", icon: MessageSquare },
+      { label: "Applications", value: todayUsage.applies, limit: dailyLimits.applies, enforced, color: "bg-blue-500", icon: Send },
+      { label: "Posts", value: todayUsage.posts, limit: dailyLimits.posts, enforced, color: "bg-purple-500", icon: FileText },
+      { label: "Scrapes", value: todayUsage.scrapes, limit: dailyLimits.scrapes, enforced, color: "bg-amber-500", icon: Search },
+      { label: "Profile Views", value: todayUsage.profileViews, limit: dailyLimits.profileViews, enforced, color: "bg-emerald-500", icon: Eye },
+      { label: "Messages", value: todayUsage.messages, limit: dailyLimits.messages, enforced, color: "bg-pink-500", icon: MessageSquare },
+      { label: "Comments", value: todayUsage.comments, limit: dailyLimits.comments, enforced, color: "bg-indigo-500", icon: MessageSquare },
     ];
   }, [overviewData]);
 

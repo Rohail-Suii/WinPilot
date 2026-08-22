@@ -21,7 +21,7 @@ const campaignCreateSchema = z.object({
   serviceDescription: z.string().max(500).default(""),
   targetAudience: z.string().max(200).default(""),
   useAI: z.boolean().default(true),
-  dailyCommentLimit: z.number().int().min(1).max(15).default(10),
+  dailyCommentLimit: z.number().int().min(1).max(500).default(10),
   postsPerKeyword: z.number().int().min(1).max(20).default(5),
 });
 
@@ -86,11 +86,10 @@ export async function GET(req: Request) {
       .sort({ updatedAt: -1 })
       .lean();
 
-    // Daily comment usage
-    const { current: commentsToday, limit: commentLimit } = await canPerformAction(
-      userId,
-      "comments"
-    );
+    // Daily comment usage. commentLimit is null when daily caps are disabled;
+    // the extension treats null as "no cap" and keeps commenting.
+    const { current: commentsToday, limit } = await canPerformAction(userId, "comments");
+    const commentLimit = Number.isFinite(limit) ? limit : null;
 
     return NextResponse.json({ campaigns, commentsToday, commentLimit });
   } catch (err) {
