@@ -86,7 +86,7 @@ export async function POST(req: Request) {
 
     // ── Step 1: Start automation — return search URL for extension to navigate to
     if (step === "start") {
-      const { searchId } = body;
+      const { searchId, platform: platformOverride } = body as { searchId?: string; platform?: JobSearchPlatform };
       if (!searchId) {
         return NextResponse.json({ error: "searchId is required" }, { status: 400 });
       }
@@ -109,8 +109,13 @@ export async function POST(req: Request) {
       }
       // LinkedIn entries first, then Indeed — the extension runs one platform's
       // tab at a time, so a "both" search processes them sequentially rather
-      // than interleaving.
-      const platform: JobSearchPlatform = search.platform || "linkedin";
+      // than interleaving. A platform passed with this request (the dashboard's
+      // run-time platform selector) overrides whatever is saved on the search.
+      const validPlatforms = new Set(["linkedin", "indeed", "both"]);
+      const platform: JobSearchPlatform =
+        (platformOverride && validPlatforms.has(platformOverride) ? platformOverride : null) ||
+        search.platform ||
+        "linkedin";
       const searches: { keyword: string; url: string; platform: "linkedin" | "indeed" }[] = [];
       if (platform === "linkedin" || platform === "both") {
         for (const keyword of keywordList) {

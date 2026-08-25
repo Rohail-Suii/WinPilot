@@ -304,7 +304,7 @@ export function useWebSocket() {
 
   const startAutomation = useCallback((
     searchId: string,
-    options?: { useAI?: boolean; useJobMatching?: boolean; useAIFormFilling?: boolean; useAutoMessagePage?: boolean; useAutoMessagePerson?: boolean }
+    options?: { useAI?: boolean; useJobMatching?: boolean; useAIFormFilling?: boolean; useAutoMessagePage?: boolean; useAutoMessagePerson?: boolean; platform?: "linkedin" | "indeed" | "both" }
   ) => {
     if (sharedSocket?.connected) {
       sharedSocket.emit("EXECUTE_ACTION", { type: "START_AUTOMATION", searchId, options: options || {} });

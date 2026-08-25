@@ -2422,6 +2422,7 @@ async function startAutomation(searchId, options = {}) {
   reportProgress("task:start", { label: "Starting job automation..." });
   reportProgress("task:progress", {
     message: [
+      options.platform ? `platform: ${options.platform}` : null,
       useAI ? "AI resume ON" : "AI resume OFF",
       useJobMatching ? "matching ON" : "matching OFF",
       useAIFormFilling ? "AI form fill ON" : "AI form fill OFF (rules)",
@@ -2451,7 +2452,7 @@ async function startAutomation(searchId, options = {}) {
     // multi-phrase keyword string well, so each keyword gets its own search)
     console.log(`[WinPilot] Step 1: Fetching search configuration...`);
     reportProgress("task:progress", { message: "Fetching search configuration..." });
-    const startData = await apiCall(`/api/jobs/automate?step=start`, { searchId });
+    const startData = await apiCall(`/api/jobs/automate?step=start`, { searchId, platform: options.platform });
     console.log(`[WinPilot] Step 1 result:`, JSON.stringify(startData).substring(0, 300));
     // remaining is null when server-side daily caps are disabled
     const remainingText =

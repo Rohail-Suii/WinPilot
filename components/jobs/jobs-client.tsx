@@ -37,6 +37,7 @@ import {
   Link2,
   Send,
   UserCheck,
+  Globe,
 } from "lucide-react";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Card, CardContent } from "@/components/ui/card";
@@ -193,6 +194,10 @@ export function JobsClient() {
   const [useAIFormFilling, setUseAIFormFilling] = useState(false);
   const [useAutoMessagePage, setUseAutoMessagePage] = useState(false);
   const [useAutoMessagePerson, setUseAutoMessagePerson] = useState(false);
+  // Which platform(s) "Start Automation" runs against — always exactly one of
+  // these three, never "none". Overrides whatever platform is saved on the
+  // search itself, so switching this doesn't require editing every search.
+  const [runPlatform, setRunPlatform] = useState<"linkedin" | "indeed" | "both">("linkedin");
   const logsEndRef = useRef<HTMLDivElement>(null);
   const [autoScroll, setAutoScroll] = useState(true);
 
@@ -200,6 +205,10 @@ export function JobsClient() {
     if (typeof window === "undefined") return;
     const savedAI = window.localStorage.getItem("jobs-automation-use-ai");
     if (savedAI === "false") setUseAI(false);
+    const savedPlatform = window.localStorage.getItem("jobs-automation-run-platform");
+    if (savedPlatform === "linkedin" || savedPlatform === "indeed" || savedPlatform === "both") {
+      setRunPlatform(savedPlatform);
+    }
     const savedMatch = window.localStorage.getItem("jobs-automation-use-matching");
     if (savedMatch === "false") setUseJobMatching(false);
     const savedForm = window.localStorage.getItem("jobs-automation-use-ai-form-filling");
@@ -218,6 +227,14 @@ export function JobsClient() {
       }
     }
   }, []);
+
+  const handleRunPlatformChange = (platform: "linkedin" | "indeed" | "both") => {
+    setRunPlatform(platform);
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem("jobs-automation-run-platform", platform);
+    }
+    toast.info(`Automation platform set to ${PLATFORM_LABEL[platform]}.`);
+  };
 
   const handleAiToggle = (checked: boolean) => {
     setUseAI(checked);
@@ -393,20 +410,17 @@ export function JobsClient() {
       toast.error("Extension not connected. Open LinkedIn or Indeed in Chrome with the extension enabled.");
       return;
     }
-    startAutomation(searchId, { useAI, useJobMatching, useAIFormFilling, useAutoMessagePage, useAutoMessagePerson });
+    startAutomation(searchId, { useAI, useJobMatching, useAIFormFilling, useAutoMessagePage, useAutoMessagePerson, platform: runPlatform });
     setAutomationRunning(true);
     const modes = [
+      PLATFORM_LABEL[runPlatform],
       useAI ? "AI resume" : null,
       useJobMatching ? "matching" : null,
       useAIFormFilling ? "AI form fill" : null,
       useAutoMessagePage ? "message page" : null,
       useAutoMessagePerson ? "message employee" : null,
     ].filter(Boolean);
-    toast.success(
-      modes.length
-        ? `Automation started (${modes.join(", ")}).`
-        : "Automation started (rule-based only).",
-    );
+    toast.success(`Automation started (${modes.join(", ")}).`);
   };
 
   const handleApplyFromLink = () => {
@@ -480,6 +494,26 @@ export function JobsClient() {
           <p className="text-white/50 mt-1">Configure searches and track applications</p>
         </div>
         <div className="flex items-center gap-3 flex-wrap justify-end">
+          <div className="flex items-center gap-2 rounded-lg border border-white/10 bg-white/[0.03] px-2 py-1.5">
+            <Globe className="h-3.5 w-3.5 text-blue-400/70 ml-1" />
+            <div className="flex rounded-md bg-white/5 p-0.5">
+              {(["linkedin", "indeed", "both"] as const).map((p) => (
+                <button
+                  key={p}
+                  type="button"
+                  onClick={() => handleRunPlatformChange(p)}
+                  title={`Run automation on ${PLATFORM_LABEL[p]}`}
+                  className={`px-2.5 py-1 text-xs rounded transition-colors ${
+                    runPlatform === p
+                      ? "bg-blue-500/30 text-blue-200"
+                      : "text-white/50 hover:text-white/80"
+                  }`}
+                >
+                  {p === "linkedin" ? "LinkedIn" : p === "indeed" ? "Indeed" : "Both"}
+                </button>
+              ))}
+            </div>
+          </div>
           <div className="flex items-center gap-2 rounded-lg border border-white/10 bg-white/[0.03] px-3 py-1.5">
             <Sparkles className="h-3.5 w-3.5 text-purple-400/70" />
             <span className="text-xs text-white/70">AI Resume Tailoring</span>
