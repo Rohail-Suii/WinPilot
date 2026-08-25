@@ -7,8 +7,10 @@ import { getUserAIProvider } from "@/lib/ai/key-manager";
 import { buildFormAnswerPrompt, type FormAnswerFieldMeta } from "@/lib/ai/prompts/form-answer";
 import { getDefaultResume, resumeToText } from "./resume-service";
 
+export type FormPlatform = "linkedin" | "indeed";
+
 /** Common questions with standard answers */
-const COMMON_ANSWERS: Record<string, (prefs: Record<string, string>) => string> = {
+const COMMON_ANSWERS: Record<string, (prefs: Record<string, string>, platform: FormPlatform) => string> = {
   "are you authorized to work": (prefs) => prefs.workAuthorization || "Yes",
   "do you require visa sponsorship": (prefs) => prefs.visaSponsorship || "No",
   "do you require sponsorship": (prefs) => prefs.visaSponsorship || "No",
@@ -17,7 +19,7 @@ const COMMON_ANSWERS: Record<string, (prefs: Record<string, string>) => string> 
   "desired salary": (prefs) => prefs.expectedSalary || "",
   "salary expectations": (prefs) => prefs.expectedSalary || "",
   "current salary": (prefs) => prefs.currentSalary || prefs.expectedSalary || "",
-  "how did you hear about": () => "LinkedIn",
+  "how did you hear about": (_prefs, platform) => (platform === "indeed" ? "Indeed" : "LinkedIn"),
   "start date": (prefs) => prefs.startDate || "Immediately",
   "notice period": (prefs) => prefs.noticePeriod || "2 weeks",
   "are you 18 years or older": () => "Yes",
@@ -119,7 +121,8 @@ export async function answerFormQuestion(
   userId: string,
   question: string,
   userPreferences: Record<string, string> = {},
-  fieldMeta: FormAnswerFieldMeta = {}
+  fieldMeta: FormAnswerFieldMeta = {},
+  platform: FormPlatform = "linkedin"
 ): Promise<FormAnswer> {
   const questionLower = question.toLowerCase().trim();
   const fieldType = fieldMeta.fieldType || "text";
@@ -131,7 +134,7 @@ export async function answerFormQuestion(
   // Check predefined answers first
   for (const [pattern, answerer] of Object.entries(COMMON_ANSWERS)) {
     if (questionLower.includes(pattern)) {
-      const answer = answerer(userPreferences);
+      const answer = answerer(userPreferences, platform);
       if (answer) {
         return {
           answer: formatAnswerForField(answer, question, fieldType, options, maxLength, expectedFormat),
@@ -157,6 +160,7 @@ export async function answerFormQuestion(
       options,
       maxLength,
       expectedFormat,
+      platform,
     });
     const result = await ai.generateJSON<{ answer: string; confidence: number }>(messages);
     const answer = formatAnswerForField(
@@ -184,7 +188,8 @@ export async function answerFormQuestion(
 export async function answerFormQuestions(
   userId: string,
   questions: FormQuestionInput[],
-  userPreferences: Record<string, string> = {}
+  userPreferences: Record<string, string> = {},
+  platform: FormPlatform = "linkedin"
 ): Promise<{ question: string; fieldType: string; answer: FormAnswer }[]> {
   const results: { question: string; fieldType: string; answer: FormAnswer }[] = [];
   const aiNeeded: { index: number; input: FormQuestionInput }[] = [];
@@ -198,7 +203,7 @@ export async function answerFormQuestions(
 
     for (const [pattern, answerer] of Object.entries(COMMON_ANSWERS)) {
       if (questionLower.includes(pattern)) {
-        const answer = answerer(userPreferences);
+        const answer = answerer(userPreferences, platform);
         if (answer) {
           results[i] = {
             question: q.question,
@@ -234,12 +239,18 @@ export async function answerFormQuestions(
       const batch = aiNeeded.slice(i, i + CONCURRENCY);
       const aiResults = await Promise.allSettled(
         batch.map((item) =>
-          answerFormQuestion(userId, item.input.question, userPreferences, {
-            fieldType: item.input.fieldType,
-            options: item.input.options,
-            maxLength: item.input.maxLength,
-            expectedFormat: item.input.expectedFormat,
-          })
+          answerFormQuestion(
+            userId,
+            item.input.question,
+            userPreferences,
+            {
+              fieldType: item.input.fieldType,
+              options: item.input.options,
+              maxLength: item.input.maxLength,
+              expectedFormat: item.input.expectedFormat,
+            },
+            platform
+          )
         )
       );
 

@@ -48,6 +48,7 @@ export const DAILY_LIMITS = {
   comments: 15,
   messages: 10,
   scrapes: 50,
+  likes: 40,
 } as const;
 
 /**
@@ -60,6 +61,8 @@ export const COOLDOWN_PERIODS = {
   comments: { min: 2 * 60 * 1000, max: 5 * 60 * 1000 }, // 2-5 min
   messages: { min: 5 * 60 * 1000, max: 20 * 60 * 1000 }, // 5-20 min
   connectionRequests: { min: 3 * 60 * 1000, max: 10 * 60 * 1000 }, // 3-10 min
+  likes: { min: 20 * 1000, max: 90 * 1000 }, // 20s-1.5min — cheapest action, still paced
+  scrapes: { min: 60 * 1000, max: 4 * 60 * 1000 }, // 1-4 min
 } as const;
 
 /**

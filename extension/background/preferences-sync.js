@@ -16,9 +16,13 @@ async function syncUserPreferences() {
       return;
     }
 
-    const stale = /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i;
-    const trimmed = (apiUrl || "").replace(/\/$/, "");
-    const url = trimmed && !stale.test(trimmed) ? trimmed : "https://winpilot.onrender.com";
+    // apiUrl is written by the service worker from its build-time endpoint;
+    // BUILD_API_URL (stamped by build.js) covers the first run before that.
+    const BUILD_API_URL = "__WINPILOT_APP_URL__";
+    const fallback = BUILD_API_URL.startsWith("__WIN")
+      ? "https://winpilot.onrender.com"
+      : BUILD_API_URL.replace(/\/$/, "");
+    const url = (apiUrl || "").replace(/\/$/, "") || fallback;
     const response = await fetch(`${url}/api/settings/automation`, {
       method: "GET",
       headers: {

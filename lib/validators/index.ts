@@ -63,6 +63,7 @@ export const jobSearchSchema = z.object({
   experienceLevel: z.array(z.enum(["internship", "entry", "associate", "mid-senior", "director", "executive"])).default([]),
   datePosted: z.enum(["any", "past-24h", "past-week", "past-month"]).default("any"),
   easyApplyOnly: z.boolean().default(true),
+  platform: z.enum(["linkedin", "indeed", "both"]).default("linkedin"),
   salary: z.object({
     min: z.number().optional(),
     max: z.number().optional(),

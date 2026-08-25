@@ -60,6 +60,18 @@ async function main() {
   initSocketServer(server);
   initRawWebSocketServer(server);
 
+  // The Autopilot clock. Must live in this process, not a Next route handler:
+  // it needs to outlive any single request and it dispatches over the very
+  // WebSocket servers mounted above.
+  //
+  // Imported dynamically, and only after app.prepare(): the scheduler reaches
+  // lib/db/connection, which throws at module-evaluation time when MONGODB_URI
+  // is missing. Next loads .env during prepare(), so a static import at the top
+  // of this file would evaluate that check before the variable exists and crash
+  // the process on boot.
+  const { startAutopilotScheduler } = await import("./lib/autopilot/scheduler");
+  startAutopilotScheduler();
+
   server.listen(port, hostname, () => {
     console.log(`> Next.js ready on http://${hostname}:${port}`);
     console.log(`> Socket.IO ready on the same port at path /api/ws`);

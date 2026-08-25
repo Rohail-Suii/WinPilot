@@ -4,7 +4,7 @@ export interface IActivityLog extends Document {
   userId: mongoose.Types.ObjectId;
   isGuest: boolean;
   action: string;
-  module: "jobs" | "hero" | "scraper";
+  module: "jobs" | "hero" | "scraper" | "autopilot";
   details: Record<string, unknown>;
   status: "success" | "failure" | "skipped";
   linkedinUrl?: string;
@@ -16,7 +16,7 @@ const ActivityLogSchema = new Schema<IActivityLog>({
   action: { type: String, required: true },
   module: {
     type: String,
-    enum: ["jobs", "hero", "scraper"],
+    enum: ["jobs", "hero", "scraper", "autopilot"],
     required: true,
   },
   details: { type: Schema.Types.Mixed, default: {} },

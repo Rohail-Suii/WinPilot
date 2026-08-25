@@ -36,6 +36,7 @@ import {
   FormInput,
   Link2,
   Send,
+  UserCheck,
 } from "lucide-react";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Card, CardContent } from "@/components/ui/card";
@@ -111,14 +112,13 @@ interface JobApplicationItem {
   };
   formAnswers?: { question: string; answer: string }[];
   outreach?: {
-    attempted?: boolean;
-    sent?: boolean;
-    channel?: "hiring_team" | "company_page" | "connection";
+    sent: boolean;
+    channel: "hiring_team" | "company_page" | "connection";
     recipient?: string;
     message?: string;
     reason?: string;
     at?: string;
-  };
+  }[];
   createdAt: string;
 }
 
@@ -131,9 +131,9 @@ interface ApplicationStats {
 }
 
 const OUTREACH_CHANNEL_LABEL: Record<string, string> = {
-  hiring_team: "messaged hiring team",
-  company_page: "messaged company page",
-  connection: "messaged a connection",
+  hiring_team: "hiring team",
+  company_page: "company page",
+  connection: "connection",
 };
 
 export function JobsClient() {
@@ -175,7 +175,8 @@ export function JobsClient() {
   const [useAI, setUseAI] = useState(true);
   const [useJobMatching, setUseJobMatching] = useState(true);
   const [useAIFormFilling, setUseAIFormFilling] = useState(false);
-  const [useAutoMessaging, setUseAutoMessaging] = useState(false);
+  const [useAutoMessagePage, setUseAutoMessagePage] = useState(false);
+  const [useAutoMessagePerson, setUseAutoMessagePerson] = useState(false);
   const logsEndRef = useRef<HTMLDivElement>(null);
   const [autoScroll, setAutoScroll] = useState(true);
 
@@ -187,8 +188,19 @@ export function JobsClient() {
     if (savedMatch === "false") setUseJobMatching(false);
     const savedForm = window.localStorage.getItem("jobs-automation-use-ai-form-filling");
     if (savedForm === "true") setUseAIFormFilling(true);
-    const savedMessaging = window.localStorage.getItem("jobs-automation-use-auto-messaging");
-    if (savedMessaging === "true") setUseAutoMessaging(true);
+    const savedMessagePage = window.localStorage.getItem("jobs-automation-use-auto-message-page");
+    const savedMessagePerson = window.localStorage.getItem("jobs-automation-use-auto-message-person");
+    if (savedMessagePage !== null || savedMessagePerson !== null) {
+      if (savedMessagePage === "true") setUseAutoMessagePage(true);
+      if (savedMessagePerson === "true") setUseAutoMessagePerson(true);
+    } else {
+      // Migrate the old single "auto messaging" toggle: it covered both channels
+      const legacyMessaging = window.localStorage.getItem("jobs-automation-use-auto-messaging");
+      if (legacyMessaging === "true") {
+        setUseAutoMessagePage(true);
+        setUseAutoMessagePerson(true);
+      }
+    }
   }, []);
 
   const handleAiToggle = (checked: boolean) => {
@@ -227,15 +239,27 @@ export function JobsClient() {
     );
   };
 
-  const handleAutoMessagingToggle = (checked: boolean) => {
-    setUseAutoMessaging(checked);
+  const handleAutoMessagePageToggle = (checked: boolean) => {
+    setUseAutoMessagePage(checked);
     if (typeof window !== "undefined") {
-      window.localStorage.setItem("jobs-automation-use-auto-messaging", String(checked));
+      window.localStorage.setItem("jobs-automation-use-auto-message-page", String(checked));
     }
     toast.info(
       checked
-        ? "Auto Messaging ON: after each application, WinPilot messages the hiring team, the company page, or a connection there (slower, uses AI credits)"
-        : "Auto Messaging OFF: applications are submitted without any follow-up message",
+        ? "Message Company Page ON: after each application, WinPilot messages the company's LinkedIn page (uses AI credits)"
+        : "Message Company Page OFF: the company page will not be messaged",
+    );
+  };
+
+  const handleAutoMessagePersonToggle = (checked: boolean) => {
+    setUseAutoMessagePerson(checked);
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem("jobs-automation-use-auto-message-person", String(checked));
+    }
+    toast.info(
+      checked
+        ? "Message Company Employee ON: after each application, WinPilot messages a hiring team member or 1st-degree connection there (uses AI credits)"
+        : "Message Company Employee OFF: no employee at the company will be messaged",
     );
   };
 
@@ -353,13 +377,14 @@ export function JobsClient() {
       toast.error("Extension not connected. Open LinkedIn in Chrome with the extension enabled.");
       return;
     }
-    startAutomation(searchId, { useAI, useJobMatching, useAIFormFilling, useAutoMessaging });
+    startAutomation(searchId, { useAI, useJobMatching, useAIFormFilling, useAutoMessagePage, useAutoMessagePerson });
     setAutomationRunning(true);
     const modes = [
       useAI ? "AI resume" : null,
       useJobMatching ? "matching" : null,
       useAIFormFilling ? "AI form fill" : null,
-      useAutoMessaging ? "auto messaging" : null,
+      useAutoMessagePage ? "message page" : null,
+      useAutoMessagePerson ? "message employee" : null,
     ].filter(Boolean);
     toast.success(
       modes.length
@@ -377,7 +402,7 @@ export function JobsClient() {
       toast.error("Extension not connected. Open LinkedIn in Chrome with the extension enabled.");
       return;
     }
-    applyJobUrl(parsedJobLink.jobUrl, { useAI, useJobMatching, useAIFormFilling, useAutoMessaging });
+    applyJobUrl(parsedJobLink.jobUrl, { useAI, useJobMatching, useAIFormFilling, useAutoMessagePage, useAutoMessagePerson });
     setAutomationRunning(true);
     setActiveTab("logs");
     toast.success("Checking the job and applying — watch the logs for progress.");
@@ -392,7 +417,7 @@ export function JobsClient() {
       toast.error("Extension not connected. Open LinkedIn in Chrome with the extension enabled.");
       return;
     }
-    applyJobList(parsedListLink.listUrl, { useAI, useJobMatching, useAIFormFilling, useAutoMessaging });
+    applyJobList(parsedListLink.listUrl, { useAI, useJobMatching, useAIFormFilling, useAutoMessagePage, useAutoMessagePerson });
     setAutomationRunning(true);
     setActiveTab("logs");
     toast.success("Reading the jobs on that page and applying to each one — watch the logs.");
@@ -459,9 +484,15 @@ export function JobsClient() {
           </div>
           <div className="flex items-center gap-2 rounded-lg border border-white/10 bg-white/[0.03] px-3 py-1.5">
             <Send className="h-3.5 w-3.5 text-amber-400/70" />
-            <span className="text-xs text-white/70">Auto Messaging</span>
-            <Switch checked={useAutoMessaging} onCheckedChange={handleAutoMessagingToggle} />
-            <span className="text-xs text-white/40">{useAutoMessaging ? "ON" : "OFF"}</span>
+            <span className="text-xs text-white/70">Message Company Page</span>
+            <Switch checked={useAutoMessagePage} onCheckedChange={handleAutoMessagePageToggle} />
+            <span className="text-xs text-white/40">{useAutoMessagePage ? "ON" : "OFF"}</span>
+          </div>
+          <div className="flex items-center gap-2 rounded-lg border border-white/10 bg-white/[0.03] px-3 py-1.5">
+            <UserCheck className="h-3.5 w-3.5 text-amber-400/70" />
+            <span className="text-xs text-white/70">Message Company Employee</span>
+            <Switch checked={useAutoMessagePerson} onCheckedChange={handleAutoMessagePersonToggle} />
+            <span className="text-xs text-white/40">{useAutoMessagePerson ? "ON" : "OFF"}</span>
           </div>
           <div className="flex items-center gap-2 text-sm">
             <span className={`h-2 w-2 rounded-full ${isConnected ? "bg-emerald-400" : "bg-red-400"}`} />
@@ -886,24 +917,26 @@ export function JobsClient() {
                         </div>
                       )}
 
-                      {app.outreach?.attempted && (
-                        <div className="space-y-1">
-                          <p className="text-xs font-medium text-white/60">
-                            Follow-up message
-                            <Badge variant={app.outreach.sent ? "success" : "default"} className="ml-2">
-                              {app.outreach.sent ? OUTREACH_CHANNEL_LABEL[app.outreach.channel ?? "company_page"] : "not sent"}
-                            </Badge>
-                          </p>
-                          {app.outreach.sent ? (
-                            <p className="text-xs text-white/70 whitespace-pre-line">
-                              {app.outreach.recipient && (
-                                <span className="text-white/50">To {app.outreach.recipient}: </span>
+                      {app.outreach && app.outreach.length > 0 && (
+                        <div className="space-y-2">
+                          <p className="text-xs font-medium text-white/60">Follow-up messages</p>
+                          {app.outreach.map((attempt, i) => (
+                            <div key={i} className="space-y-1">
+                              <Badge variant={attempt.sent ? "success" : "default"}>
+                                {attempt.sent ? OUTREACH_CHANNEL_LABEL[attempt.channel] : `${OUTREACH_CHANNEL_LABEL[attempt.channel]} — not sent`}
+                              </Badge>
+                              {attempt.sent ? (
+                                <p className="text-xs text-white/70 whitespace-pre-line">
+                                  {attempt.recipient && (
+                                    <span className="text-white/50">To {attempt.recipient}: </span>
+                                  )}
+                                  {attempt.message}
+                                </p>
+                              ) : (
+                                <p className="text-xs text-white/40">{attempt.reason}</p>
                               )}
-                              {app.outreach.message}
-                            </p>
-                          ) : (
-                            <p className="text-xs text-white/40">{app.outreach.reason}</p>
-                          )}
+                            </div>
+                          ))}
                         </div>
                       )}
 

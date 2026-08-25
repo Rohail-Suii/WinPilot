@@ -3,7 +3,6 @@ import { cookies } from "next/headers";
 import connectDB from "@/lib/db/connection";
 import GuestSession from "@/lib/db/models/guest-session";
 import User from "@/lib/db/models/user";
-import mongoose from "mongoose";
 
 export const GUEST_COOKIE = "guestId";
 export const GUEST_TTL_MS = 48 * 60 * 60 * 1000; // 48 hours
@@ -78,4 +77,25 @@ export async function getActorId(): Promise<ActorId | null> {
   );
 
   return { id: gs._id.toString(), isGuest: true };
+}
+
+/**
+ * Resolve the acting user from a dashboard session/guest cookie OR the
+ * extension's `x-auth-token` header.
+ *
+ * The extension has no cookies for our origin, so it authenticates with the
+ * stored userId token instead. Guests can never run the extension, so a token
+ * only ever resolves to a real User.
+ */
+export async function resolveRequestUserId(req: Request): Promise<string | null> {
+  const actor = await getActorId();
+  if (actor) return actor.id;
+
+  const token = req.headers.get("x-auth-token");
+  if (token && isValidObjectId(token)) {
+    await connectDB();
+    const user = await User.exists({ _id: token });
+    if (user) return token;
+  }
+  return null;
 }

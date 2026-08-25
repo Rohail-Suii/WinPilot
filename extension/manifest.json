@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "WinPilot",
   "version": "1.0.2",
-  "description": "LinkedIn automation assistant \u2014 auto-apply, post content, and scrape leads",
+  "description": "Job application automation assistant \u2014 auto-apply, post content, and scrape leads",
   "permissions": [
     "activeTab",
     "storage",
@@ -12,6 +12,7 @@
   ],
   "host_permissions": [
     "https://www.linkedin.com/*",
+    "https://www.indeed.com/*",
     "https://winpilot.onrender.com/*",
     "https://winpilot.tech/*",
     "http://localhost/*"

@@ -58,6 +58,7 @@ export async function GET(req: Request) {
 
       // Lightweight projection: exclude jobDescription from list
       const projection = {
+        platform: 1,
         jobTitle: 1,
         company: 1,
         location: 1,

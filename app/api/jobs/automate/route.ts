@@ -11,7 +11,6 @@
  */
 
 import { NextResponse } from "next/server";
-import mongoose from "mongoose";
 import connectDB from "@/lib/db/connection";
 import JobSearch from "@/lib/db/models/job-search";
 import JobApplication from "@/lib/db/models/job-application";
@@ -23,85 +22,12 @@ import { answerFormQuestions } from "@/lib/services/form-answerer";
 import { generateTailoredResumePDF } from "@/lib/services/resume-pdf";
 import { generateOutreachMessage } from "@/lib/services/company-outreach";
 import { canPerformAction, incrementUsage } from "@/lib/anti-detection/rate-limiter";
-import { getActorId } from "@/lib/utils/get-actor-id";
+import { resolveRequestUserId as resolveUserId } from "@/lib/utils/get-actor-id";
 import { parseLinkedInJobUrl, parseLinkedInJobListUrl, buildJobUrl } from "@/lib/utils/linkedin-url";
-
-/**
- * Resolve userId from NextAuth session, guest cookie, OR extension x-auth-token header.
- * Extension authenticates with its stored token (real userId only — guests cannot run the extension).
- */
-async function resolveUserId(req: Request): Promise<string | null> {
-  // Try NextAuth session / guest cookie first (dashboard calls)
-  const actor = await getActorId();
-  if (actor) return actor.id;
-
-  // Fall back to extension token header (real users only)
-  const token = req.headers.get("x-auth-token");
-  if (token && mongoose.Types.ObjectId.isValid(token)) {
-    await connectDB();
-    const user = await User.exists({ _id: token });
-    if (user) return token;
-  }
-  return null;
-}
-// Split a comma-separated keywords string into individual search phrases.
-// LinkedIn's keyword search doesn't handle a single query containing multiple
-// comma-separated phrases well (it's matched close to literally), so each
-// phrase is run as its own search instead.
-function splitKeywords(raw: string): string[] {
-  return Array.from(
-    new Set(
-      (raw || "")
-        .split(",")
-        .map((k) => k.trim())
-        .filter(Boolean)
-    )
-  );
-}
-
-// LinkedIn search URL builder — builds a search URL for a single keyword phrase
-function buildLinkedInSearchURL(
-  search: {
-    location?: string;
-    remote?: boolean;
-    experienceLevel?: string[];
-    datePosted?: string;
-    easyApplyOnly?: boolean;
-  },
-  keyword: string
-): string {
-  const params = new URLSearchParams();
-  params.set("keywords", keyword);
-  if (search.location) params.set("location", search.location);
-
-  // LinkedIn f_TPR (time posted range)
-  const timeMap: Record<string, string> = {
-    "past-24h": "r86400",
-    "past-week": "r604800",
-    "past-month": "r2592000",
-  };
-  if (search.datePosted && timeMap[search.datePosted]) {
-    params.set("f_TPR", timeMap[search.datePosted]);
-  }
-
-  // Experience level mapping
-  const expMap: Record<string, string> = {
-    internship: "1",
-    entry: "2",
-    associate: "3",
-    "mid-senior": "4",
-    director: "5",
-    executive: "6",
-  };
-  if (search.experienceLevel?.length) {
-    params.set("f_E", search.experienceLevel.map((e) => expMap[e] || "").filter(Boolean).join(","));
-  }
-
-  if (search.remote) params.set("f_WT", "2"); // Remote
-  if (search.easyApplyOnly) params.set("f_AL", "true"); // Easy Apply
-
-  return `https://www.linkedin.com/jobs/search/?${params.toString()}`;
-}
+import { parseIndeedJobUrl, parseIndeedJobListUrl, buildIndeedJobUrl } from "@/lib/utils/indeed-url";
+import { splitKeywords, buildLinkedInSearchURL, buildIndeedSearchURL } from "@/lib/services/job-search-builders";
+import type { JobSearchPlatform } from "@/lib/db/models/job-search";
+import type { JobApplicationPlatform } from "@/lib/db/models/job-application";
 
 /**
  * Applications left today, or null when daily caps are disabled — Infinity is
@@ -181,10 +107,21 @@ export async function POST(req: Request) {
       if (!keywordList.length) {
         return NextResponse.json({ error: "Search has no keywords configured" }, { status: 400 });
       }
-      const searches = keywordList.map((keyword) => ({
-        keyword,
-        url: buildLinkedInSearchURL(search, keyword),
-      }));
+      // LinkedIn entries first, then Indeed — the extension runs one platform's
+      // tab at a time, so a "both" search processes them sequentially rather
+      // than interleaving.
+      const platform: JobSearchPlatform = search.platform || "linkedin";
+      const searches: { keyword: string; url: string; platform: "linkedin" | "indeed" }[] = [];
+      if (platform === "linkedin" || platform === "both") {
+        for (const keyword of keywordList) {
+          searches.push({ keyword, url: buildLinkedInSearchURL(search, keyword), platform: "linkedin" });
+        }
+      }
+      if (platform === "indeed" || platform === "both") {
+        for (const keyword of keywordList) {
+          searches.push({ keyword, url: buildIndeedSearchURL(search, keyword), platform: "indeed" });
+        }
+      }
 
       return NextResponse.json({
         command: "NAVIGATE",
@@ -219,6 +156,7 @@ export async function POST(req: Request) {
         url: string;
         description?: string;
         easyApply?: boolean;
+        platform?: JobApplicationPlatform;
       }) => ({
         jobTitle: j.title,
         company: j.company,
@@ -226,6 +164,7 @@ export async function POST(req: Request) {
         jobUrl: j.url,
         jobDescription: j.description || "",
         easyApply: j.easyApply ?? true,
+        platform: j.platform || (parseIndeedJobUrl(j.url) ? "indeed" : "linkedin"),
       }));
 
       const result = await processDiscoveredJobs(
@@ -267,6 +206,7 @@ export async function POST(req: Request) {
           location?: string;
           url?: string;
           description?: string;
+          platform?: JobApplicationPlatform;
         };
       };
 
@@ -275,12 +215,16 @@ export async function POST(req: Request) {
         return NextResponse.json({ error: "job(title/company/url) is required" }, { status: 400 });
       }
 
+      const platform: JobApplicationPlatform =
+        job.platform || (parseIndeedJobUrl(job.url) ? "indeed" : "linkedin");
+
       const application = await JobApplication.findOneAndUpdate(
         { userId, jobUrl: job.url },
         {
           $setOnInsert: {
             userId,
             ...(searchId ? { jobSearchId: searchId } : {}),
+            platform,
             jobTitle: job.title,
             company: job.company,
             location: job.location || "",
@@ -315,12 +259,14 @@ export async function POST(req: Request) {
         return NextResponse.json({ error: "url is required" }, { status: 400 });
       }
 
-      const parsed = parseLinkedInJobUrl(url);
+      // Try LinkedIn first, then Indeed — the pasted link tells us which platform.
+      const platform: "linkedin" | "indeed" = parseLinkedInJobUrl(url) ? "linkedin" : "indeed";
+      const parsed = platform === "linkedin" ? parseLinkedInJobUrl(url) : parseIndeedJobUrl(url);
       if (!parsed) {
         return NextResponse.json(
           {
             error:
-              "That does not look like a LinkedIn job link. Paste a job page URL, a search URL with a job open, or the numeric job id.",
+              "That does not look like a LinkedIn or Indeed job link. Paste a job page URL, a search URL with a job open, or the job id.",
           },
           { status: 400 }
         );
@@ -336,6 +282,7 @@ export async function POST(req: Request) {
 
       return NextResponse.json({
         command: "APPLY_JOB_URL",
+        platform,
         jobId: parsed.jobId,
         jobUrl: parsed.jobUrl,
         remaining: remainingOrNull(limit, current),
@@ -359,12 +306,14 @@ export async function POST(req: Request) {
         return NextResponse.json({ error: "url is required" }, { status: 400 });
       }
 
-      const parsed = parseLinkedInJobListUrl(url);
+      // Try LinkedIn first, then Indeed — the pasted link tells us which platform.
+      const platform: "linkedin" | "indeed" = parseLinkedInJobListUrl(url) ? "linkedin" : "indeed";
+      const parsed = platform === "linkedin" ? parseLinkedInJobListUrl(url) : parseIndeedJobListUrl(url);
       if (!parsed) {
         return NextResponse.json(
           {
             error:
-              "That link is not a LinkedIn jobs list. Paste a job search, a collection, or a \"jobs for you\" results page.",
+              "That link is not a LinkedIn or Indeed jobs list. Paste a job search, a collection, or a results page.",
           },
           { status: 400 }
         );
@@ -376,16 +325,18 @@ export async function POST(req: Request) {
       }
 
       const remaining = remainingOrNull(limit, current);
+      // One results page holds ~25 jobs on LinkedIn, ~15 on Indeed; that's the cap for one run.
+      const pageSize = platform === "linkedin" ? 25 : 15;
 
       return NextResponse.json({
         command: "APPLY_JOB_LIST",
+        platform,
         listUrl: parsed.listUrl,
         // Ids named by the link itself, used only if the page renders no readable list
         jobIds: parsed.jobIds,
-        jobUrls: parsed.jobIds.map(buildJobUrl),
+        jobUrls: parsed.jobIds.map(platform === "linkedin" ? buildJobUrl : buildIndeedJobUrl),
         remaining,
-        // One LinkedIn results page holds 25 jobs; that is the cap for one run
-        maxJobs: remaining == null ? 25 : Math.max(0, Math.min(25, remaining)),
+        maxJobs: remaining == null ? pageSize : Math.max(0, Math.min(pageSize, remaining)),
       });
     }
 
@@ -475,6 +426,11 @@ export async function POST(req: Request) {
         ...((settings.formPreferences as Record<string, string>) || {}),
       };
 
+      const platform: JobApplicationPlatform = applicationId
+        ? ((await JobApplication.findOne({ _id: applicationId, userId }, { platform: 1 }).lean())
+            ?.platform || "linkedin")
+        : "linkedin";
+
       const answers = await answerFormQuestions(
         userId,
         questions.map(
@@ -494,7 +450,8 @@ export async function POST(req: Request) {
             expectedFormat: q.expectedFormat,
           })
         ),
-        prefs
+        prefs,
+        platform
       );
 
       // Save form answers to the application (append per step)
@@ -567,21 +524,22 @@ export async function POST(req: Request) {
         reason?: string;
       };
 
-      if (!applicationId || typeof sent !== "boolean") {
-        return NextResponse.json({ error: "applicationId and sent are required" }, { status: 400 });
+      if (!applicationId || typeof sent !== "boolean" || !channel) {
+        return NextResponse.json({ error: "applicationId, sent, and channel are required" }, { status: 400 });
       }
 
       const updated = await JobApplication.findOneAndUpdate(
         { _id: applicationId, userId },
         {
-          outreach: {
-            attempted: true,
-            sent,
-            channel,
-            recipient: recipient || undefined,
-            message: sent ? message || undefined : undefined,
-            reason: sent ? undefined : reason || "Messaging not available",
-            at: new Date(),
+          $push: {
+            outreach: {
+              sent,
+              channel,
+              recipient: recipient || undefined,
+              message: sent ? message || undefined : undefined,
+              reason: sent ? undefined : reason || "Messaging not available",
+              at: new Date(),
+            },
           },
         },
         { new: true }

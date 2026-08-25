@@ -1,13 +1,18 @@
 // WinPilot Popup Script
 
-const DEFAULT_DASHBOARD_BASE_URL = "https://winpilot.onrender.com";
+// Stamped by build.js from WINPILOT_APP_URL (see extension/.env.example).
+// The literal token is what an unstamped source file falls back on.
+const BUILD_DASHBOARD_BASE_URL = "__WINPILOT_APP_URL__";
+const DASHBOARD_BASE_URL = BUILD_DASHBOARD_BASE_URL.startsWith("__WIN")
+  ? "https://winpilot.onrender.com"
+  : BUILD_DASHBOARD_BASE_URL.replace(/\/$/, "");
 
 const app = document.getElementById("app");
 
 async function init() {
   const status = await getBackgroundStatus();
   const authToken = await getStoredToken();
-  const dashboardBaseUrl = await getDashboardBaseUrl();
+  const dashboardBaseUrl = DASHBOARD_BASE_URL;
 
   if (!authToken) {
     renderLoginPrompt(dashboardBaseUrl);
@@ -15,22 +20,6 @@ async function init() {
   }
 
   renderDashboard(status, dashboardBaseUrl);
-}
-
-function normalizeBaseUrl(url) {
-  return (url || "").replace(/\/$/, "");
-}
-
-function getDashboardBaseUrl() {
-  return new Promise((resolve) => {
-    chrome.storage.local.get(["dashboardUrl", "apiUrl"], (result) => {
-      const stale = /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i;
-      const stored = normalizeBaseUrl(result.dashboardUrl || result.apiUrl);
-
-      // Ignore localhost values left over from a dev build.
-      resolve(stored && !stale.test(stored) ? stored : DEFAULT_DASHBOARD_BASE_URL);
-    });
-  });
 }
 
 function getBackgroundStatus() {

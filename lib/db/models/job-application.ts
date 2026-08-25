@@ -22,11 +22,14 @@ export interface IMatchBreakdown {
   recommendation?: string;
 }
 
+export type JobApplicationPlatform = "linkedin" | "indeed";
+
 export interface IJobApplication extends Document {
   userId: mongoose.Types.ObjectId;
   isGuest: boolean;
   expiresAt?: Date;
   jobSearchId?: mongoose.Types.ObjectId;
+  platform: JobApplicationPlatform;
   jobTitle: string;
   company: string;
   location?: string;
@@ -54,17 +57,20 @@ export interface IJobApplication extends Document {
     }[];
   };
   matchBreakdown?: IMatchBreakdown;
-  /** Follow-up message sent on LinkedIn after applying (Auto Messaging). */
+  /**
+   * Follow-up messages sent on LinkedIn after applying (Auto Messaging). One
+   * entry per channel attempted — "message page" and "message employee" are
+   * independent toggles, so both can fire for the same application.
+   */
   outreach?: {
-    attempted: boolean;
     sent: boolean;
-    channel?: "hiring_team" | "company_page" | "connection";
+    channel: "hiring_team" | "company_page" | "connection";
     recipient?: string;
     message?: string;
     /** Why nothing was sent — e.g. the company page has messaging turned off. */
     reason?: string;
-    at?: Date;
-  };
+    at: Date;
+  }[];
   formAnswers: {
     question: string;
     answer: string;
@@ -81,6 +87,7 @@ const JobApplicationSchema = new Schema<IJobApplication>(
   {
     userId: { type: Schema.Types.ObjectId, ref: "User", required: true },
     jobSearchId: { type: Schema.Types.ObjectId, ref: "JobSearch" },
+    platform: { type: String, enum: ["linkedin", "indeed"], default: "linkedin" },
     jobTitle: { type: String, required: true },
     company: { type: String, required: true },
     location: String,
@@ -135,15 +142,16 @@ const JobApplicationSchema = new Schema<IJobApplication>(
       concerns: [String],
       recommendation: String,
     },
-    outreach: {
-      attempted: { type: Boolean, default: false },
-      sent: { type: Boolean, default: false },
-      channel: { type: String, enum: ["hiring_team", "company_page", "connection"] },
-      recipient: String,
-      message: String,
-      reason: String,
-      at: Date,
-    },
+    outreach: [
+      {
+        sent: { type: Boolean, default: false },
+        channel: { type: String, enum: ["hiring_team", "company_page", "connection"], required: true },
+        recipient: String,
+        message: String,
+        reason: String,
+        at: { type: Date, default: Date.now },
+      },
+    ],
     formAnswers: [
       {
         question: String,

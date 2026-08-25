@@ -20,6 +20,7 @@ interface DiscoveredJob {
   salary?: string;
   postedDate?: string;
   easyApply: boolean;
+  platform?: "linkedin" | "indeed";
 }
 
 function normalizeStringArray(value: unknown): string[] {
@@ -111,6 +112,7 @@ export async function processDiscoveredJobs(
       await JobApplication.create({
         userId,
         jobSearchId,
+        platform: job.platform || "linkedin",
         jobTitle: job.jobTitle,
         company: job.company,
         location: job.location,

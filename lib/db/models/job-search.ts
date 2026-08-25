@@ -1,5 +1,7 @@
 import mongoose, { Schema, type Document, type Model } from "mongoose";
 
+export type JobSearchPlatform = "linkedin" | "indeed" | "both";
+
 export interface IJobSearch extends Document {
   userId: mongoose.Types.ObjectId;
   name: string;
@@ -8,7 +10,9 @@ export interface IJobSearch extends Document {
   remote: boolean;
   experienceLevel: string[];
   datePosted: string;
+  /** LinkedIn-only filter — has no effect on the Indeed leg of a "both" run, since Indeed automation targets Indeed Apply jobs unconditionally. */
   easyApplyOnly: boolean;
+  platform: JobSearchPlatform;
   salary?: { min?: number; max?: number };
   excludeCompanies: string[];
   excludeKeywords: string[];
@@ -37,6 +41,7 @@ const JobSearchSchema = new Schema<IJobSearch>(
       default: "any",
     },
     easyApplyOnly: { type: Boolean, default: true },
+    platform: { type: String, enum: ["linkedin", "indeed", "both"], default: "linkedin" },
     salary: {
       min: Number,
       max: Number,

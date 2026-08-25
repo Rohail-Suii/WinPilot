@@ -304,7 +304,7 @@ export function useWebSocket() {
 
   const startAutomation = useCallback((
     searchId: string,
-    options?: { useAI?: boolean; useJobMatching?: boolean; useAIFormFilling?: boolean; useAutoMessaging?: boolean }
+    options?: { useAI?: boolean; useJobMatching?: boolean; useAIFormFilling?: boolean; useAutoMessagePage?: boolean; useAutoMessagePerson?: boolean }
   ) => {
     if (sharedSocket?.connected) {
       sharedSocket.emit("EXECUTE_ACTION", { type: "START_AUTOMATION", searchId, options: options || {} });
@@ -314,7 +314,7 @@ export function useWebSocket() {
   /** Apply to a single job the user pasted a LinkedIn link for. */
   const applyJobUrl = useCallback((
     url: string,
-    options?: { useAI?: boolean; useJobMatching?: boolean; useAIFormFilling?: boolean; useAutoMessaging?: boolean }
+    options?: { useAI?: boolean; useJobMatching?: boolean; useAIFormFilling?: boolean; useAutoMessagePage?: boolean; useAutoMessagePerson?: boolean }
   ) => {
     if (sharedSocket?.connected) {
       sharedSocket.emit("EXECUTE_ACTION", { type: "APPLY_JOB_URL", url, options: options || {} });
@@ -324,7 +324,7 @@ export function useWebSocket() {
   /** Apply to every job on a results page the user pasted a link for. */
   const applyJobList = useCallback((
     url: string,
-    options?: { useAI?: boolean; useJobMatching?: boolean; useAIFormFilling?: boolean; useAutoMessaging?: boolean }
+    options?: { useAI?: boolean; useJobMatching?: boolean; useAIFormFilling?: boolean; useAutoMessagePage?: boolean; useAutoMessagePerson?: boolean }
   ) => {
     if (sharedSocket?.connected) {
       sharedSocket.emit("EXECUTE_ACTION", { type: "APPLY_JOB_LIST", url, options: options || {} });

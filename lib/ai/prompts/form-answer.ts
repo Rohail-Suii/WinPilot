@@ -5,6 +5,7 @@ export interface FormAnswerFieldMeta {
   options?: string[];
   maxLength?: number;
   expectedFormat?: "digits" | "decimal" | "yes_no" | "text" | "long_text" | "currency" | "date" | "unknown";
+  platform?: "linkedin" | "indeed";
 }
 
 export function buildFormAnswerPrompt(
@@ -23,6 +24,7 @@ export function buildFormAnswerPrompt(
   const options = fieldMeta?.options?.filter(Boolean) || [];
   const maxLength = fieldMeta?.maxLength;
   const expectedFormat = fieldMeta?.expectedFormat || "unknown";
+  const platformLabel = fieldMeta?.platform === "indeed" ? "Indeed" : "LinkedIn";
 
   const optionsBlock =
     options.length > 0
@@ -52,7 +54,7 @@ export function buildFormAnswerPrompt(
   return [
     {
       role: "system",
-      content: `You are a job application form assistant. Answer Easy Apply / LinkedIn screening questions accurately based on the candidate's resume and preferences.
+      content: `You are a job application form assistant. Answer quick-apply screening questions (${platformLabel}) accurately based on the candidate's resume and preferences.
 
 Rules:
 - Be concise and direct

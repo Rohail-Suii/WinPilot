@@ -6,6 +6,7 @@ import { signOut, useSession } from "next-auth/react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   LayoutDashboard,
+  Bot,
   Briefcase,
   Trophy,
   Database,
@@ -31,6 +32,11 @@ const navItems = [
     label: "Dashboard",
     href: "/dashboard",
     icon: LayoutDashboard,
+  },
+  {
+    label: "Autopilot",
+    href: "/dashboard/autopilot",
+    icon: Bot,
   },
   {
     label: "Job Automation",

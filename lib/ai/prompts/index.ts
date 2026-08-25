@@ -17,3 +17,16 @@ export {
 } from "./interview-prep";
 export { buildMarketAnalysisPrompt } from "./market-insights";
 export { buildLinkedInJobOptimizerPrompt } from "./linkedin-job-optimizer";
+export {
+  buildGoalDecompositionPrompt,
+  buildCyclePlanPrompt,
+  buildCycleReviewPrompt,
+  personaBlock,
+} from "./autopilot";
+export type {
+  GoalDecompositionResult,
+  CyclePlanResult,
+  CycleReviewResult,
+  CyclePlanContext,
+  CycleReviewContext,
+} from "./autopilot";

@@ -3,21 +3,26 @@
 // and drives the full job automation loop.
 
 import { io } from "./socket.io.esm.min.js";
+import { runTask } from "./task-runner.js";
 
-// Production endpoints. The WebSocket server shares the app's origin
-// (Socket.IO is mounted at path /api/ws), so both URLs are the same host.
-const DEFAULT_WS_URL = "https://winpilot.onrender.com";
-const DEFAULT_API_URL = "https://winpilot.onrender.com";
+// Backend endpoints, fixed at build time. build.js substitutes these tokens
+// with WINPILOT_APP_URL / WINPILOT_WS_URL (see extension/.env.example); the
+// literals below are what an unstamped source file falls back to, so loading
+// extension/ directly still reaches production instead of a broken host.
+// The WebSocket server shares the app's origin (Socket.IO is mounted at
+// /api/ws), so both URLs are normally the same host.
+const BUILD_API_URL = "__WINPILOT_APP_URL__";
+const BUILD_WS_URL = "__WINPILOT_WS_URL__";
+const FALLBACK_URL = "https://winpilot.onrender.com";
 
-// Origins from earlier builds that must not survive an update. Any stored
-// wsUrl/apiUrl matching these is replaced with the production default.
-const STALE_URL_PATTERN = /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i;
-
-function resolveStoredUrl(stored, fallback) {
-  if (!stored) return fallback;
-  const trimmed = String(stored).replace(/\/$/, "");
-  return STALE_URL_PATTERN.test(trimmed) ? fallback : trimmed;
+function buildUrl(stamped) {
+  // An unsubstituted token still carries its "__WIN" prefix.
+  if (!stamped || stamped.startsWith("__WIN")) return FALLBACK_URL;
+  return stamped.replace(/\/$/, "");
 }
+
+const DEFAULT_API_URL = buildUrl(BUILD_API_URL);
+const DEFAULT_WS_URL = buildUrl(BUILD_WS_URL);
 const HEARTBEAT_INTERVAL = 30000;
 const RECONNECT_BASE_DELAY = 1000;
 const MAX_RECONNECT_DELAY = 30000;
@@ -35,11 +40,9 @@ let apiUrl = DEFAULT_API_URL;
 let automationRunning = false;
 let automationAborted = false;
 
-// Load settings from storage
-chrome.storage.local.get(["wsUrl", "apiUrl"], (result) => {
-  wsUrl = resolveStoredUrl(result.wsUrl, DEFAULT_WS_URL);
-  apiUrl = resolveStoredUrl(result.apiUrl, DEFAULT_API_URL);
-});
+// Autopilot runs one server-dispatched task at a time, on the same tab the
+// other two loops use — so all three are mutually exclusive.
+let autopilotRunning = false;
 
 // ─── WebSocket Connection ─────────────────────────────
 
@@ -156,7 +159,16 @@ function handleServerMessage(message) {
   console.log("[WinPilot] Server message received:", message.type, message.searchId ? `searchId=${message.searchId}` : "");
   switch (message.type) {
     case "EXECUTE_ACTION":
-      forwardToContentScript(message);
+      // Autopilot tasks are multi-step flows the background worker drives
+      // itself; everything else is a single DOM command for the content script.
+      if (message.command === "RUN_TASK") {
+        handleAutopilotTask(message);
+      } else {
+        forwardToContentScript(message);
+      }
+      break;
+    case "RUN_TASK":
+      handleAutopilotTask(message);
       break;
     case "START_AUTOMATION":
       startAutomation(message.searchId, message.options || message.config || {});
@@ -539,8 +551,11 @@ function normalizeAutomationOptions(options) {
     useJobMatching: source.useJobMatching !== false,
     // Default OFF to preserve rule-based filling unless user opts in
     useAIFormFilling: source.useAIFormFilling === true,
-    // Default OFF — messaging companies is opt-in
-    useAutoMessaging: source.useAutoMessaging === true,
+    // Default OFF — messaging companies is opt-in. The two channels are
+    // independent: the company page and a person there (hiring team or a
+    // 1st-degree connection) can each be toggled on its own.
+    useAutoMessagePage: source.useAutoMessagePage === true,
+    useAutoMessagePerson: source.useAutoMessagePerson === true,
   };
 }
 
@@ -1118,16 +1133,159 @@ async function sendOutreachOnCurrentPage(tabId, applicationId, channel, recipien
 }
 
 /**
- * After an application goes through, try to put a short message in front of a
- * human at that company. Three channels, tried in order of who is most likely
- * to care and least likely to be closed off:
- *
- *   1. the hiring team named on the job post (a person who owns this role)
- *   2. the company page's own Message action, under its Careers topic
- *   3. an existing connection who works there, who can route it internally
- *
- * Plenty of companies allow none of these — that is expected and recorded, not
- * treated as a failure. Never throws: outreach must not sink an application.
+ * Record one outreach attempt and let the user know how it went. A company
+ * that cannot be messaged is a normal outcome worth remembering, not an
+ * error to retry forever.
+ */
+async function recordOutreachOutcome(applicationId, companyName, jobTitle, channel, recipient, outcome) {
+  try {
+    await apiCall(`/api/jobs/automate?step=outreach-complete`, {
+      applicationId,
+      sent: !!outcome.sent,
+      channel,
+      recipient: recipient?.name || undefined,
+      message: outcome.message || undefined,
+      reason: outcome.sent ? undefined : outcome.error,
+    });
+  } catch (recordErr) {
+    emitLog("warn", "api", "Could not record outreach outcome", recordErr?.message || "");
+  }
+
+  if (outcome.sent) {
+    reportProgress("task:progress", {
+      message: `Messaged ${recipient?.name || companyName} about ${jobTitle}.`,
+      jobTitle,
+    });
+    emitLog("info", "extension", `Outreach sent via ${channel} to ${recipient?.name || companyName}`);
+  } else {
+    reportProgress("task:progress", {
+      message: `No message sent to ${recipient?.name || companyName}: ${outcome.error}.`,
+      jobTitle,
+    });
+    emitLog("info", "extension", `Outreach skipped (${channel}) for ${companyName}: ${outcome.error}`);
+  }
+}
+
+/**
+ * Message the company page itself, under its Careers topic. Independent of
+ * the "message a person" channel below — gated by ctx.useAutoMessagePage.
+ */
+async function attemptCompanyPageOutreach(tabId, ctx, application, companyName, company, actionKey) {
+  const applicationId = application._id;
+  const companyUrl = company?.url || "";
+
+  if (!companyUrl) {
+    await recordOutreachOutcome(applicationId, companyName, application.jobTitle, "company_page", null, {
+      sent: false,
+      error: "No company page linked on this job post",
+    });
+    return;
+  }
+
+  const recipient = { name: company.name || companyName, headline: "" };
+  emitLog("info", "extension", `Opening ${companyUrl} to message the company page`);
+
+  await navigateAndWait(tabId, companyUrl);
+  ctx.navigatedAway = true;
+  await randomDelay(2500, 4500);
+
+  let outcome;
+  if (await ensureContentScriptReady(tabId)) {
+    outcome = await sendOutreachOnCurrentPage(tabId, applicationId, "company_page", recipient, `${actionKey}-page`);
+  } else {
+    outcome = { sent: false, error: "Could not connect to the company page" };
+  }
+
+  await recordOutreachOutcome(applicationId, companyName, application.jobTitle, "company_page", recipient, outcome);
+}
+
+/**
+ * Message a person at the company: the hiring team named on the job post if
+ * one of them is messageable, otherwise an existing 1st-degree connection
+ * who works there. Independent of the "message the page" channel above —
+ * gated by ctx.useAutoMessagePerson.
+ */
+async function attemptCompanyPersonOutreach(tabId, ctx, application, companyName, company, hiringTeam, actionKey) {
+  const applicationId = application._id;
+
+  // ── Prefer the hiring team on the job post
+  const messageableHirer = hiringTeam.find((person) => person.canMessage);
+  if (messageableHirer) {
+    emitLog("info", "extension", `Messaging hiring team member ${messageableHirer.name} at ${companyName}`);
+    await randomDelay(1200, 2500);
+    const outcome = await sendOutreachOnCurrentPage(
+      tabId,
+      applicationId,
+      "hiring_team",
+      messageableHirer,
+      `${actionKey}-hirer`,
+      messageableHirer.selector
+    );
+    await recordOutreachOutcome(applicationId, companyName, application.jobTitle, "hiring_team", messageableHirer, outcome);
+    if (outcome.sent) return;
+  }
+
+  // ── Fall back to a 1st-degree connection who works there
+  const companyUrl = company?.url || "";
+  if (!companyUrl) {
+    if (!messageableHirer) {
+      await recordOutreachOutcome(applicationId, companyName, application.jobTitle, "connection", null, {
+        sent: false,
+        error: "No hiring contact or company page on this job post",
+      });
+    }
+    return;
+  }
+
+  emitLog("info", "extension", `Looking for a connection at ${companyName}`);
+  await navigateAndWait(tabId, `${companyUrl}people/`);
+  ctx.navigatedAway = true;
+  await randomDelay(3000, 5000);
+
+  if (!(await ensureContentScriptReady(tabId))) {
+    await recordOutreachOutcome(applicationId, companyName, application.jobTitle, "connection", null, {
+      sent: false,
+      error: "Could not connect to the company people page",
+    });
+    return;
+  }
+
+  const peopleResult = await sendToContentScript(tabId, {
+    type: "EXECUTE_ACTION",
+    command: "SCRAPE_COMPANY_PEOPLE",
+    actionId: `people-${actionKey}`,
+  });
+  const people = peopleResult?.data?.people || [];
+
+  // 1st-degree only: anyone else cannot be messaged without InMail credits
+  const connection = people.find((person) => /1st/.test(person.degree || ""));
+  if (!connection?.profileUrl) {
+    await recordOutreachOutcome(applicationId, companyName, application.jobTitle, "connection", null, {
+      sent: false,
+      error: `No first-degree connection found at ${companyName}`,
+    });
+    return;
+  }
+
+  emitLog("info", "extension", `Messaging connection ${connection.name} at ${companyName}`);
+  await navigateAndWait(tabId, connection.profileUrl);
+  await randomDelay(2500, 4000);
+
+  let outcome;
+  if (await ensureContentScriptReady(tabId)) {
+    outcome = await sendOutreachOnCurrentPage(tabId, applicationId, "connection", connection, `${actionKey}-conn`);
+  } else {
+    outcome = { sent: false, error: "Could not connect to the profile page" };
+  }
+  await recordOutreachOutcome(applicationId, companyName, application.jobTitle, "connection", connection, outcome);
+}
+
+/**
+ * After an application goes through, try to put a short message in front of
+ * a human at that company. "Message the page" and "message a person there"
+ * are independent, user-toggled channels (ctx.useAutoMessagePage /
+ * ctx.useAutoMessagePerson) — when both are on, both are attempted and both
+ * messages can go out. Never throws: outreach must not sink an application.
  */
 async function attemptCompanyOutreach(tabId, ctx, application, jobWithDetail) {
   const applicationId = application?._id;
@@ -1135,9 +1293,6 @@ async function attemptCompanyOutreach(tabId, ctx, application, jobWithDetail) {
 
   const actionKey = String(applicationId).slice(-8);
   const companyName = application.company || jobWithDetail?.company || "the company";
-  let outcome = { sent: false, error: "No messaging channel was available" };
-  let channel = null;
-  let recipient = null;
 
   try {
     reportProgress("task:progress", {
@@ -1162,128 +1317,15 @@ async function attemptCompanyOutreach(tabId, ctx, application, jobWithDetail) {
     const company = targetsResult?.data?.company || null;
     const hiringTeam = targetsResult?.data?.hiringTeam || [];
 
-    // ── Channel 1: the hiring team on the job post
-    const messageableHirer = hiringTeam.find((person) => person.canMessage);
-    if (messageableHirer) {
-      channel = "hiring_team";
-      recipient = messageableHirer;
-      emitLog("info", "extension", `Messaging hiring team member ${messageableHirer.name} at ${companyName}`);
-      await randomDelay(1200, 2500);
-      outcome = await sendOutreachOnCurrentPage(
-        tabId,
-        applicationId,
-        channel,
-        recipient,
-        `${actionKey}-hirer`,
-        messageableHirer.selector
-      );
+    if (ctx.useAutoMessagePerson) {
+      await attemptCompanyPersonOutreach(tabId, ctx, application, companyName, company, hiringTeam, actionKey);
     }
 
-    // ── Channel 2: the company page's Message action (Careers topic)
-    const companyUrl = company?.url || "";
-    if (!outcome.sent && companyUrl) {
-      channel = "company_page";
-      recipient = { name: company.name || companyName, headline: "" };
-      emitLog("info", "extension", `Opening ${companyUrl} to message the company page`);
-
-      await navigateAndWait(tabId, companyUrl);
-      ctx.navigatedAway = true;
-      await randomDelay(2500, 4500);
-
-      if (await ensureContentScriptReady(tabId)) {
-        outcome = await sendOutreachOnCurrentPage(
-          tabId,
-          applicationId,
-          channel,
-          recipient,
-          `${actionKey}-page`
-        );
-      } else {
-        outcome = { sent: false, error: "Could not connect to the company page" };
-      }
-    }
-
-    // ── Channel 3: someone already connected who works there
-    if (!outcome.sent && companyUrl) {
-      emitLog("info", "extension", `Company page messaging unavailable — looking for a connection at ${companyName}`);
-
-      await navigateAndWait(tabId, `${companyUrl}people/`);
-      ctx.navigatedAway = true;
-      await randomDelay(3000, 5000);
-
-      if (await ensureContentScriptReady(tabId)) {
-        const peopleResult = await sendToContentScript(tabId, {
-          type: "EXECUTE_ACTION",
-          command: "SCRAPE_COMPANY_PEOPLE",
-          actionId: `people-${actionKey}`,
-        });
-        const people = peopleResult?.data?.people || [];
-
-        // 1st-degree only: anyone else cannot be messaged without InMail credits
-        const connection = people.find((person) => /1st/.test(person.degree || ""));
-
-        if (connection?.profileUrl) {
-          channel = "connection";
-          recipient = connection;
-          emitLog("info", "extension", `Messaging connection ${connection.name} at ${companyName}`);
-
-          await navigateAndWait(tabId, connection.profileUrl);
-          await randomDelay(2500, 4000);
-
-          if (await ensureContentScriptReady(tabId)) {
-            outcome = await sendOutreachOnCurrentPage(
-              tabId,
-              applicationId,
-              channel,
-              recipient,
-              `${actionKey}-conn`
-            );
-          } else {
-            outcome = { sent: false, error: "Could not connect to the profile page" };
-          }
-        } else {
-          outcome = {
-            sent: false,
-            error: `No first-degree connection found at ${companyName}`,
-          };
-        }
-      }
-    }
-
-    if (!outcome.sent && !companyUrl && !messageableHirer) {
-      outcome = { sent: false, error: "No company page or hiring contact on this job post" };
+    if (ctx.useAutoMessagePage) {
+      await attemptCompanyPageOutreach(tabId, ctx, application, companyName, company, actionKey);
     }
   } catch (err) {
-    outcome = { sent: false, error: err?.message || "Outreach failed" };
-  }
-
-  // Record the attempt either way — a company that cannot be messaged is a
-  // normal outcome worth remembering, not an error to retry forever.
-  try {
-    await apiCall(`/api/jobs/automate?step=outreach-complete`, {
-      applicationId,
-      sent: !!outcome.sent,
-      channel: channel || undefined,
-      recipient: recipient?.name || undefined,
-      message: outcome.message || undefined,
-      reason: outcome.sent ? undefined : outcome.error,
-    });
-  } catch (recordErr) {
-    emitLog("warn", "api", "Could not record outreach outcome", recordErr?.message || "");
-  }
-
-  if (outcome.sent) {
-    reportProgress("task:progress", {
-      message: `Messaged ${recipient?.name || companyName} about ${application.jobTitle}.`,
-      jobTitle: application.jobTitle,
-    });
-    emitLog("info", "extension", `Outreach sent via ${channel} to ${recipient?.name || companyName}`);
-  } else {
-    reportProgress("task:progress", {
-      message: `No message sent to ${companyName}: ${outcome.error}.`,
-      jobTitle: application.jobTitle,
-    });
-    emitLog("info", "extension", `Outreach skipped for ${companyName}: ${outcome.error}`);
+    emitLog("warn", "extension", `Outreach failed for ${companyName}`, err?.message || "");
   }
 }
 
@@ -1764,7 +1806,7 @@ async function applyToJobOnTab(tabId, jobWithDetail, ctx) {
 
   // Auto Messaging: try to reach a human at this company before moving on.
   // Runs after the application is safely recorded, and never throws.
-  if (ctx.useAutoMessaging) {
+  if (ctx.useAutoMessagePage || ctx.useAutoMessagePerson) {
     await attemptCompanyOutreach(tabId, ctx, targetApp, jobWithDetail);
   }
 
@@ -1779,14 +1821,14 @@ async function startAutomation(searchId, options = {}) {
 
   // Starting values only — jobCtx below owns these for the rest of the run,
   // since the apply routine switches them off when the AI provider runs dry.
-  const { useAI, useJobMatching, useAIFormFilling, useAutoMessaging } = normalizeAutomationOptions(options);
+  const { useAI, useJobMatching, useAIFormFilling, useAutoMessagePage, useAutoMessagePerson } = normalizeAutomationOptions(options);
 
   console.log(`[WinPilot] ====== STARTING AUTOMATION ======`);
   console.log(`[WinPilot] searchId: ${searchId}`);
   console.log(`[WinPilot] apiUrl: ${apiUrl}`);
   console.log(`[WinPilot] authToken: ${authToken ? `${authToken.substring(0, 8)}...` : "NOT SET"}`);
   console.log(`[WinPilot] wsUrl: ${wsUrl}`);
-  console.log(`[WinPilot] useAI: ${useAI}, useJobMatching: ${useJobMatching}, useAIFormFilling: ${useAIFormFilling}, useAutoMessaging: ${useAutoMessaging}`);
+  console.log(`[WinPilot] useAI: ${useAI}, useJobMatching: ${useJobMatching}, useAIFormFilling: ${useAIFormFilling}, useAutoMessagePage: ${useAutoMessagePage}, useAutoMessagePerson: ${useAutoMessagePerson}`);
   emitLog(
     "info",
     "system",
@@ -1810,7 +1852,8 @@ async function startAutomation(searchId, options = {}) {
       useAI ? "AI resume ON" : "AI resume OFF",
       useJobMatching ? "matching ON" : "matching OFF",
       useAIFormFilling ? "AI form fill ON" : "AI form fill OFF (rules)",
-      useAutoMessaging ? "auto messaging ON" : null,
+      useAutoMessagePage ? "message page ON" : null,
+      useAutoMessagePerson ? "message employee ON" : null,
     ].filter(Boolean).join(" · "),
   });
 
@@ -1823,7 +1866,8 @@ async function startAutomation(searchId, options = {}) {
     useAI,
     useJobMatching,
     useAIFormFilling,
-    useAutoMessaging,
+    useAutoMessagePage,
+    useAutoMessagePerson,
     storedRules: null,
     application: null,
     navigatedAway: false,
@@ -2190,14 +2234,15 @@ async function startListApply(rawUrl, options = {}) {
     return;
   }
 
-  const { useAI, useJobMatching, useAIFormFilling, useAutoMessaging } = normalizeAutomationOptions(options);
+  const { useAI, useJobMatching, useAIFormFilling, useAutoMessagePage, useAutoMessagePerson } = normalizeAutomationOptions(options);
   const jobCtx = {
     searchId: null,
     listUrl: "",
     useAI,
     useJobMatching,
     useAIFormFilling,
-    useAutoMessaging,
+    useAutoMessagePage,
+    useAutoMessagePerson,
     storedRules: null,
     application: null,
     navigatedAway: false,
@@ -2443,13 +2488,14 @@ async function startSingleApply(rawUrl, options = {}) {
     return;
   }
 
-  const { useAI, useJobMatching, useAIFormFilling, useAutoMessaging } = normalizeAutomationOptions(options);
+  const { useAI, useJobMatching, useAIFormFilling, useAutoMessagePage, useAutoMessagePerson } = normalizeAutomationOptions(options);
   const ctx = {
     searchId: null,
     useAI,
     useJobMatching,
     useAIFormFilling,
-    useAutoMessaging,
+    useAutoMessagePage,
+    useAutoMessagePerson,
     storedRules: null,
     application: null,
     navigatedAway: false,
@@ -3096,6 +3142,83 @@ async function startLeadGenAutomation(campaignId, options = {}) {
   }
 }
 
+// ─── Autopilot: run one server-dispatched task ──────────
+
+/**
+ * Handle a RUN_TASK dispatch from the Autopilot scheduler.
+ *
+ * The server sends one task at a time and waits for the result, so this refuses
+ * to start a second task while one is in flight — and refuses entirely while
+ * job automation or lead gen is running, since all three drive the same tab.
+ */
+async function handleAutopilotTask(message) {
+  const { taskId, kind, payload } = message;
+  if (!taskId || !kind) return;
+
+  if (autopilotRunning) {
+    console.warn("[WinPilot] Autopilot task already running — ignoring", kind);
+    return;
+  }
+  if (automationRunning || leadGenRunning) {
+    await reportTaskResult(taskId, {
+      ok: false,
+      error: "Another automation is using the LinkedIn tab",
+    });
+    return;
+  }
+
+  autopilotRunning = true;
+  emitLog("info", "autopilot", `Running task: ${kind}`);
+
+  let outcome;
+  try {
+    outcome = await runTask(
+      { taskId, kind, payload: payload || {} },
+      {
+        ensureLinkedInTab,
+        ensureSessionHealthy,
+        navigateAndWait,
+        sendToContentScript,
+        randomDelay,
+        emitLog,
+        apiCall,
+      }
+    );
+  } catch (err) {
+    console.error("[WinPilot] Autopilot task threw:", err);
+    outcome = { ok: false, error: err.message || "Task threw an unexpected error" };
+  } finally {
+    autopilotRunning = false;
+  }
+
+  await reportTaskResult(taskId, outcome);
+
+  if (outcome.ok) {
+    emitLog("success", "autopilot", `Completed ${kind}`);
+  } else {
+    emitLog("warn", "autopilot", `Task ${kind} failed: ${outcome.error}`);
+  }
+}
+
+/**
+ * Post the outcome back to the server. The server treats a missing result as a
+ * lost task and requeues it, so a failure to report is recoverable — but noisy,
+ * so it is logged rather than swallowed.
+ */
+async function reportTaskResult(taskId, outcome) {
+  try {
+    await apiCall("/api/autopilot/task-result", {
+      taskId,
+      ok: Boolean(outcome.ok),
+      result: outcome.result || {},
+      error: outcome.error,
+      signal: outcome.signal,
+    });
+  } catch (err) {
+    console.error("[WinPilot] Could not report task result:", err.message);
+  }
+}
+
 function cleanup(message) {
   automationRunning = false;
   automationAborted = false;
@@ -3246,6 +3369,9 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       sendResponse({ success: true });
       break;
 
+    // SET_WS_URL / SET_API_URL are debug overrides only. The build-time
+    // endpoint is restored on the next service-worker start — to change the
+    // backend for good, rebuild with a different WINPILOT_APP_URL.
     case "SET_WS_URL":
       wsUrl = message.url;
       console.log("[WinPilot] WS URL set to:", message.url);
@@ -3326,12 +3452,14 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
 // ─── Initialization ─────────────────────────────────────
 
-chrome.storage.local.get(["authToken", "apiUrl", "wsUrl"], (result) => {
+chrome.storage.local.get(["authToken"], (result) => {
   if (result.authToken) authToken = result.authToken;
-  apiUrl = resolveStoredUrl(result.apiUrl, DEFAULT_API_URL);
-  wsUrl = resolveStoredUrl(result.wsUrl, DEFAULT_WS_URL);
-  // Persist the migration so a stale localhost URL is not re-read next wake-up.
-  chrome.storage.local.set({ apiUrl, wsUrl });
+  // The build-time endpoint always wins: a URL written to storage by an older
+  // build (or by SET_API_URL during a debug session) must not survive into a
+  // build packaged for a different backend.
+  apiUrl = DEFAULT_API_URL;
+  wsUrl = DEFAULT_WS_URL;
+  chrome.storage.local.set({ apiUrl, wsUrl, dashboardUrl: apiUrl });
   console.log("[WinPilot] Initialized — apiUrl:", apiUrl, "authToken:", authToken ? `${authToken.substring(0, 8)}...` : "NOT SET", "wsUrl:", wsUrl);
   connect();
 });

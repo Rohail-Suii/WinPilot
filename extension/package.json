@@ -4,6 +4,8 @@
   "private": true,
   "scripts": {
     "build": "node build.js",
+    "build:local": "node build.js --url=http://localhost:3000",
+    "build:prod": "node build.js --url=https://winpilot.onrender.com",
     "watch": "node build.js --watch"
   },
   "devDependencies": {}

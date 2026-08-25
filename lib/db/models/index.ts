@@ -59,3 +59,41 @@ export type {
   IProfileSnapshot,
   IJobOptimizationAnalysis,
 } from "./linkedin-job-optimization";
+
+// ─── Autopilot ──────────────────────────────────────────────────────────────
+
+export { default as AgentConfig, TASK_KINDS, IMPLEMENTED_TASK_KINDS, DEFAULT_WEEKLY_BUDGETS, autonomyFor } from "./agent-config";
+export type { IAgentConfig, TaskKind, AutonomyMode, IWeeklyBudgets } from "./agent-config";
+
+export { default as AgentGoal } from "./agent-goal";
+export type {
+  IAgentGoal,
+  ISuccessMetric,
+  ISubGoal,
+  IGoalConstraints,
+  IPersonaSnapshot,
+} from "./agent-goal";
+
+export { default as AgentCycle, DEFAULT_CHANNEL_MIX } from "./agent-cycle";
+export type {
+  IAgentCycle,
+  CycleStatus,
+  IChannelMix,
+  ICycleTarget,
+  ICycleActual,
+} from "./agent-cycle";
+
+export { default as AgentMemory } from "./agent-memory";
+export type { IAgentMemory, MemoryKind, IMemoryEvidence } from "./agent-memory";
+
+export { default as AgentJournal } from "./agent-journal";
+export type { IAgentJournal, JournalEntryType, IJournalRefs } from "./agent-journal";
+
+export { default as AgentTask, ACTIVE_TASK_STATES } from "./agent-task";
+export type { IAgentTask, TaskState } from "./agent-task";
+
+export { default as AgentTarget, ACTIVE_STAGES } from "./agent-target";
+export type { IAgentTarget, TargetStage, TouchpointKind, ITouchpoint } from "./agent-target";
+
+export { default as AgentThread } from "./agent-thread";
+export type { IAgentThread, ThreadIntent, ThreadUrgency } from "./agent-thread";

@@ -46,11 +46,6 @@ interface QueuedMessage extends WSMessage {
 
 // ─── State ─────────────────────────────────────────────
 
-let io: SocketIOServer | null = null;
-let extensionNs: Namespace | null = null;
-let dashboardNs: Namespace | null = null;
-let rawWss: WebSocketServer | null = null;
-
 // Dedicated upgrade path for the raw-WebSocket extension transport. Kept
 // distinct from the Socket.IO path (/api/ws) so both can share one HTTP server.
 const RAW_WS_PATH = "/ws/extension";
@@ -58,20 +53,53 @@ const RAW_WS_PATH = "/ws/extension";
 const MAX_QUEUED_PER_USER = 100;
 const _HEARTBEAT_TIMEOUT = 60_000; // 60s — mark disconnected if no heartbeat in this window
 
-// userId -> Set of socket IDs (extension sockets — Socket.IO or raw WS)
-const extensionSockets = new Map<string, Set<string>>();
+/**
+ * Every piece of live connection state, held on `globalThis`.
+ *
+ * This file is loaded TWICE in a running app: once by server.ts (plain Node,
+ * where the WebSocket servers are actually created) and again by Next's bundler
+ * for any route handler that imports it. Those are separate module registries
+ * in the same process, so plain module-level `let`/`const` state would give the
+ * API routes their own empty copy — `isExtensionConnected()` would answer false
+ * from a route even with the extension plainly connected, and `sendToExtension`
+ * from a route would silently reach nobody.
+ *
+ * Hanging the state off `globalThis` is what makes both copies agree. Same
+ * pattern, same reason, as `mongooseCache` in lib/db/connection.ts.
+ */
+interface WsState {
+  io: SocketIOServer | null;
+  extensionNs: Namespace | null;
+  dashboardNs: Namespace | null;
+  rawWss: WebSocketServer | null;
+  /** userId -> Set of socket IDs (extension sockets — Socket.IO or raw WS) */
+  extensionSockets: Map<string, Set<string>>;
+  /** raw WS socket ID -> RawWebSocket instance (for sending commands back) */
+  rawExtensionConnections: Map<string, RawWebSocket>;
+  /** userId -> Set of socket IDs (dashboard sockets) */
+  dashboardSockets: Map<string, Set<string>>;
+  /** userId -> last heartbeat timestamp */
+  lastHeartbeat: Map<string, number>;
+  /** userId -> queued messages (delivered when dashboard reconnects) */
+  messageQueue: Map<string, QueuedMessage[]>;
+}
 
-// raw WS socket ID -> RawWebSocket instance (for sending commands back to extension)
-const rawExtensionConnections = new Map<string, RawWebSocket>();
+declare global {
+  var __winpilotWsState: WsState | undefined;
+}
 
-// userId -> Set of socket IDs (dashboard sockets)
-const dashboardSockets = new Map<string, Set<string>>();
-
-// userId -> last heartbeat timestamp
-const lastHeartbeat = new Map<string, number>();
-
-// userId -> queued messages (delivered when dashboard reconnects)
-const messageQueue = new Map<string, QueuedMessage[]>();
+const state: WsState = globalThis.__winpilotWsState ?? {
+  io: null,
+  extensionNs: null,
+  dashboardNs: null,
+  rawWss: null,
+  extensionSockets: new Map(),
+  rawExtensionConnections: new Map(),
+  dashboardSockets: new Map(),
+  lastHeartbeat: new Map(),
+  messageQueue: new Map(),
+};
+globalThis.__winpilotWsState = state;
 
 // ─── Helpers ───────────────────────────────────────────
 
@@ -93,10 +121,10 @@ function removeSocket(map: Map<string, Set<string>>, userId: string, socketId: s
 }
 
 function queueMessage(userId: string, message: WSMessage) {
-  if (!messageQueue.has(userId)) {
-    messageQueue.set(userId, []);
+  if (!state.messageQueue.has(userId)) {
+    state.messageQueue.set(userId, []);
   }
-  const queue = messageQueue.get(userId)!;
+  const queue = state.messageQueue.get(userId)!;
   queue.push({ ...message, userId });
   // Enforce max queue size
   if (queue.length > MAX_QUEUED_PER_USER) {
@@ -105,38 +133,38 @@ function queueMessage(userId: string, message: WSMessage) {
 }
 
 function flushQueue(userId: string) {
-  const queue = messageQueue.get(userId);
+  const queue = state.messageQueue.get(userId);
   if (!queue || queue.length === 0) return;
 
-  const sockets = dashboardSockets.get(userId);
+  const sockets = state.dashboardSockets.get(userId);
   if (!sockets || sockets.size === 0) return;
 
   for (const msg of queue) {
     for (const sid of sockets) {
-      dashboardNs?.to(sid).emit(msg.event, msg.data);
+      state.dashboardNs?.to(sid).emit(msg.event, msg.data);
     }
   }
-  messageQueue.delete(userId);
+  state.messageQueue.delete(userId);
 }
 
 // ─── Broadcast to Dashboard ────────────────────────────
 
 function broadcastToDashboard(userId: string, event: ExtensionEvent, data: Record<string, unknown>) {
-  const sockets = dashboardSockets.get(userId);
+  const sockets = state.dashboardSockets.get(userId);
   if (!sockets || sockets.size === 0) {
     // Dashboard offline — queue the message
     queueMessage(userId, { event, data, timestamp: Date.now() });
     return;
   }
   for (const sid of sockets) {
-    dashboardNs?.to(sid).emit(event, data);
+    state.dashboardNs?.to(sid).emit(event, data);
   }
 }
 
 // ─── Public API ────────────────────────────────────────
 
 export function getIO(): SocketIOServer | null {
-  return io;
+  return state.io;
 }
 
 /**
@@ -162,9 +190,9 @@ function allowedOrigins(): (string | RegExp)[] {
 }
 
 export function initSocketServer(httpServer: HTTPServer): SocketIOServer {
-  if (io) return io;
+  if (state.io) return state.io;
 
-  io = new SocketIOServer(httpServer, {
+  state.io = new SocketIOServer(httpServer, {
     path: "/api/ws",
     cors: {
       origin: allowedOrigins(),
@@ -178,13 +206,13 @@ export function initSocketServer(httpServer: HTTPServer): SocketIOServer {
   });
 
   // ── Error handler ──
-  io.engine.on("connection_error", (err: { message: string }) => {
+  state.io.engine.on("connection_error", (err: { message: string }) => {
     console.error("[WS] Socket.IO connection error:", err.message);
   });
 
   // ── Extension Namespace (/extension) ──
-  extensionNs = io.of("/extension");
-  extensionNs.on("connection", (socket: Socket) => {
+  state.extensionNs = state.io.of("/extension");
+  state.extensionNs.on("connection", (socket: Socket) => {
     let userId: string | null = null;
 
     socket.on("error", (err) => {
@@ -198,8 +226,8 @@ export function initSocketServer(httpServer: HTTPServer): SocketIOServer {
       }
 
       userId = data.token;
-      addSocket(extensionSockets, userId, socket.id);
-      lastHeartbeat.set(userId, Date.now());
+      addSocket(state.extensionSockets, userId, socket.id);
+      state.lastHeartbeat.set(userId, Date.now());
 
       socket.emit("AUTH_SUCCESS", { message: "Authenticated" });
 
@@ -223,27 +251,27 @@ export function initSocketServer(httpServer: HTTPServer): SocketIOServer {
 
     socket.on("HEARTBEAT", () => {
       if (userId) {
-        lastHeartbeat.set(userId, Date.now());
+        state.lastHeartbeat.set(userId, Date.now());
       }
       socket.emit("HEARTBEAT_ACK", { timestamp: Date.now() });
     });
 
     socket.on("disconnect", () => {
       if (userId) {
-        removeSocket(extensionSockets, userId, socket.id);
+        removeSocket(state.extensionSockets, userId, socket.id);
 
         // Only broadcast disconnected if NO extension sockets left for this user
-        if (!extensionSockets.has(userId)) {
+        if (!state.extensionSockets.has(userId)) {
           broadcastToDashboard(userId, "extension:disconnected", { timestamp: Date.now() });
-          lastHeartbeat.delete(userId);
+          state.lastHeartbeat.delete(userId);
         }
       }
     });
   });
 
   // ── Dashboard Namespace (/dashboard) ──
-  dashboardNs = io.of("/dashboard");
-  dashboardNs.on("connection", (socket: Socket) => {
+  state.dashboardNs = state.io.of("/dashboard");
+  state.dashboardNs.on("connection", (socket: Socket) => {
     console.log("[WS] Dashboard client connected:", socket.id);
     let userId: string | null = null;
 
@@ -259,7 +287,7 @@ export function initSocketServer(httpServer: HTTPServer): SocketIOServer {
       }
 
       userId = data.token;
-      addSocket(dashboardSockets, userId, socket.id);
+      addSocket(state.dashboardSockets, userId, socket.id);
       console.log("[WS] Dashboard authenticated for user:", userId, "extensionConnected:", isExtensionConnected(userId));
 
       // Client listens for "auth:success" (WS_EVENTS.AUTH_SUCCESS from types.ts)
@@ -280,13 +308,13 @@ export function initSocketServer(httpServer: HTTPServer): SocketIOServer {
 
     socket.on("disconnect", () => {
       if (userId) {
-        removeSocket(dashboardSockets, userId, socket.id);
+        removeSocket(state.dashboardSockets, userId, socket.id);
       }
     });
   });
 
   // ── Legacy default namespace (backward compat) ──
-  io.on("connection", (socket: Socket) => {
+  state.io.on("connection", (socket: Socket) => {
     let authenticatedUserId: string | null = null;
 
     socket.on("AUTH", (data: { token: string }) => {
@@ -296,7 +324,7 @@ export function initSocketServer(httpServer: HTTPServer): SocketIOServer {
       }
 
       authenticatedUserId = data.token;
-      addSocket(extensionSockets, authenticatedUserId, socket.id);
+      addSocket(state.extensionSockets, authenticatedUserId, socket.id);
 
       socket.emit("AUTH_SUCCESS", { message: "Authenticated" });
     });
@@ -308,19 +336,19 @@ export function initSocketServer(httpServer: HTTPServer): SocketIOServer {
 
     socket.on("HEARTBEAT", () => {
       if (authenticatedUserId) {
-        lastHeartbeat.set(authenticatedUserId, Date.now());
+        state.lastHeartbeat.set(authenticatedUserId, Date.now());
       }
       socket.emit("HEARTBEAT_ACK", { timestamp: Date.now() });
     });
 
     socket.on("disconnect", () => {
       if (authenticatedUserId) {
-        removeSocket(extensionSockets, authenticatedUserId, socket.id);
+        removeSocket(state.extensionSockets, authenticatedUserId, socket.id);
       }
     });
   });
 
-  return io;
+  return state.io;
 }
 
 // ─── Raw WebSocket Server (for browser extension) ────
@@ -328,9 +356,9 @@ export function initSocketServer(httpServer: HTTPServer): SocketIOServer {
 let rawIdCounter = 0;
 
 export function initRawWebSocketServer(httpServer: HTTPServer): WebSocketServer {
-  if (rawWss) return rawWss;
+  if (state.rawWss) return state.rawWss;
 
-  rawWss = new WebSocketServer({ noServer: true });
+  state.rawWss = new WebSocketServer({ noServer: true });
 
   // Handle HTTP upgrade for the raw-WS extension endpoint only.
   //
@@ -344,12 +372,12 @@ export function initRawWebSocketServer(httpServer: HTTPServer): WebSocketServer 
 
     if (path !== RAW_WS_PATH) return;
 
-    rawWss!.handleUpgrade(request, socket as never, head as never, (ws) => {
-      rawWss!.emit("connection", ws, request);
+    state.rawWss!.handleUpgrade(request, socket as never, head as never, (ws) => {
+      state.rawWss!.emit("connection", ws, request);
     });
   });
 
-  rawWss.on("connection", (ws: RawWebSocket) => {
+  state.rawWss.on("connection", (ws: RawWebSocket) => {
     const socketId = `raw-${++rawIdCounter}`;
     console.log("[WS] Raw extension client connected:", socketId);
     let userId: string | null = null;
@@ -366,9 +394,9 @@ export function initRawWebSocketServer(httpServer: HTTPServer): WebSocketServer 
             }
             userId = message.token;
             const uid: string = message.token;
-            addSocket(extensionSockets, uid, socketId);
-            rawExtensionConnections.set(socketId, ws);
-            lastHeartbeat.set(uid, Date.now());
+            addSocket(state.extensionSockets, uid, socketId);
+            state.rawExtensionConnections.set(socketId, ws);
+            state.lastHeartbeat.set(uid, Date.now());
             console.log("[WS] Extension authenticated for user:", uid);
 
             ws.send(JSON.stringify({ type: "AUTH_SUCCESS", message: "Authenticated" }));
@@ -380,7 +408,7 @@ export function initRawWebSocketServer(httpServer: HTTPServer): WebSocketServer 
 
           case "HEARTBEAT": {
             if (userId) {
-              lastHeartbeat.set(userId, Date.now());
+              state.lastHeartbeat.set(userId, Date.now());
             }
             ws.send(JSON.stringify({ type: "HEARTBEAT_ACK", timestamp: Date.now() }));
             break;
@@ -403,12 +431,12 @@ export function initRawWebSocketServer(httpServer: HTTPServer): WebSocketServer 
 
     ws.on("close", () => {
       if (userId) {
-        removeSocket(extensionSockets, userId, socketId);
-        rawExtensionConnections.delete(socketId);
+        removeSocket(state.extensionSockets, userId, socketId);
+        state.rawExtensionConnections.delete(socketId);
 
-        if (!extensionSockets.has(userId)) {
+        if (!state.extensionSockets.has(userId)) {
           broadcastToDashboard(userId, "extension:disconnected", { timestamp: Date.now() });
-          lastHeartbeat.delete(userId);
+          state.lastHeartbeat.delete(userId);
         }
       }
     });
@@ -416,13 +444,13 @@ export function initRawWebSocketServer(httpServer: HTTPServer): WebSocketServer 
     ws.on("error", () => {
       // Clean up on error
       if (userId) {
-        removeSocket(extensionSockets, userId, socketId);
-        rawExtensionConnections.delete(socketId);
+        removeSocket(state.extensionSockets, userId, socketId);
+        state.rawExtensionConnections.delete(socketId);
       }
     });
   });
 
-  return rawWss;
+  return state.rawWss;
 }
 
 /**
@@ -430,19 +458,19 @@ export function initRawWebSocketServer(httpServer: HTTPServer): WebSocketServer 
  * Sends via Socket.IO namespace AND raw WebSocket connections
  */
 export function sendToExtension(userId: string, action: Record<string, unknown>): boolean {
-  const sockets = extensionSockets.get(userId);
+  const sockets = state.extensionSockets.get(userId);
   if (!sockets || sockets.size === 0) return false;
 
   for (const sid of sockets) {
     if (sid.startsWith("raw-")) {
       // Raw WebSocket connection
-      const rawWs = rawExtensionConnections.get(sid);
+      const rawWs = state.rawExtensionConnections.get(sid);
       if (rawWs && rawWs.readyState === RawWebSocket.OPEN) {
         rawWs.send(JSON.stringify({ type: "EXECUTE_ACTION", ...action }));
       }
     } else {
       // Socket.IO connection
-      extensionNs?.to(sid).emit("EXECUTE_ACTION", action);
+      state.extensionNs?.to(sid).emit("EXECUTE_ACTION", action);
     }
   }
   return true;
@@ -457,7 +485,7 @@ export function sendToExtension(userId: string, action: Record<string, unknown>)
  * dashboard even when the extension was still connected.
  */
 export function isExtensionConnected(userId: string): boolean {
-  const sockets = extensionSockets.get(userId);
+  const sockets = state.extensionSockets.get(userId);
   if (!sockets || sockets.size === 0) return false;
 
   return true;
@@ -474,7 +502,7 @@ export function emitToDashboard(userId: string, event: ExtensionEvent, data: Rec
  * Get the count of queued messages for a user
  */
 export function getQueuedMessageCount(userId: string): number {
-  return messageQueue.get(userId)?.length ?? 0;
+  return state.messageQueue.get(userId)?.length ?? 0;
 }
 
 /**
@@ -482,8 +510,8 @@ export function getQueuedMessageCount(userId: string): number {
  */
 export function getConnectionStats() {
   return {
-    totalExtensionUsers: extensionSockets.size,
-    totalDashboardUsers: dashboardSockets.size,
-    totalQueuedMessages: Array.from(messageQueue.values()).reduce((sum, q) => sum + q.length, 0),
+    totalExtensionUsers: state.extensionSockets.size,
+    totalDashboardUsers: state.dashboardSockets.size,
+    totalQueuedMessages: Array.from(state.messageQueue.values()).reduce((sum, q) => sum + q.length, 0),
   };
 }

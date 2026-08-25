@@ -13,6 +13,7 @@ export interface IDailyUsage extends Document {
     messages: number;
     comments: number;
     connectionRequests: number;
+    likes: number;
   };
 }
 
@@ -27,6 +28,7 @@ const DailyUsageSchema = new Schema<IDailyUsage>({
     messages: { type: Number, default: 0 },
     comments: { type: Number, default: 0 },
     connectionRequests: { type: Number, default: 0 },
+    likes: { type: Number, default: 0 },
   },
   isGuest: { type: Boolean, default: false, index: true },
   expiresAt: { type: Date },
