@@ -231,12 +231,41 @@ function ensureLinkedInTab() {
   });
 }
 
-function sendToContentScript(tabId, message) {
+function getIndeedTab() {
+  return new Promise((resolve) => {
+    chrome.tabs.query({ url: "https://www.indeed.com/*" }, (tabs) => {
+      resolve(tabs && tabs.length > 0 ? tabs[0] : null);
+    });
+  });
+}
+
+function ensureIndeedTab() {
+  return new Promise((resolve) => {
+    chrome.tabs.query({ url: "https://www.indeed.com/*" }, (tabs) => {
+      if (tabs && tabs.length > 0) {
+        resolve(tabs[0]);
+      } else {
+        chrome.tabs.create({ url: "https://www.indeed.com/jobs", active: false }, (tab) => {
+          setTimeout(() => resolve(tab), 4000);
+        });
+      }
+    });
+  });
+}
+
+function ensurePlatformTab(platform) {
+  return platform === "indeed" ? ensureIndeedTab() : ensureLinkedInTab();
+}
+
+// `frameId` targets one specific frame in the tab (e.g. the Indeed Apply
+// iframe) instead of the top frame every existing LinkedIn call site relies
+// on implicitly — omitted, this behaves exactly as before.
+function sendToContentScript(tabId, message, frameId) {
   return new Promise((resolve, reject) => {
     const cmd = message.command || message.type;
-    console.log(`[WinPilot] -> Content script (tab ${tabId}):`, cmd);
+    console.log(`[WinPilot] -> Content script (tab ${tabId}${frameId != null ? `, frame ${frameId}` : ""}):`, cmd);
     emitLog("info", "content-script", `-> ${cmd}`, `tab ${tabId}`);
-    chrome.tabs.sendMessage(tabId, message, (response) => {
+    const callback = (response) => {
       if (chrome.runtime.lastError) {
         const errMessage = chrome.runtime.lastError.message || "Unknown runtime error";
         const isAsyncChannelClosed =
@@ -285,7 +314,13 @@ function sendToContentScript(tabId, message) {
         emitLog("info", "content-script", `<- status=${response?.status}`, `tab ${tabId}, cmd=${cmd}`);
         resolve(response);
       }
-    });
+    };
+
+    if (frameId != null) {
+      chrome.tabs.sendMessage(tabId, message, { frameId }, callback);
+    } else {
+      chrome.tabs.sendMessage(tabId, message, callback);
+    }
   });
 }
 
@@ -541,6 +576,75 @@ async function ensureSessionHealthy(tabId) {
     return await waitForReAuthentication(tabId);
   }
 
+  return true;
+}
+
+/**
+ * Indeed counterparts of the session-health helpers above. Kept as independent
+ * functions rather than a parameterized generalization of the LinkedIn ones —
+ * the LinkedIn anti-detection path is proven and stays untouched.
+ */
+async function checkIndeedSession(tabId) {
+  try {
+    const result = await sendToContentScript(tabId, {
+      type: "EXECUTE_ACTION",
+      command: "CHECK_SESSION",
+      actionId: `indeed-session-check-${Date.now()}`,
+    });
+    return result?.data || null;
+  } catch (err) {
+    console.warn("[WinPilot] Indeed session check failed:", err.message);
+    return null;
+  }
+}
+
+async function waitForIndeedReAuthentication(tabId, maxWaitMs = 10 * 60 * 1000) {
+  const startTime = Date.now();
+  const pollInterval = 15000;
+
+  reportProgress("task:error", {
+    message: "⚠️ Indeed signed you out! Please sign back in on the Indeed tab. Automation is paused and will resume automatically once you're signed in.",
+  });
+  emitLog("warn", "system", "Indeed sign-out detected — waiting for re-authentication");
+
+  while (Date.now() - startTime < maxWaitMs) {
+    if (automationAborted) return false;
+    await new Promise((r) => setTimeout(r, pollInterval));
+
+    const session = await checkIndeedSession(tabId);
+    if (session && !session.signedOut && !session.securityChallenge) {
+      reportProgress("task:progress", { message: "✓ Indeed session restored! Resuming automation..." });
+      emitLog("info", "system", "Indeed session restored — resuming automation");
+      await randomDelay(3000, 6000);
+      return true;
+    }
+
+    if (session?.securityChallenge) {
+      reportProgress("task:error", {
+        message: "⚠️ Indeed security challenge detected. Please complete it manually on the Indeed tab.",
+      });
+    }
+  }
+
+  reportProgress("task:error", {
+    message: "Timed out waiting for Indeed re-authentication. Stopping automation.",
+  });
+  return false;
+}
+
+async function ensureIndeedSessionHealthy(tabId) {
+  const session = await checkIndeedSession(tabId);
+  if (!session) return true; // Can't check, assume OK
+
+  if (session.signedOut) {
+    return await waitForIndeedReAuthentication(tabId);
+  }
+  if (session.securityChallenge) {
+    reportProgress("task:error", {
+      message: "⚠️ Indeed security challenge detected. Please complete it manually, then automation will resume.",
+    });
+    return await waitForIndeedReAuthentication(tabId);
+  }
   return true;
 }
 
@@ -1027,6 +1131,85 @@ async function navigateAndWait(tabId, url) {
   // SDUI content loads asynchronously after page load; wait longer with human-like variance
   await randomDelay(4000, 7000);
   await ensureContentScriptReady(tabId);
+}
+
+async function ensureIndeedContentScriptReady(tabId, maxRetries = 3) {
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    try {
+      const response = await sendToContentScript(tabId, {
+        type: "EXECUTE_ACTION",
+        command: "GET_PAGE_INFO",
+        actionId: `indeed-ping-${Date.now()}`,
+      });
+      if (response?.status === "success") return true;
+    } catch (err) {
+      console.warn(`[WinPilot] Indeed content script not ready (attempt ${attempt + 1}): ${err.message}`);
+      if (attempt < maxRetries - 1) {
+        if (attempt === 0) {
+          try {
+            await chrome.scripting.executeScript({ target: { tabId }, files: ["indeed-content.js"] });
+          } catch (injectErr) {
+            console.warn(`[WinPilot] Could not inject Indeed content script: ${injectErr.message}`);
+          }
+        } else {
+          try {
+            await chrome.tabs.reload(tabId, { bypassCache: true });
+            await waitForTabLoad(tabId);
+          } catch (reloadErr) {
+            console.warn(`[WinPilot] Could not reload tab: ${reloadErr.message}`);
+          }
+        }
+        await new Promise((r) => setTimeout(r, 2000 * (attempt + 1)));
+      }
+    }
+  }
+  return false;
+}
+
+async function navigateAndWaitIndeed(tabId, url) {
+  await chrome.tabs.update(tabId, { url });
+  await waitForTabLoad(tabId);
+  await randomDelay(3000, 5000);
+  await ensureIndeedContentScriptReady(tabId);
+}
+
+/**
+ * Indeed Apply commonly renders its form inside a smartapply.indeed.com
+ * iframe rather than the top document. The Indeed content script is injected
+ * into every frame (manifest all_frames: true) and answers PING with
+ * { isTopFrame }, so the apply-frame is identified by PINGing each
+ * non-top frame chrome.webNavigation reports for the tab and keeping the
+ * one that responds. Returns null when the form turned out to be
+ * same-document (no smartapply iframe attached), in which case callers
+ * should target the top frame instead.
+ */
+async function findSmartApplyFrameId(tabId, timeoutMs = 8000) {
+  const startTime = Date.now();
+  while (Date.now() - startTime < timeoutMs) {
+    let frames = [];
+    try {
+      frames = await chrome.webNavigation.getAllFrames({ tabId });
+    } catch {
+      frames = [];
+    }
+    const candidates = (frames || []).filter(
+      (f) => f.frameId !== 0 && /smartapply\.indeed\.com/i.test(f.url || "")
+    );
+    for (const frame of candidates) {
+      try {
+        const pong = await sendToContentScript(
+          tabId,
+          { type: "EXECUTE_ACTION", command: "PING", actionId: `ping-frame-${frame.frameId}` },
+          frame.frameId
+        );
+        if (pong?.status === "success") return frame.frameId;
+      } catch {
+        // frame not ready yet — try again next poll
+      }
+    }
+    await new Promise((r) => setTimeout(r, 500));
+  }
+  return null;
 }
 
 // ─── Job Automation Engine ──────────────────────────────
@@ -1813,6 +1996,396 @@ async function applyToJobOnTab(tabId, jobWithDetail, ctx) {
   return targetApp;
 }
 
+/**
+ * Indeed counterpart of processJobCandidate. Written fresh against the Indeed
+ * command set rather than a parameterized generalization of the LinkedIn
+ * version — Indeed has no qualification-percentage signal to check, and no
+ * outreach step (out of scope for Indeed entirely).
+ */
+async function processIndeedJobCandidate(tabId, candidateJob, ctx, meta = {}) {
+  const actionKey = meta.actionKey || "job";
+  const jobLabel = candidateJob.title || candidateJob.jobId || candidateJob.url;
+
+  ctx.application = null;
+
+  if (ctx.navigatedAway && ctx.listUrl) {
+    await navigateAndWaitIndeed(tabId, ctx.listUrl);
+    await randomDelay(900, 1500);
+    ctx.navigatedAway = false;
+  }
+
+  const selectResult = await sendToContentScript(tabId, {
+    type: "EXECUTE_ACTION",
+    command: "SELECT_JOB_FROM_LIST",
+    actionId: `indeed-select-${actionKey}`,
+    jobId: candidateJob.jobId,
+    jobUrl: candidateJob.url,
+  });
+
+  if (!selectResult?.data?.selected) {
+    if (!candidateJob.url) {
+      return {
+        status: "skipped",
+        reason: `could not select job card in results list (${selectResult?.data?.error || "unknown"})`,
+      };
+    }
+    emitLog("info", "extension", `Could not select "${jobLabel}" in the list — opening its job page instead`);
+    await navigateAndWaitIndeed(tabId, candidateJob.url);
+    ctx.navigatedAway = true;
+    await randomDelay(1200, 2200);
+    if (!(await ensureIndeedContentScriptReady(tabId))) {
+      return { status: "skipped", reason: "could not connect to the Indeed tab" };
+    }
+  }
+
+  await randomDelay(1500, 3500);
+
+  let detail = null;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const detailResult = await sendToContentScript(tabId, {
+      type: "EXECUTE_ACTION",
+      command: "SCRAPE_JOB_DETAIL",
+      actionId: `indeed-detail-${actionKey}-${attempt}`,
+    });
+    detail = detailResult?.data?.detail;
+    if (detail?.description) break;
+    await randomDelay(1500, 2500);
+  }
+
+  if (!detail?.description) {
+    throw new Error("Could not extract job description");
+  }
+
+  const jobWithDetail = {
+    ...candidateJob,
+    url: candidateJob.url || detail.url,
+    title: detail.title || candidateJob.title,
+    company: detail.company || candidateJob.company,
+    description: detail.description,
+  };
+
+  const application = await applyToIndeedJob(tabId, jobWithDetail, ctx);
+  return { status: "applied", application };
+}
+
+/**
+ * Apply to ONE Indeed job on the tab already showing it. Mirrors
+ * applyToJobOnTab's shape (register -> prep resume -> click apply -> fill
+ * form loop -> complete) but targets Indeed's command set, and additionally
+ * resolves the SmartApply iframe's frameId once so every form-step message
+ * reaches wherever the form actually rendered.
+ */
+async function applyToIndeedJob(tabId, jobWithDetail, ctx) {
+  const registerResult = await apiCall(`/api/jobs/automate?step=register-job`, {
+    searchId: ctx.searchId,
+    job: {
+      title: jobWithDetail.title,
+      company: jobWithDetail.company,
+      location: jobWithDetail.location || "",
+      url: jobWithDetail.url,
+      description: jobWithDetail.description || "",
+      platform: "indeed",
+    },
+  });
+
+  const targetApp = registerResult?.application || {
+    _id: null,
+    jobTitle: jobWithDetail.title,
+    company: jobWithDetail.company,
+    jobUrl: jobWithDetail.url,
+  };
+  ctx.application = targetApp;
+
+  if (!targetApp?._id) {
+    throw new Error("Could not register application record for job");
+  }
+
+  reportProgress("job:applying", {
+    message: `Applying to ${targetApp.jobTitle || jobWithDetail.title} at ${targetApp.company || jobWithDetail.company} (Indeed)...`,
+    jobTitle: targetApp.jobTitle || jobWithDetail.title,
+    company: targetApp.company || jobWithDetail.company,
+  });
+
+  let prepData = null;
+  if (ctx.useAI) {
+    try {
+      prepData = await apiCall(`/api/jobs/automate?step=prepare-apply`, { applicationId: targetApp._id });
+    } catch (prepErr) {
+      const prepMessage = prepErr?.message || "";
+      if (isGeminiQuotaErrorMessage(prepMessage)) {
+        ctx.useAI = false;
+        reportProgress("task:error", { message: `${prepMessage} Switched to AI Mode OFF for remaining jobs.` });
+      } else {
+        throw prepErr;
+      }
+    }
+    if (ctx.useAI && !prepData?.resumePdf) {
+      throw new Error("Tailored resume PDF was not generated");
+    }
+  }
+
+  const applyResult = await sendToContentScript(tabId, {
+    type: "EXECUTE_ACTION",
+    command: "CLICK_EASY_APPLY",
+    actionId: `indeed-apply-${targetApp._id}`,
+  });
+  if (!applyResult?.data?.clicked) {
+    throw new Error(`Apply button not found: ${applyResult?.data?.error || "unknown"}`);
+  }
+
+  // Indeed Apply commonly opens a smartapply.indeed.com iframe for the form;
+  // resolve its frameId once and use it for every remaining message. A null
+  // result means the form rendered same-document — fall back to the top frame.
+  const formFrameId = await findSmartApplyFrameId(tabId);
+
+  const MAX_FORM_STEPS = 15;
+  let uploaded = false;
+  let submitted = false;
+  let lastFieldsSignature = "";
+  let repeatedSignatureCount = 0;
+
+  for (let step = 0; step < MAX_FORM_STEPS; step++) {
+    if (automationAborted) throw abortedError();
+
+    const fieldsResult = await sendToContentScript(
+      tabId,
+      { type: "EXECUTE_ACTION", command: "GET_FORM_FIELDS", actionId: `indeed-fields-${targetApp._id}-${step}` },
+      formFrameId
+    );
+    const fields = fieldsResult?.data?.fields || [];
+
+    const fieldsSignature = fields
+      .filter((f) => f.required)
+      .map((f) => `${f.type}:${(f.label || "").toLowerCase().trim()}:${String(f.value || "").toLowerCase().trim()}`)
+      .sort()
+      .join("|");
+    if (fieldsSignature && fieldsSignature === lastFieldsSignature) {
+      repeatedSignatureCount++;
+    } else {
+      repeatedSignatureCount = 0;
+      lastFieldsSignature = fieldsSignature;
+    }
+    if (repeatedSignatureCount >= 4) {
+      throw new Error("No form progress detected; skipping this job");
+    }
+
+    if (ctx.useAI && prepData?.resumePdf && !uploaded && fields.some((f) => f.type === "file")) {
+      const uploadResult = await sendToContentScript(
+        tabId,
+        {
+          type: "EXECUTE_ACTION",
+          command: "UPLOAD_RESUME",
+          actionId: `indeed-upload-${targetApp._id}-${step}`,
+          fileData: prepData.resumePdf,
+          fileName: prepData.resumeFileName || "tailored-resume.pdf",
+        },
+        formFrameId
+      );
+      if (!uploadResult?.data?.uploaded) {
+        throw new Error(`Resume upload failed: ${uploadResult?.data?.error || "unknown"}`);
+      }
+      uploaded = true;
+      await randomDelay(1000, 1600);
+    }
+
+    const requiredMissing = fields.filter((f) => f.required && isMissingFieldValue(f));
+
+    let aiAnswers = new Map();
+    if (ctx.useAIFormFilling && requiredMissing.length > 0) {
+      try {
+        aiAnswers = await getAIFormAnswers(requiredMissing, targetApp._id);
+      } catch (formAiErr) {
+        const formAiMessage = formAiErr?.message || "";
+        if (isGeminiQuotaErrorMessage(formAiMessage)) {
+          ctx.useAIFormFilling = false;
+          chrome.storage.local.set({ useAIFormFilling: false });
+        }
+      }
+    }
+
+    for (let i = 0; i < requiredMissing.length; i++) {
+      const field = requiredMissing[i];
+      const chosen = await answerFieldForForm(field, ctx.storedRules, ctx.useAIFormFilling ? aiAnswers : null);
+      if (!chosen) {
+        await recordUnknownFieldSituation(field, targetApp.jobTitle);
+        continue;
+      }
+      const fillSelector = resolveOptionSelector(field, chosen) || field.selector;
+      await sendToContentScript(
+        tabId,
+        {
+          type: "EXECUTE_ACTION",
+          command: "FILL_FORM_FIELD",
+          actionId: `indeed-fill-${targetApp._id}-${step}-${i}`,
+          fieldIndex: i,
+          selector: fillSelector,
+          value: chosen,
+          fieldType: field.type,
+          fieldLabel: field.label,
+        },
+        formFrameId
+      );
+      await randomDelay(800, 2000);
+    }
+
+    await sendToContentScript(
+      tabId,
+      { type: "EXECUTE_ACTION", command: "AUTO_SELECT_DROPDOWNS", actionId: `indeed-auto-dropdown-${targetApp._id}-${step}` },
+      formFrameId
+    );
+
+    const navResult = await sendToContentScript(
+      tabId,
+      { type: "EXECUTE_ACTION", command: "CLICK_NEXT_OR_SUBMIT", actionId: `indeed-nav-${targetApp._id}-${step}` },
+      formFrameId
+    );
+    const navAction = navResult?.data?.action;
+
+    if (navAction === "submitted") {
+      submitted = true;
+      await randomDelay(1000, 1500);
+      break;
+    }
+    if (navAction === "next") {
+      await randomDelay(1500, 3000);
+      continue;
+    }
+
+    throw new Error(`Form navigation blocked on step ${step + 1} (action=${navAction || "none"})`);
+  }
+
+  if (!submitted) {
+    throw new Error("Application was not submitted within the allowed form steps");
+  }
+
+  ctx.navigatedAway = true;
+  await randomDelay(2000, 5000);
+
+  if (targetApp?._id) {
+    await apiCall(`/api/jobs/automate?step=complete`, {
+      applicationId: targetApp._id,
+      success: true,
+      notes: "Auto-applied via WinPilot",
+    });
+  }
+
+  // No outreach step for Indeed — out of scope (no equivalent messaging surface).
+  return targetApp;
+}
+
+/**
+ * Search + apply loop for one Indeed keyword, mirroring the shape of the
+ * LinkedIn keyword/page loop inside startAutomation but written independently
+ * (Indeed's pagination is a "Next" click rather than a `start=` page param
+ * LinkedIn exposes directly on the URL, and there is no qualification signal
+ * to check). `stats` is a shared { applied, failed } counter the caller
+ * folds into its own run totals.
+ */
+async function runIndeedKeywordSearch(tab, keyword, url, jobCtx, stats) {
+  emitLog("info", "extension", `Searching Indeed for "${keyword}"`);
+  reportProgress("task:progress", { message: `Searching Indeed for "${keyword}"...` });
+
+  try {
+    await navigateAndWaitIndeed(tab.id, url);
+    if (!(await ensureIndeedSessionHealthy(tab.id))) {
+      reportProgress("task:error", { message: "Indeed session could not be restored — skipping remaining Indeed keywords" });
+      return;
+    }
+
+    const MAX_PAGES = 10;
+    const processedJobIds = new Set();
+    jobCtx.storedRules = jobCtx.storedRules || (await getStoredFormRules());
+
+    for (let pageNum = 1; pageNum <= MAX_PAGES; pageNum++) {
+      if (automationAborted) return;
+
+      if (pageNum > 1) {
+        const paginated = await sendToContentScript(tab.id, {
+          type: "EXECUTE_ACTION",
+          command: "CLICK_PAGINATION_NEXT",
+          actionId: `indeed-page-${pageNum}`,
+        });
+        if (!paginated?.data?.clicked) break;
+        await randomDelay(1500, 3000);
+      }
+
+      const scrapeResult = await sendToContentScript(tab.id, {
+        type: "EXECUTE_ACTION",
+        command: "SCRAPE_JOB_LISTINGS",
+        actionId: `indeed-scrape-p${pageNum}`,
+      });
+      const scrapedJobs = scrapeResult?.data?.jobs || [];
+      if (scrapedJobs.length === 0) break;
+
+      const eligibleJobs = scrapedJobs.filter((job) => {
+        if (job?.applied) return false;
+        const hasTarget = !!(job?.url || job?.jobId);
+        if (!hasTarget) return false;
+        const key = job.jobId || job.url;
+        if (processedJobIds.has(key)) return false;
+        return true;
+      });
+
+      if (eligibleJobs.length === 0) continue;
+
+      jobCtx.listUrl = url;
+      jobCtx.navigatedAway = false;
+
+      for (let i = 0; i < eligibleJobs.length; i++) {
+        const candidateJob = eligibleJobs[i];
+        processedJobIds.add(candidateJob.jobId || candidateJob.url);
+
+        if (automationAborted) return;
+        if (!(await ensureIndeedSessionHealthy(tab.id))) return;
+
+        if (i > 0) {
+          const interJobDelay = 5000 + Math.random() * 15000;
+          await randomDelay(interJobDelay * 0.8, interJobDelay * 1.2);
+        }
+
+        try {
+          const outcome = await processIndeedJobCandidate(tab.id, candidateJob, jobCtx, {
+            actionKey: `indeed-p${pageNum}-${i}`,
+          });
+          if (outcome.status === "skipped") {
+            stats.failed++;
+            reportProgress("task:progress", {
+              message: `Skipping ${candidateJob.title}: ${outcome.reason}.`,
+              jobTitle: candidateJob.title,
+            });
+            continue;
+          }
+          stats.applied++;
+          reportProgress("job:applied", {
+            message: `Applied to ${outcome.application.jobTitle} at ${outcome.application.company} (Indeed)`,
+            jobTitle: outcome.application.jobTitle,
+            company: outcome.application.company,
+            appliedCount: stats.applied,
+          });
+        } catch (jobErr) {
+          if (jobCtx.application?._id) {
+            await apiCall(`/api/jobs/automate?step=complete`, {
+              applicationId: jobCtx.application._id,
+              success: false,
+              notes: `Auto-apply failed: ${jobErr.message}`,
+            }).catch(() => {});
+          }
+          if (jobErr?.aborted) return;
+          stats.failed++;
+          reportProgress("task:error", {
+            message: `Skipped ${candidateJob.title}: ${jobErr.message}`,
+            jobTitle: candidateJob.title,
+          });
+          jobCtx.navigatedAway = true;
+        }
+      }
+    }
+  } catch (err) {
+    emitLog("warn", "extension", `Indeed search for "${keyword}" failed: ${err.message}`);
+    reportProgress("task:progress", { message: `No results for "${keyword}" on Indeed (${err.message})` });
+  }
+}
+
 async function startAutomation(searchId, options = {}) {
   if (automationRunning) {
     reportProgress("task:error", { message: "Automation already running" });
@@ -1889,12 +2462,20 @@ async function startAutomation(searchId, options = {}) {
       throw new Error("No search URL returned");
     }
 
+    // "both" runs LinkedIn entries, then Indeed entries, sequentially — one
+    // tab per platform, never interleaved.
+    const linkedinSearches = startData.searches.filter((s) => s.platform !== "indeed");
+    const indeedSearches = startData.searches.filter((s) => s.platform === "indeed");
+
     reportProgress("task:progress", {
-      message: `Navigating to LinkedIn Jobs (${remainingText})...`,
+      message: `Navigating to job search (${remainingText})...`,
     });
 
-    const tab = await ensureLinkedInTab();
-    console.log(`[WinPilot] Got LinkedIn tab: id=${tab.id}, url=${tab.url}`);
+    let tab = null;
+    if (linkedinSearches.length > 0) {
+      tab = await ensureLinkedInTab();
+      console.log(`[WinPilot] Got LinkedIn tab: id=${tab.id}, url=${tab.url}`);
+    }
 
     if (automationAborted) return cleanup("Automation stopped by user");
 
@@ -1923,8 +2504,8 @@ async function startAutomation(searchId, options = {}) {
     let totalPagesProcessed = 0;
     const processedJobIds = new Set();
 
-    // Search each keyword one at a time
-    keywordLoop: for (const { keyword, url: keywordSearchUrl } of startData.searches) {
+    // Search each LinkedIn keyword one at a time
+    keywordLoop: for (const { keyword, url: keywordSearchUrl } of linkedinSearches) {
       if (automationAborted) return cleanup("Automation stopped by user");
       if (totalAppliedCount + totalFailedCount >= MAX_JOBS_PER_RUN) break keywordLoop;
 
@@ -2195,6 +2776,20 @@ async function startAutomation(searchId, options = {}) {
       }
     } // End of keywordLoop
 
+    // Indeed leg — runs after every LinkedIn keyword, on its own tab, never
+    // interleaved with the LinkedIn loop above.
+    if (indeedSearches.length > 0 && !automationAborted) {
+      const indeedTab = await ensureIndeedTab();
+      const indeedStats = { applied: 0, failed: 0 };
+      jobCtx.searchId = searchId;
+      for (const { keyword, url: indeedSearchUrl } of indeedSearches) {
+        if (automationAborted) break;
+        await runIndeedKeywordSearch(indeedTab, keyword, indeedSearchUrl, jobCtx, indeedStats);
+      }
+      totalAppliedCount += indeedStats.applied;
+      totalFailedCount += indeedStats.failed;
+    }
+
     reportProgress("task:complete", {
       message: `Automation complete. Keywords searched: ${startData.searches.length}, pages processed: ${totalPagesProcessed}. Applied: ${totalAppliedCount}, Failed/Skipped: ${totalFailedCount} (${totalSkippedQualificationCount} skipped by LinkedIn qualification signal).`,
       appliedCount: totalAppliedCount,
@@ -2228,6 +2823,181 @@ function stopAutomation() {
  * feeds. Reads the page's job list and runs the same per-job pipeline the
  * saved-search automation uses, for that one page.
  */
+/**
+ * Indeed counterpart of the LinkedIn body of startListApply below — applies
+ * to every job on a pasted Indeed results page. `jobCtx` and the
+ * automationRunning/automationAborted flags are already set up by the caller;
+ * this owns the rest of the run (including calling cleanup()) so
+ * startListApply can simply `return` its result.
+ */
+async function runIndeedListApply(resolved, jobCtx) {
+  let appliedCount = 0;
+  let failedCount = 0;
+
+  try {
+    jobCtx.listUrl = resolved.listUrl;
+    const tab = await ensureIndeedTab();
+    if (automationAborted) return cleanup("Automation stopped by user");
+
+    reportProgress("task:progress", { message: "Opening the Indeed jobs page..." });
+    await navigateAndWaitIndeed(tab.id, jobCtx.listUrl);
+    await randomDelay(3000, 5000);
+
+    if (!(await ensureIndeedContentScriptReady(tab.id))) {
+      throw new Error("Could not connect to the Indeed tab — reload Indeed and try again");
+    }
+    if (!(await ensureIndeedSessionHealthy(tab.id))) {
+      return cleanup("Automation stopped: Indeed session could not be restored");
+    }
+
+    reportProgress("task:progress", { message: "Reading the jobs on the page..." });
+    await randomDelay(2000, 4000);
+
+    const scrapeResult = await sendToContentScript(tab.id, {
+      type: "EXECUTE_ACTION",
+      command: "SCRAPE_JOB_LISTINGS",
+      actionId: "indeed-scrape-pasted-list",
+    });
+    const scrapedJobs = scrapeResult?.data?.jobs || [];
+    const alreadyAppliedOnPage = scrapedJobs.filter((job) => job?.applied).length;
+
+    let candidates = [];
+    const seen = new Set();
+    for (const job of scrapedJobs) {
+      if (job?.applied) continue;
+      if (!job?.url && !job?.jobId) continue;
+      const url = job.url || `https://www.indeed.com/viewjob?jk=${job.jobId}`;
+      const key = job.jobId || url;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      candidates.push({ ...job, url });
+    }
+
+    if (candidates.length === 0 && resolved.jobIds?.length) {
+      emitLog(
+        "warn",
+        "extension",
+        `Could not read the list on the page — using the ${resolved.jobIds.length} job id(s) from the link instead`
+      );
+      candidates = resolved.jobIds.map((jobId, i) => ({
+        jobId,
+        url: (resolved.jobUrls || [])[i] || `https://www.indeed.com/viewjob?jk=${jobId}`,
+        title: `Job ${jobId}`,
+        company: "",
+      }));
+    }
+
+    if (candidates.length === 0) {
+      throw new Error(
+        alreadyAppliedOnPage > 0
+          ? `No new jobs on that page — all ${alreadyAppliedOnPage} are already applied to`
+          : "No jobs found on that page"
+      );
+    }
+
+    let alreadyAppliedBefore = 0;
+    try {
+      const filtered = await apiCall(`/api/jobs/automate?step=filter-applied`, {
+        jobUrls: candidates.map((c) => c.url),
+      });
+      const appliedUrls = new Set(filtered?.appliedUrls || []);
+      if (appliedUrls.size > 0) {
+        alreadyAppliedBefore = candidates.filter((c) => appliedUrls.has(c.url)).length;
+        candidates = candidates.filter((c) => !appliedUrls.has(c.url));
+      }
+    } catch (filterErr) {
+      emitLog("warn", "api", "Could not check previously applied jobs", filterErr?.message || "");
+    }
+
+    const maxJobs = Number.isFinite(resolved.maxJobs) ? resolved.maxJobs : 15;
+    const jobsToProcess = Math.min(candidates.length, Math.max(0, maxJobs));
+
+    if (jobsToProcess === 0) {
+      reportProgress("task:complete", {
+        message: `Nothing to do — every job on that page was already applied to.`,
+        appliedCount: 0,
+        failedCount: 0,
+      });
+      return cleanup();
+    }
+
+    const skippedNote = alreadyAppliedOnPage + alreadyAppliedBefore;
+    reportProgress("job:found", {
+      message: `Found ${scrapedJobs.length || candidates.length} job(s) on the page — applying to ${jobsToProcess}${skippedNote ? ` (${skippedNote} already applied)` : ""}.`,
+      count: jobsToProcess,
+    });
+
+    jobCtx.storedRules = await getStoredFormRules();
+
+    for (let i = 0; i < jobsToProcess; i++) {
+      const candidateJob = candidates[i];
+      if (automationAborted) return cleanup("Automation stopped by user");
+      if (!(await ensureIndeedSessionHealthy(tab.id))) {
+        return cleanup("Automation stopped: Indeed session could not be restored");
+      }
+
+      if (i > 0) {
+        const interJobDelay = 5000 + Math.random() * 15000;
+        await randomDelay(interJobDelay * 0.8, interJobDelay * 1.2);
+      }
+
+      try {
+        const outcome = await processIndeedJobCandidate(tab.id, candidateJob, jobCtx, {
+          actionKey: `indeed-list-${i}`,
+        });
+        if (outcome.status === "skipped") {
+          failedCount++;
+          reportProgress("task:progress", {
+            message: `Skipping ${candidateJob.title}: ${outcome.reason}.`,
+            jobTitle: candidateJob.title,
+          });
+          continue;
+        }
+        appliedCount++;
+        reportProgress("job:applied", {
+          message: `Applied to ${outcome.application.jobTitle} at ${outcome.application.company} (Indeed)`,
+          jobTitle: outcome.application.jobTitle,
+          company: outcome.application.company,
+          appliedCount,
+        });
+      } catch (jobErr) {
+        if (jobCtx.application?._id) {
+          await apiCall(`/api/jobs/automate?step=complete`, {
+            applicationId: jobCtx.application._id,
+            success: false,
+            notes: `Auto-apply failed: ${jobErr.message}`,
+          }).catch(() => {});
+        }
+        if (jobErr?.aborted) return cleanup("Automation stopped by user");
+        failedCount++;
+        reportProgress("task:error", {
+          message: `Skipped ${candidateJob.title}: ${jobErr.message}`,
+          jobTitle: candidateJob.title,
+        });
+        jobCtx.navigatedAway = true;
+      }
+    }
+
+    reportProgress("task:complete", {
+      message: `Page complete. Applied: ${appliedCount}, skipped/failed: ${failedCount}.`,
+      appliedCount,
+      failedCount,
+    });
+    return cleanup();
+  } catch (err) {
+    console.error("[WinPilot] Indeed job list apply failed:", err.message);
+    emitLog("error", "system", `INDEED LIST APPLY FAILED: ${err.message}`);
+    reportProgress("task:error", { message: `Could not apply: ${err.message}` });
+    reportProgress("task:complete", {
+      message: `Stopped after ${appliedCount} application(s): ${err.message}`,
+      appliedCount,
+      failedCount,
+    });
+  }
+
+  cleanup();
+}
+
 async function startListApply(rawUrl, options = {}) {
   if (automationRunning) {
     reportProgress("task:error", { message: "Automation already running" });
@@ -2270,6 +3040,11 @@ async function startListApply(rawUrl, options = {}) {
     if (!resolved?.listUrl) {
       throw new Error("Could not read a jobs list from that link");
     }
+
+    if (resolved.platform === "indeed") {
+      return await runIndeedListApply(resolved, jobCtx);
+    }
+
     jobCtx.listUrl = resolved.listUrl;
 
     // Step 2: open the results page
@@ -2482,6 +3257,105 @@ async function startListApply(rawUrl, options = {}) {
  * submit Easy Apply — but for exactly one job, with no search behind it. The
  * server resolves whatever LinkedIn link shape was pasted into a job page URL.
  */
+/**
+ * Indeed counterpart of the LinkedIn body of startSingleApply below — applies
+ * to exactly one Indeed job. `ctx` and the automationRunning/automationAborted
+ * flags are already set up by the caller; this owns the rest of the run
+ * (including calling cleanup()) so startSingleApply can simply `return` its
+ * result. Indeed has no qualification signal to check, so this skips straight
+ * to reading the posting and applying.
+ */
+async function runIndeedSingleApply(resolved, ctx) {
+  try {
+    const jobUrl = resolved.jobUrl;
+    const tab = await ensureIndeedTab();
+    if (automationAborted) return cleanup("Automation stopped by user");
+
+    reportProgress("task:progress", { message: `Opening job ${resolved.jobId}...` });
+    await navigateAndWaitIndeed(tab.id, jobUrl);
+    await randomDelay(2500, 4500);
+
+    if (!(await ensureIndeedContentScriptReady(tab.id))) {
+      throw new Error("Could not connect to the Indeed tab — reload Indeed and try again");
+    }
+    if (!(await ensureIndeedSessionHealthy(tab.id))) {
+      return cleanup("Automation stopped: Indeed session could not be restored");
+    }
+
+    await randomDelay(2000, 4000);
+    let detail = null;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      if (automationAborted) return cleanup("Automation stopped by user");
+      const detailResult = await sendToContentScript(tab.id, {
+        type: "EXECUTE_ACTION",
+        command: "SCRAPE_JOB_DETAIL",
+        actionId: `indeed-detail-single-${resolved.jobId}-${attempt}`,
+      });
+      detail = detailResult?.data?.detail;
+      if (detail?.description) break;
+      await randomDelay(1500, 2500);
+    }
+
+    if (!detail?.description) {
+      throw new Error("Could not read the job description from that page");
+    }
+
+    const jobWithDetail = {
+      url: jobUrl,
+      jobId: resolved.jobId,
+      title: detail.title || "Job",
+      company: detail.company || "Unknown",
+      location: detail.location || "",
+      description: detail.description,
+    };
+
+    reportProgress("job:found", {
+      message: `Found ${jobWithDetail.title} at ${jobWithDetail.company}`,
+      count: 1,
+    });
+
+    ctx.storedRules = await getStoredFormRules();
+    const applied = await applyToIndeedJob(tab.id, jobWithDetail, ctx);
+
+    reportProgress("job:applied", {
+      message: `Applied to ${applied.jobTitle} at ${applied.company} (Indeed)`,
+      jobTitle: applied.jobTitle,
+      company: applied.company,
+      appliedCount: 1,
+    });
+    reportProgress("task:complete", {
+      message: `Applied to ${applied.jobTitle} at ${applied.company}.`,
+      appliedCount: 1,
+      failedCount: 0,
+    });
+    return cleanup();
+  } catch (err) {
+    if (ctx.application?._id) {
+      await apiCall(`/api/jobs/automate?step=complete`, {
+        applicationId: ctx.application._id,
+        success: false,
+        notes: `Auto-apply failed: ${err.message}`,
+      }).catch(() => {});
+    }
+    if (err?.aborted) return cleanup("Automation stopped by user");
+
+    const reason = /apply button not found/i.test(err.message || "")
+      ? `${err.message} — this job likely applies on the company's own website, which WinPilot can't automate.`
+      : err.message;
+
+    console.error("[WinPilot] Indeed single job apply failed:", err.message);
+    emitLog("error", "system", `INDEED SINGLE JOB APPLY FAILED: ${err.message}`);
+    reportProgress("task:error", { message: `Could not apply: ${reason}` });
+    reportProgress("task:complete", {
+      message: `Did not apply to the pasted job: ${reason}`,
+      appliedCount: 0,
+      failedCount: 1,
+    });
+  }
+
+  cleanup();
+}
+
 async function startSingleApply(rawUrl, options = {}) {
   if (automationRunning) {
     reportProgress("task:error", { message: "Automation already running" });
@@ -2532,6 +3406,10 @@ async function startSingleApply(rawUrl, options = {}) {
         failedCount: 0,
       });
       return cleanup();
+    }
+
+    if (resolved.platform === "indeed") {
+      return await runIndeedSingleApply(resolved, ctx);
     }
 
     // Step 2: open the job page

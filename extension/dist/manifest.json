@@ -8,11 +8,13 @@
     "storage",
     "tabs",
     "scripting",
-    "alarms"
+    "alarms",
+    "webNavigation"
   ],
   "host_permissions": [
     "https://www.linkedin.com/*",
     "https://www.indeed.com/*",
+    "https://smartapply.indeed.com/*",
     "https://winpilot.onrender.com/*"
   ],
   "background": {
@@ -28,6 +30,18 @@
         "ai-fallback.js",
         "content.js"
       ],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "https://www.indeed.com/*",
+        "https://smartapply.indeed.com/*"
+      ],
+      "js": [
+        "ai-fallback.js",
+        "indeed-content.js"
+      ],
+      "all_frames": true,
       "run_at": "document_idle"
     }
   ],

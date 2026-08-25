@@ -58,6 +58,7 @@ import { jobSearchSchema } from "@/lib/validators";
 import { useExtensionStore } from "@/lib/hooks/use-stores";
 import { useWebSocket } from "@/lib/websocket/client";
 import { parseLinkedInJobUrl, parseLinkedInJobListUrl } from "@/lib/utils/linkedin-url";
+import { parseIndeedJobUrl, parseIndeedJobListUrl } from "@/lib/utils/indeed-url";
 import { z } from "zod";
 import {
   AIKeysTab,
@@ -78,12 +79,20 @@ interface JobSearchItem {
   experienceLevel: string[];
   datePosted: string;
   easyApplyOnly: boolean;
+  platform: "linkedin" | "indeed" | "both";
   isActive?: boolean;
   createdAt: string;
 }
 
+const PLATFORM_LABEL: Record<JobSearchItem["platform"], string> = {
+  linkedin: "LinkedIn",
+  indeed: "Indeed",
+  both: "LinkedIn + Indeed",
+};
+
 interface JobApplicationItem {
   _id: string;
+  platform?: "linkedin" | "indeed";
   jobTitle: string;
   company: string;
   location?: string;
@@ -169,9 +178,16 @@ export function JobsClient() {
   const { isConnected, currentTask, lastTaskError, aiQuotaStatus, automationRunning, automationLogs, clearLogs, setAutomationRunning } = useExtensionStore();
   const { startAutomation, applyJobUrl, applyJobList, stopAutomation } = useWebSocket();
   const [jobLink, setJobLink] = useState("");
-  // What the pasted link supports: one job, a whole results page, or both
-  const parsedJobLink = useMemo(() => parseLinkedInJobUrl(jobLink), [jobLink]);
-  const parsedListLink = useMemo(() => parseLinkedInJobListUrl(jobLink), [jobLink]);
+  // What the pasted link supports: one job, a whole results page, or both.
+  // Tried LinkedIn first, then Indeed — the link's own shape tells us which.
+  const parsedJobLink = useMemo(
+    () => parseLinkedInJobUrl(jobLink) || parseIndeedJobUrl(jobLink),
+    [jobLink]
+  );
+  const parsedListLink = useMemo(
+    () => parseLinkedInJobListUrl(jobLink) || parseIndeedJobListUrl(jobLink),
+    [jobLink]
+  );
   const [useAI, setUseAI] = useState(true);
   const [useJobMatching, setUseJobMatching] = useState(true);
   const [useAIFormFilling, setUseAIFormFilling] = useState(false);
@@ -211,7 +227,7 @@ export function JobsClient() {
     toast.info(
       checked
         ? "AI Resume Tailoring ON: generates tailored resume for each job (uses AI credits)"
-        : "AI Resume Tailoring OFF: applies with existing LinkedIn resume",
+        : "AI Resume Tailoring OFF: applies with your existing resume",
     );
   };
 
@@ -246,7 +262,7 @@ export function JobsClient() {
     }
     toast.info(
       checked
-        ? "Message Company Page ON: after each application, WinPilot messages the company's LinkedIn page (uses AI credits)"
+        ? "Message Company Page ON: after each LinkedIn application, WinPilot messages the company's LinkedIn page (LinkedIn only; uses AI credits)"
         : "Message Company Page OFF: the company page will not be messaged",
     );
   };
@@ -258,7 +274,7 @@ export function JobsClient() {
     }
     toast.info(
       checked
-        ? "Message Company Employee ON: after each application, WinPilot messages a hiring team member or 1st-degree connection there (uses AI credits)"
+        ? "Message Company Employee ON: after each LinkedIn application, WinPilot messages a hiring team member or 1st-degree connection there (LinkedIn only; uses AI credits)"
         : "Message Company Employee OFF: no employee at the company will be messaged",
     );
   };
@@ -374,7 +390,7 @@ export function JobsClient() {
 
   const handleStartAutomation = (searchId: string) => {
     if (!isConnected) {
-      toast.error("Extension not connected. Open LinkedIn in Chrome with the extension enabled.");
+      toast.error("Extension not connected. Open LinkedIn or Indeed in Chrome with the extension enabled.");
       return;
     }
     startAutomation(searchId, { useAI, useJobMatching, useAIFormFilling, useAutoMessagePage, useAutoMessagePerson });
@@ -395,11 +411,11 @@ export function JobsClient() {
 
   const handleApplyFromLink = () => {
     if (!parsedJobLink) {
-      toast.error("Paste a LinkedIn job link — the job page, a search URL with the job open, or the job id.");
+      toast.error("Paste a LinkedIn or Indeed job link — the job page, a search URL with the job open, or the job id.");
       return;
     }
     if (!isConnected) {
-      toast.error("Extension not connected. Open LinkedIn in Chrome with the extension enabled.");
+      toast.error("Extension not connected. Open LinkedIn or Indeed in Chrome with the extension enabled.");
       return;
     }
     applyJobUrl(parsedJobLink.jobUrl, { useAI, useJobMatching, useAIFormFilling, useAutoMessagePage, useAutoMessagePerson });
@@ -410,11 +426,11 @@ export function JobsClient() {
 
   const handleApplyAllFromLink = () => {
     if (!parsedListLink) {
-      toast.error("Paste a LinkedIn jobs list — a search, a collection, or a \"jobs for you\" results page.");
+      toast.error("Paste a LinkedIn or Indeed jobs list — a search, a collection, or a results page.");
       return;
     }
     if (!isConnected) {
-      toast.error("Extension not connected. Open LinkedIn in Chrome with the extension enabled.");
+      toast.error("Extension not connected. Open LinkedIn or Indeed in Chrome with the extension enabled.");
       return;
     }
     applyJobList(parsedListLink.listUrl, { useAI, useJobMatching, useAIFormFilling, useAutoMessagePage, useAutoMessagePerson });
@@ -567,12 +583,12 @@ export function JobsClient() {
                 <h3 className="font-semibold text-white">Apply from a link</h3>
               </div>
               <p className="text-sm text-white/50">
-                Found jobs yourself? Paste a LinkedIn link and WinPilot checks each posting, tailors your
-                resume, fills the Easy Apply form, and submits it — no saved search needed. Apply to the one
-                job in the link, or to every job on the results page it points at.
+                Found jobs yourself? Paste a LinkedIn or Indeed link and WinPilot checks each posting, tailors
+                your resume, fills the application form, and submits it — no saved search needed. Apply to the
+                one job in the link, or to every job on the results page it points at.
               </p>
               <Input
-                placeholder="Paste a LinkedIn job link or a jobs results page link"
+                placeholder="Paste a LinkedIn or Indeed job link, or a jobs results page link"
                 value={jobLink}
                 onChange={(e) => setJobLink(e.target.value)}
                 onKeyDown={(e) => {
@@ -616,14 +632,14 @@ export function JobsClient() {
               </div>
               <p className="text-xs text-white/35">
                 {jobLink.trim() && !parsedJobLink && !parsedListLink
-                  ? "That link isn't a LinkedIn job or jobs list — copy the URL from the LinkedIn jobs page."
+                  ? "That link isn't a LinkedIn or Indeed job or jobs list — copy the URL from the jobs page."
                   : parsedListLink && parsedJobLink
                     ? "This link works both ways: apply only to the open job, or to every job on the page (up to 25 per run)."
                     : parsedListLink
                       ? "Applies to every job on this results page, up to 25 per run."
                       : parsedJobLink
                         ? `Job ${parsedJobLink.jobId} — WinPilot will open it and apply.`
-                        : "Works with job pages, search and \u201cjobs for you\u201d results pages, collections, and bare job ids. Easy Apply jobs only — external application sites can't be automated."}
+                        : "Works with job pages, search and \u201cjobs for you\u201d results pages, collections, and bare job ids. Easy Apply / Indeed Apply jobs only — external application sites can't be automated."}
               </p>
             </CardContent>
           </Card>
@@ -648,6 +664,7 @@ export function JobsClient() {
                       <div className="space-y-2 flex-1">
                         <div className="flex items-center gap-2">
                           <h3 className="font-semibold text-white">{search.name}</h3>
+                          <Badge variant="default">{PLATFORM_LABEL[search.platform || "linkedin"]}</Badge>
                           {search.easyApplyOnly && <Badge variant="info">Easy Apply</Badge>}
                           {search.remote && <Badge variant="success">Remote</Badge>}
                         </div>
@@ -760,6 +777,7 @@ export function JobsClient() {
                         <p className="text-xs text-white/40">
                           {app.company}
                           {app.location ? ` · ${app.location}` : ""}
+                          {` · ${app.platform === "indeed" ? "Indeed" : "LinkedIn"}`}
                         </p>
                       </div>
                     </div>
@@ -797,7 +815,7 @@ export function JobsClient() {
                           className="text-xs text-blue-400 hover:underline flex items-center gap-1"
                         >
                           <Eye className="h-3 w-3" />
-                          View on LinkedIn
+                          View on {app.platform === "indeed" ? "Indeed" : "LinkedIn"}
                         </a>
                       )}
 
@@ -1301,6 +1319,7 @@ function AddSearchDialog({
           experienceLevel: editingSearch.experienceLevel as JobSearchFormValues["experienceLevel"],
           datePosted: editingSearch.datePosted as JobSearchFormValues["datePosted"],
           easyApplyOnly: editingSearch.easyApplyOnly,
+          platform: editingSearch.platform || "linkedin",
         }
       : {
           name: "",
@@ -1310,6 +1329,7 @@ function AddSearchDialog({
           experienceLevel: [],
           datePosted: "any",
           easyApplyOnly: true,
+          platform: "linkedin",
         },
   });
 
@@ -1370,6 +1390,15 @@ function AddSearchDialog({
           <div className="space-y-2">
             <Label>Location</Label>
             <Input placeholder="New York, Remote, etc." {...register("location")} />
+          </div>
+
+          <div className="space-y-2">
+            <Label>Platform</Label>
+            <Select {...register("platform")}>
+              <option value="linkedin">LinkedIn</option>
+              <option value="indeed">Indeed</option>
+              <option value="both">Both</option>
+            </Select>
           </div>
 
           <div className="grid grid-cols-2 gap-4">

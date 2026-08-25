@@ -103,7 +103,11 @@ fs.mkdirSync(DIST, { recursive: true });
 const manifest = JSON.parse(
   fs.readFileSync(path.join(SRC, "manifest.json"), "utf8")
 );
-const hostPermissions = ["https://www.linkedin.com/*", "https://www.indeed.com/*"];
+const hostPermissions = [
+  "https://www.linkedin.com/*",
+  "https://www.indeed.com/*",
+  "https://smartapply.indeed.com/*",
+];
 for (const url of [APP_URL, WS_URL]) {
   const pattern = `${new URL(url).origin}/*`;
   if (!hostPermissions.includes(pattern)) hostPermissions.push(pattern);
@@ -142,10 +146,14 @@ if (fs.existsSync(socketIoSrc)) {
   console.warn("Socket.IO client not found. Run npm install in the repo root.");
 }
 
-// Copy content script
+// Copy content scripts
 copyStamped(
   path.join(SRC, "content", "content-script.js"),
   path.join(DIST, "content.js")
+);
+copyStamped(
+  path.join(SRC, "content", "indeed-content-script.js"),
+  path.join(DIST, "indeed-content.js")
 );
 
 // Copy AI fallback module
