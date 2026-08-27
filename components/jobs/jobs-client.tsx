@@ -119,6 +119,7 @@ interface JobApplicationItem {
     highlights?: string[];
     matchExplanation?: string;
     keywordsUsed?: string[];
+    generationNotes?: string[];
   };
   formAnswers?: { question: string; answer: string }[];
   outreach?: {
@@ -902,6 +903,7 @@ export function JobsClient() {
                           const hasSkills = resume?.skills && resume.skills.length > 0;
                           const hasHighlights = resume?.highlights && resume.highlights.length > 0;
                           const hasKeywords = resume?.keywordsUsed && resume.keywordsUsed.length > 0;
+                          const hasNotes = resume?.generationNotes && resume.generationNotes.length > 0;
                           if (!hasSummary && !hasSkills && !hasHighlights) return null;
                           return (
                             <div className="space-y-1.5">
@@ -946,6 +948,19 @@ export function JobsClient() {
                                         <span key={i} className="text-[10px] px-1.5 py-0.5 rounded bg-white/5 text-white/40">{kw}</span>
                                       ))}
                                     </div>
+                                  </div>
+                                )}
+                                {hasNotes && (
+                                  <div>
+                                    <p className="text-[10px] uppercase tracking-wider text-white/30 mb-1">Generator Notes</p>
+                                    <ul className="space-y-1">
+                                      {resume!.generationNotes!.map((note, i) => (
+                                        <li key={i} className="text-[11px] text-white/45 flex items-start gap-1.5">
+                                          <span className="text-amber-400/70 mt-0.5">•</span>
+                                          <span>{note}</span>
+                                        </li>
+                                      ))}
+                                    </ul>
                                   </div>
                                 )}
                               </div>

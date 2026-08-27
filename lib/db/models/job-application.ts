@@ -39,6 +39,7 @@ export interface IJobApplication extends Document {
   tailoredResume?: {
     summary?: string;
     skills?: string[];
+    skillGroups?: { category?: string; items?: string[] }[];
     highlights?: string[];
     matchExplanation?: string;
     keywordsUsed?: string[];
@@ -54,7 +55,10 @@ export interface IJobApplication extends Document {
       name?: string;
       description?: string;
       tech?: string[];
+      url?: string;
     }[];
+    /** Operator notes from the generator: track ambiguity, project swaps, JD gaps. */
+    generationNotes?: string[];
   };
   matchBreakdown?: IMatchBreakdown;
   /**
@@ -111,6 +115,7 @@ const JobApplicationSchema = new Schema<IJobApplication>(
     tailoredResume: {
       summary: String,
       skills: [String],
+      skillGroups: [{ category: String, items: [String] }],
       highlights: [String],
       matchExplanation: String,
       keywordsUsed: [String],
@@ -129,8 +134,10 @@ const JobApplicationSchema = new Schema<IJobApplication>(
           name: String,
           description: String,
           tech: [String],
+          url: String,
         },
       ],
+      generationNotes: [String],
     },
     matchBreakdown: {
       skillsMatch: Number,

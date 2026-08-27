@@ -161,6 +161,10 @@ export async function prepareJobApplication(
     application.tailoredResume = {
       summary: typeof tailored.tailoredSummary === "string" ? tailored.tailoredSummary : "",
       skills: normalizeStringArray(tailored.tailoredSkills),
+      skillGroups: (tailored.tailoredSkillGroups || []).map((g) => ({
+        category: g.category,
+        items: normalizeStringArray(g.items),
+      })),
       highlights: normalizeStringArray(tailored.tailoredHighlights),
       matchExplanation: typeof tailored.matchExplanation === "string" ? tailored.matchExplanation : "",
       keywordsUsed: normalizeStringArray(tailored.keywordsUsed),
@@ -176,7 +180,9 @@ export async function prepareJobApplication(
         name: p.name,
         description: p.description,
         tech: normalizeStringArray(p.tech),
+        url: p.url,
       })),
+      generationNotes: normalizeStringArray(tailored.generationNotes),
     };
     application.matchScore = tailored.matchScore;
     application.status = "applying";

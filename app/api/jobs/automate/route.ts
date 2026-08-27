@@ -401,6 +401,7 @@ export async function POST(req: Request) {
         {
           summary: application.tailoredResume?.summary,
           skills: application.tailoredResume?.skills,
+          skillGroups: application.tailoredResume?.skillGroups,
           highlights: application.tailoredResume?.highlights,
           experience: application.tailoredResume?.experience,
           projects: application.tailoredResume?.projects,

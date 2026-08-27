@@ -54,3 +54,25 @@ export function sleep(ms: number): Promise<void> {
 export function generateId(): string {
   return crypto.randomUUID();
 }
+
+/** Bare employment labels that must never stand alone as a resume entry. */
+const WEAK_EMPLOYER_LABELS = [
+  "freelance",
+  "freelancer",
+  "freelancing",
+  "contract",
+  "contractor",
+  "self employed",
+  "various clients",
+  "independent",
+];
+
+/**
+ * True for an "employer" that is really just a work arrangement. Recruiters
+ * read a standalone "Freelance" entry as a gap filler, so the generator folds
+ * that work into a neighbouring role and the renderer never prints the label.
+ */
+export function isWeakEmployerLabel(value: string): boolean {
+  const normalized = value.toLowerCase().replace(/[^a-z\s-]/g, "").replace(/-/g, " ").trim();
+  return WEAK_EMPLOYER_LABELS.includes(normalized);
+}

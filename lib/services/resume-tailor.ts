@@ -27,11 +27,19 @@ export interface TailoredProjectItem {
   name: string;
   description: string;
   tech: string[];
+  /** Live product URL from the candidate's data — printed and hyperlinked in the PDF. */
+  url?: string;
+}
+
+export interface TailoredSkillGroup {
+  category: string;
+  items: string[];
 }
 
 export interface TailoredResumeResult {
   tailoredSummary: string;
   tailoredSkills: string[];
+  tailoredSkillGroups: TailoredSkillGroup[];
   tailoredHighlights: string[];
   tailoredExperience: TailoredExperienceItem[];
   tailoredProjects: TailoredProjectItem[];
@@ -39,6 +47,8 @@ export interface TailoredResumeResult {
   matchScore: number;
   matchExplanation: string;
   keywordsUsed: string[];
+  /** Operator notes: track ambiguity resolved, projects swapped for lack of a URL, JD gaps. */
+  generationNotes: string[];
   source: ResumeTailoringSource;
 }
 
@@ -86,14 +96,97 @@ function toStringArray(value: unknown): string[] {
   return [];
 }
 
+/**
+ * The AI is told not to emit standalone freelance/contract entries, but it can
+ * still tack the label onto an otherwise real role ("Acme Corp (Contract)").
+ * Strip the decoration; folding a genuinely standalone gig into a neighbouring
+ * role is left to the model, which is the only side that knows the timeline.
+ */
+function stripWeakEmploymentLabel(value: string): string {
+  return value
+    .replace(/\s*[([]\s*(freelance|freelancer|contract|contractor|self[-\s]?employed|part[-\s]?time|temp(?:orary)?)\s*[)\]]/gi, "")
+    .replace(/\s*[—–-]\s*(freelance|freelancer|contract|contractor|self[-\s]?employed)\s*$/gi, "")
+    .trim();
+}
+
+/** Accept only well-formed http(s) URLs; anything else is dropped rather than printed. */
+function normalizeProjectUrl(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim();
+  if (!trimmed || /^\(/.test(trimmed)) return undefined;
+  const candidate = /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
+  try {
+    const parsed = new URL(candidate);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return undefined;
+    if (!parsed.hostname.includes(".")) return undefined;
+    return parsed.toString().replace(/\/$/, "");
+  } catch {
+    return undefined;
+  }
+}
+
+/** Compare URLs by host + path so a trailing slash or scheme swap still matches. */
+function urlKey(url: string): string {
+  try {
+    const parsed = new URL(url);
+    return `${parsed.hostname.replace(/^www\./i, "").toLowerCase()}${parsed.pathname.replace(/\/$/, "").toLowerCase()}`;
+  } catch {
+    return url.toLowerCase();
+  }
+}
+
+/**
+ * A project link is only trustworthy if the candidate supplied it. Anything the
+ * model produced on its own is dropped — a dead or invented link in front of a
+ * recruiter is worse than no link.
+ */
+function keepOnlyKnownProjectUrls(
+  projects: TailoredProjectItem[],
+  allowedUrls: string[]
+): TailoredProjectItem[] {
+  const allowed = new Map(
+    allowedUrls
+      .map((u) => normalizeProjectUrl(u))
+      .filter((u): u is string => !!u)
+      .map((u) => [urlKey(u), u])
+  );
+
+  return projects.map((project) => {
+    if (!project.url) return project;
+    const match = allowed.get(urlKey(project.url));
+    return { ...project, url: match };
+  });
+}
+
+function normalizeSkillGroups(raw: unknown): TailoredSkillGroup[] {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .map((item) => {
+      if (!item || typeof item !== "object") return null;
+      const group = item as Record<string, unknown>;
+      const category =
+        typeof group.category === "string"
+          ? cleanResumeText(group.category)
+          : typeof group.label === "string"
+            ? cleanResumeText(group.label)
+            : "";
+      const items = toStringArray(group.items ?? group.skills);
+      if (!category || items.length === 0) return null;
+      return { category, items };
+    })
+    .filter((x): x is TailoredSkillGroup => !!x);
+}
+
 function normalizeExperience(raw: unknown): TailoredExperienceItem[] {
   if (!Array.isArray(raw)) return [];
   return raw
     .map((item) => {
       if (!item || typeof item !== "object") return null;
       const exp = item as Record<string, unknown>;
-      const company = typeof exp.company === "string" ? cleanResumeText(exp.company) : "";
-      const title = typeof exp.title === "string" ? cleanResumeText(exp.title) : "";
+      const company =
+        typeof exp.company === "string" ? stripWeakEmploymentLabel(cleanResumeText(exp.company)) : "";
+      const title =
+        typeof exp.title === "string" ? stripWeakEmploymentLabel(cleanResumeText(exp.title)) : "";
       if (!company && !title) return null;
       return {
         company,
@@ -109,7 +202,7 @@ function normalizeExperience(raw: unknown): TailoredExperienceItem[] {
 function normalizeProjects(raw: unknown): TailoredProjectItem[] {
   if (!Array.isArray(raw)) return [];
   return raw
-    .map((item) => {
+    .map((item): TailoredProjectItem | null => {
       if (!item || typeof item !== "object") return null;
       const p = item as Record<string, unknown>;
       const name = typeof p.name === "string" ? cleanResumeText(p.name) : "";
@@ -119,6 +212,7 @@ function normalizeProjects(raw: unknown): TailoredProjectItem[] {
         description:
           typeof p.description === "string" ? cleanResumeText(p.description) : "",
         tech: toStringArray(p.tech),
+        url: normalizeProjectUrl(p.url),
       };
     })
     .filter((x): x is TailoredProjectItem => !!x);
@@ -126,7 +220,8 @@ function normalizeProjects(raw: unknown): TailoredProjectItem[] {
 
 function normalizeTailoredResumeResult(
   raw: unknown,
-  source: ResumeTailoringSource
+  source: ResumeTailoringSource,
+  knownProjectUrls: string[] = []
 ): TailoredResumeResult {
   const sourceObj = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
 
@@ -137,15 +232,36 @@ function normalizeTailoredResumeResult(
     ? Math.max(0, Math.min(100, Math.round(numericScore)))
     : 0;
 
+  const skillGroups = normalizeSkillGroups(sourceObj.tailoredSkillGroups);
+  const listedSkills = toStringArray(sourceObj.tailoredSkills);
+  // tailoredSkills is what ATS keyword parsers read, so it must cover every
+  // grouped skill even when the model forgets to flatten its own groups.
+  const seen = new Set(listedSkills.map((s) => s.toLowerCase()));
+  const flatSkills = [
+    ...listedSkills,
+    ...skillGroups
+      .flatMap((g) => g.items)
+      .filter((skill) => {
+        const key = skill.toLowerCase();
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      }),
+  ];
+
   return {
     tailoredSummary:
       typeof sourceObj.tailoredSummary === "string"
         ? cleanResumeText(sourceObj.tailoredSummary)
         : "",
-    tailoredSkills: toStringArray(sourceObj.tailoredSkills),
+    tailoredSkills: flatSkills,
+    tailoredSkillGroups: skillGroups,
     tailoredHighlights: toStringArray(sourceObj.tailoredHighlights),
     tailoredExperience: normalizeExperience(sourceObj.tailoredExperience),
-    tailoredProjects: normalizeProjects(sourceObj.tailoredProjects),
+    tailoredProjects: keepOnlyKnownProjectUrls(
+      normalizeProjects(sourceObj.tailoredProjects),
+      knownProjectUrls
+    ),
     detectedRole:
       typeof sourceObj.detectedRole === "string"
         ? cleanResumeText(sourceObj.detectedRole)
@@ -156,6 +272,7 @@ function normalizeTailoredResumeResult(
         ? cleanResumeText(sourceObj.matchExplanation)
         : "",
     keywordsUsed: toStringArray(sourceObj.keywordsUsed),
+    generationNotes: toStringArray(sourceObj.generationNotes),
     source,
   };
 }
@@ -337,7 +454,11 @@ export async function tailorResumeForJob(
   );
   const result = await ai.generateJSON<unknown>(messages, { maxTokens: 4096 });
 
-  return normalizeTailoredResumeResult(result, source);
+  const knownProjectUrls = (baseData.projects || [])
+    .map((p) => p.url)
+    .filter((u): u is string => !!u?.trim());
+
+  return normalizeTailoredResumeResult(result, source, knownProjectUrls);
 }
 
 /**

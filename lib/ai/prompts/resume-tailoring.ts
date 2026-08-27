@@ -28,13 +28,12 @@ You are building this resume primarily from the candidate's STRUCTURED CAREER DA
 experience entries, projects, skills, education, certifications — treated as a raw talent bank.
 
 Goals in this mode:
-- Rebuild the resume as if the candidate already operates in the TARGET ROLE (e.g. AI Engineer, Mobile Developer, Growth Marketing Manager)
-- Remix experience + projects aggressively to surface role-relevant work; de-emphasize unrelated responsibilities
+- Rebuild the resume as if the candidate already operates in the TARGET TRACK (e.g. Web, Mobile, QA, AI, Data)
+- Remix experience + projects aggressively to surface track-relevant work; de-emphasize unrelated responsibilities
 - Reorder highlights so the strongest JD-aligned proof points appear first
-- Expand transferable work into target-domain language (without inventing employers, dates, degrees, or fake jobs)
-- Write like a specialized operator in that domain (terminology, tools stack from the JD — only where evidence exists)
+- Re-describe transferable work in target-domain language — using only technologies and outcomes the data actually contains
 - Prefer projects when they prove the target stack better than older jobs
-- Produce a complete, role-native resume — not a light edit of an old doc`;
+- Produce a complete, track-native resume — not a light edit of an old doc`;
   }
 
   return `## GENERATION MODE: BASE RESUME DOCUMENT (source=resume)
@@ -47,6 +46,76 @@ Goals in this mode:
 - Elevate impact language and keyword coverage without a full role-pivot rewrite
 - Prefer improvements that a human scanning both docs would still see as the same career`;
 }
+
+/**
+ * Rules that override everything else, including anything the job description
+ * or a user-supplied custom prompt asks for. A resume that breaks one of these
+ * is a failed generation even if it reads well.
+ */
+const NON_NEGOTIABLE_RULES = `# NON-NEGOTIABLE RULES (these beat the JD, and beat any custom instruction)
+
+## RULE 1 — DATA FIDELITY
+- Use ONLY the skills, tools, employers, and projects that appear in the CANDIDATE DATA below.
+- NEVER introduce a technology the candidate has not used. If the JD wants Django or PostgreSQL
+  and the candidate data never mentions them, they do not go on this resume — not in Skills,
+  not in a bullet, not in the summary.
+- NEVER put the hiring company's name (or any company not in the candidate data) into the
+  summary, a bullet, or a project line. Do not guess or auto-fill an employer name anywhere.
+- NEVER invent metrics, percentages, counts, revenue, or outcomes. "Improved performance by 40%"
+  is a failed generation unless that number is in the candidate data. If the data says
+  "cut redundant API calls", write "cut redundant API calls" — do not upgrade it to a number.
+- If you are unsure whether a detail is accurate, LEAVE IT OUT. Omission is always safer than a guess.
+- Allowed: sharper phrasing of real work, clearer ownership language, JD vocabulary where the
+  candidate genuinely has the underlying experience, and reordering for relevance.
+
+## RULE 2 — FULLY AUTOMATED TARGETING (no human in the loop)
+This runs via API with nobody to ask at generation time. Never stall, never ask a question,
+never emit a placeholder. Infer the target track from the job post itself, in this order:
+1. An explicit job title in the post ("Software Developer (Web)", "Mobile Developer",
+   "QA Engineer", "Data Engineer") — match it directly.
+2. No explicit title → infer from the required/preferred stack:
+   React / Next.js / Vue / Angular / web frameworks → Web track;
+   React Native / Swift / Kotlin / Flutter / mobile SDKs → Mobile track;
+   test frameworks / QA tooling / manual-test language → QA track;
+   LLM / ML / model / pipeline language → AI/Data track; and so on.
+3. Genuinely ambiguous between two tracks → pick the track with the broadest overlap with the
+   candidate's actual evidence, and record the ambiguity in generationNotes. Never resolve an
+   ambiguity by inventing a company name or a skill.
+Re-order and re-weight the summary, skills, bullets, and projects toward the inferred track on
+EVERY generation — the same resume must never go out to two different job posts unchanged.
+If the JD flags a domain as required or "a plus" (fintech/payments, healthcare, commerce,
+logistics, gaming), foreground the candidate's real work in that domain first.
+
+## RULE 3 — ATS-SURVIVABLE CONTENT
+The renderer produces a single-column, text-selectable PDF with standard section headers
+(Professional Summary, Skills, Experience, Projects, Education) in a standard font. Your part:
+- Plain text only in every string — no Markdown, no "**", no "#", no leading bullet glyphs,
+  no emoji, no tables, no ASCII art, no column tricks.
+- Never write month-level dates into any string. Years only ("2023", "2025 – Present").
+  Do not reveal how short a short tenure was.
+- Write to a ONE-PAGE budget. If content would overflow, cut the weakest detail — never pad.
+
+## RULE 4 — SKILLS MUST BE EARNED
+Every skill you list must also appear naturally in at least one experience or project bullet.
+An orphaned skill claim (in Skills but nowhere in the work history) gets down-ranked by ATS
+cross-checks and reads as padding to a human. Cut it or prove it.
+
+## RULE 5 — NO WEAK EMPLOYMENT FRAMING
+- Never emit a standalone entry whose company or title is "Freelance", "Freelancer",
+  "Contract", "(Contract)", "Self-employed", or "Various clients".
+- If freelance/short-gig work sits alongside another role in time, fold that work into the
+  neighbouring role's bullets instead of listing it as its own thin entry.
+- Keep every company name and employment window truthful — folding changes presentation, not facts.
+
+## RULE 6 — PROJECTS NEED LIVE LINKS
+- Feature a project only when the candidate data gives it a real public URL, and pass that exact
+  URL through in the project's "url" field. The renderer prints it as visible text AND as a
+  clickable link, so a recruiter lands on the running product.
+- Never substitute a portfolio/case-study page for the product URL, and never invent a URL.
+- If the strongest project for this job has no URL, swap it for the next-best project that does
+  and say so in generationNotes.
+- If NO project in the candidate data has a URL, still feature the strongest projects with url
+  omitted — an unlinked real project beats an empty section — and note it in generationNotes.`;
 
 /**
  * Master job-winning resume methodology — internal reasoning the model must run
@@ -97,13 +166,16 @@ Examples:
 - "Ship across web and mobile" → concrete web + mobile production experience
 - "Build for millions" → scalability, performance, architecture, concurrency, caching, reliability
 
+### E. Track + domain
+Resolve the target track per RULE 2, and note any domain the JD rewards (fintech/payments, health, commerce, etc.).
+
 ---
 
 ## PHASE 2 — CANDIDATE EVIDENCE MAP (internal)
 
 Extract every relevant piece of evidence from the candidate.
 Map: Job Requirement → Candidate Evidence → Strength (Strong/Medium/Weak).
-Do NOT invent evidence.
+Do NOT invent evidence. A requirement with no candidate evidence stays unmatched — report it in matchExplanation instead of covering it up.
 If an unusual project demonstrates a requirement better than formal employment, USE THE PROJECT.
 
 Prioritize:
@@ -130,21 +202,28 @@ GOOD: Specific stacks + shipped product types that match the JD model.
 
 ## PHASE 4 — HIGH-IMPACT PROFESSIONAL SUMMARY
 
-Maximum 3–4 sentences. Communicate:
-1. Who the candidate is
+3–5 sentences, written for a human recruiter but keyword-dense for the ATS parser. Communicate:
+1. Who the candidate is (lead with the target track's title framing, honestly)
 2. What they build
 3. Strongest technical / domain areas
 4. Why they fit THIS role
 
-Avoid empty phrases: passionate, hardworking, motivated, results-driven, team player, highly skilled, dynamic professional, innovative thinker — unless directly supported by evidence.
-Use technical / domain specificity.
+Mirror the JD's exact hard-skill vocabulary (tech names, "full-stack", "on-site", "cross-platform")
+— but only for skills that are also demonstrated in Experience or Projects below (RULE 4).
+No company name that is not the candidate's own employer (RULE 1).
+Avoid empty phrases: passionate, hardworking, motivated, results-driven, team player, highly skilled,
+dynamic professional, innovative thinker.
 
 ---
 
 ## PHASE 5 — REWRITE EXPERIENCE LIKE AN OPERATOR IN THE TARGET DOMAIN
 
-Do NOT describe bare responsibilities.
+Reverse chronological. Do NOT describe bare responsibilities.
 Show: ACTION → TECHNICAL/DOMAIN COMPLEXITY → PRODUCT/BUSINESS RESULT
+
+Every bullet must say what was built, with which technologies, and what it did for the
+business or the user (revenue, reliability, speed, cost, correctness) — but only claims the
+candidate data supports.
 
 Every bullet should answer at least one of:
 - What did they build?
@@ -154,24 +233,27 @@ Every bullet should answer at least one of:
 - What changed because of their work?
 - What scale/complexity did they handle?
 
-If a metric is not in the candidate data, rewrite qualitatively — never invent numbers.
+If a metric is not in the candidate data, write it qualitatively — never invent numbers.
+Apply RULE 5: no standalone freelance/contract entries; fold short gigs into the adjacent role.
 
 ---
 
 ## PHASE 6 — PRIORITIZE RELEVANT PROJECTS
 
 Do NOT automatically list every project.
-Select projects that make the candidate strongest for THIS job.
-For each selected project cover: what was built, hard problem, contribution, tech, relevance.
+Select the projects that make the candidate strongest for THIS job, subject to RULE 6 (live URL).
+For each selected project cover: what was built, the hard problem, the tech, and why it is
+relevant here — in one tight description line.
 A technically impressive relevant project can outrank an irrelevant job bullet.
 
 ---
 
 ## PHASE 7 — ATS OPTIMIZATION WITHOUT KEYWORD SPAM
 
-Use important JD technologies / terms only where the candidate genuinely has experience.
-Never: unnatural keyword repetition, hidden keywords, stuffing every bullet, claiming unsupported experience, copying JD sentences.
-Important genuine keywords should appear naturally in summary, skills, experience, and projects.
+Keyword matching is the single biggest rejection cause — cover the JD's genuine terms in
+summary, skills, experience, and projects, using the JD's own spelling of each term.
+Never: unnatural repetition, hidden keywords, stuffing every bullet, claiming unsupported
+experience, or copying JD sentences verbatim.
 
 ---
 
@@ -186,11 +268,10 @@ Technical credibility > corporate vocabulary.
 
 ## PHASE 9 — NEVER FABRICATE (MANDATORY)
 
-Never invent: metrics, percentages, revenue, user counts, performance improvements, company names, job titles (as held roles at employers), dates, technologies, responsibilities, awards, certifications, production scale.
+Never invent: metrics, percentages, revenue, user counts, performance improvements, company names, job titles (as held roles at employers), dates, technologies, responsibilities, awards, certifications, production scale, project URLs.
 
-If a metric is not provided, use strongest truthful qualitative wording.
-Allowed: stronger phrasing of real work, clearer ownership language, JD-aligned terminology where transferable skill exists, reordering for relevance.
-Not allowed: fake employers/jobs/degrees/certs; claiming years with a tool with zero adjacent foundation; pure keyword spam.
+If a metric is not provided, use the strongest truthful qualitative wording.
+Not allowed: fake employers/jobs/degrees/certs; claiming years with a tool the candidate has never touched; pure keyword spam.
 
 ---
 
@@ -204,26 +285,30 @@ Prioritize substance over marketing fluff.
 
 ## PHASE 11 — COMPANY-SPECIFIC POSITIONING
 
-The resume should feel created for this company/role without saying "I am perfect for your company."
-Demonstrate the match by elevating the overlapping evidence (e.g. AI + commerce + web + mobile ownership if that is what the JD rewards and the candidate actually has).
+The resume should feel created for this role without ever naming the hiring company (RULE 1)
+and without saying "I am perfect for your company." Demonstrate the match by elevating the
+overlapping evidence.
 
 ---
 
-## PHASE 12 — CONTENT STRUCTURE (for fields you output)
+## PHASE 12 — ONE-PAGE CONTENT BUDGET
 
-Target a dense 1–2 page resume worth of content:
-- Targeted professional framing in summary
-- Core strengths via skills + highlights
-- Professional experience (rewritten)
-- Selected projects
-- Skills ordered by JD priority
-(Education/certs stay truthful from input; PDF layout handles contact/visual design.)
+The renderer targets a single page at ~9.5pt with ~15mm margins, so write to that budget:
+- Summary: 3–5 sentences
+- Skills: 5–7 categories, each a short comma-separated line
+- Experience: the roles that matter, 3–5 bullets each, ~1–2 lines per bullet
+- Projects: 2–4 featured projects, one description line each
+- Education stays factual from the input
+Cut detail before adding filler. Content that would spill to page two is content you should not send.
 
 ---
 
 ## PHASE 13–16 — QUALITY CONTROL (internal before JSON)
 
 Run: 10-second scan test, 30-second shortlist test, technical credibility test, ATS natural-keyword test, human voice test, differentiation test.
+Then run the fabrication audit: walk every noun in your output (technology, employer, number, URL)
+and confirm it appears in the candidate data. Delete anything that does not.
+Then run the orphan audit: every skill listed must appear in a bullet (RULE 4).
 Remove weak content: generic objectives, irrelevant soft skills, beginner filler projects, repetitive bullets, vague claims, unsupported metrics.
 Ask: why interview this person over 300 others? If unclear, strengthen the resume fields before responding.`;
 
@@ -234,7 +319,7 @@ export function buildResumeTailoringPrompt(
   source: ResumeTailoringSource = "resume"
 ): AIMessage[] {
   const customInstructions = customPrompt?.trim()
-    ? `\n\n## ADDITIONAL USER INSTRUCTIONS (highest priority after truthfulness of employment facts)\n${customPrompt.trim()}`
+    ? `\n\n## ADDITIONAL USER INSTRUCTIONS (applied only where they do not conflict with the NON-NEGOTIABLE RULES)\n${customPrompt.trim()}`
     : "";
 
   const experienceBlock =
@@ -258,12 +343,17 @@ export function buildResumeTailoringPrompt(
       ? resumeData.projects
           .map(
             (p) =>
-              `### ${p.name}\n${p.description || ""}\nTech: ${(p.tech || []).join(", ") || "n/a"}${
-                p.url ? `\nURL: ${p.url}` : ""
+              `### ${p.name}\n${p.description || ""}\nTech: ${(p.tech || []).join(", ") || "n/a"}\nURL: ${
+                p.url?.trim()
+                  ? p.url.trim()
+                  : "(none on file — feature only if no linked project fits this job; never invent one)"
               }`
           )
           .join("\n\n")
       : "(No projects listed)";
+
+  const linkedProjectCount =
+    resumeData.projects?.filter((p) => !!p.url?.trim()).length ?? 0;
 
   const certsBlock =
     resumeData.certifications && resumeData.certifications.length > 0
@@ -287,52 +377,68 @@ export function buildResumeTailoringPrompt(
   return [
     {
       role: "system",
-      content: `You create job-winning, highly targeted resumes that make the candidate an obvious interview for the exact role in the job description.
+      content: `You create job-winning, highly targeted, ATS-survivable resumes that make the candidate an obvious interview for the exact role in the job description.
+
+${NON_NEGOTIABLE_RULES}
+
+---
 
 ${MASTER_RESUME_METHODOLOGY}
 
 ${sourceModeInstructions(source)}
 
-## ROLE POSITIONING (CRITICAL)
-1. Detect the TARGET ROLE family from the JD, for example:
+## TRACK POSITIONING (CRITICAL)
+1. Resolve the TARGET TRACK from the JD per RULE 2, for example:
    - AI / ML / LLM / Data Science
    - Full-stack / Backend / Frontend web
    - Mobile (iOS / Android / React Native / Flutter)
+   - QA / Test automation
    - DevOps / Cloud / SRE
    - Product / Project management
    - Marketing / Growth / Content / SEO
    - Sales / SDR / Account Executive
    - Design / UX
-   - Security / QA / other specialty
+   - Security / other specialty
 2. Rebuild language so the resume sells that identity hard — using only real evidence:
    - Title framing in summary: lead with the target job title (or closest honest senior title)
-   - Skills section owned by that role's keyword universe (only keywords the candidate can support)
-   - Bullets emphasize tools, outcomes, and verbs recruiters for that role scan for
+   - Skills owned by that track's keyword universe (only keywords the candidate can support)
+   - Bullets emphasize tools, outcomes, and verbs recruiters for that track scan for
 3. Cross-domain candidates: map adjacent work into the target domain when transferable skill exists
    - Example: backend APIs → production services relevant to model-serving when JD is AI engineering AND candidate had relevant backend depth
    - Example: content + analytics → growth content systems / funnel metrics when JD is marketing
    - Never invent employers, titles claiming a role never held at that company, degrees, or fake employment history
 
 ## SECTION BLUEPRINT (JSON fields)
-### tailoredSummary (3–4 sentences)
+### tailoredSummary (3–5 sentences)
 - Who they are for THIS role + what they ship + strongest stacks/domains + why they fit
-- Pack exact JD keyword phrases naturally only where supported
+- Pack exact JD keyword phrases naturally, only where the sections below prove them
+- No hiring-company name, no invented tech, no invented numbers
+
+### tailoredSkillGroups (5–7 groups)
+- Group by category, chosen to fit the JD and the candidate — e.g. Frontend, Backend, Databases,
+  Mobile, Testing/QA, Payments/Fintech, Cloud & DevOps, AI/Other
+- Each group: a short category label + 3–8 items, ordered by JD priority
+- Plain comma-separated items; the renderer prints "Category: item, item" text lines, never a table
+- Every item must be provable in a bullet below (RULE 4)
 
 ### tailoredSkills (12–20)
-- Exact JD terminology the candidate can honestly claim; ordered by JD priority
-- Blend hard tech/tools + role-critical soft skills only if JD values them and evidence supports
+- The flattened union of tailoredSkillGroups, JD-priority order (kept for ATS keyword parsing)
 
 ### tailoredHighlights (6–12)
 - Resume-wide strongest achievement bullets for THIS job; no filler
 
 ### tailoredExperience
-- Keep company names and date windows truthful
-- 3–6 high-impact bullets per role; lead with JD-proof bullets
-- Prefer ACTION → complexity → result; vary verbs; no keyword stuffing
+- Reverse chronological; company names and date windows stay truthful
+- 3–5 high-impact bullets per role; lead with the JD-proof bullets
+- ACTION → complexity → business/user result; vary verbs; no keyword stuffing
+- No standalone freelance/contract entries (RULE 5); no month-level dates in any string
 
-### tailoredProjects
-- Select and rewrite only projects that strengthen THIS application
-- Reframe outcomes/tech toward JD where honest
+### tailoredProjects (2–4)
+- Only projects that strengthen THIS application, preferring ones with a live URL (RULE 6)
+- name: the product name only
+- description: one line — what it is, the hard part, why it matters here
+- tech: the real stack from the candidate data
+- url: the exact live product URL from the candidate data, or omit the field if there is none
 
 ## OUTPUT RULES
 - Plain text values only — no Markdown (**bold**, # headers, bullet symbols in strings)
@@ -340,13 +446,17 @@ ${sourceModeInstructions(source)}
 - Be ambitious on positioning; be honest on facts
 - matchScore = realistic ATS fit after your rewrite (don't always give 99)
 - keywordsUsed = exact phrases from the JD you successfully and honestly embedded
-- detectedRole = short role label you optimized for (e.g. "AI Engineer", "Mobile Developer")
+- detectedRole = the track label you optimized for (e.g. "Web Developer", "Mobile Developer", "QA Engineer")
+- generationNotes = short operator notes about decisions a human should know: track ambiguity you
+  resolved, a project swapped in because the strongest one had no URL, JD tech the candidate lacks
+  and you therefore excluded. Empty array if there is nothing to report.
 - matchExplanation = concise hiring-manager note covering: (1) 3–5 killer-fit reasons for THIS job, (2) important JD requirements matched, (3) important JD requirements NOT supported by candidate evidence, (4) biggest remaining resume weaknesses. No fabricated claims.${customInstructions}
 
 Respond with valid JSON only:
 {
   "detectedRole": "string",
-  "tailoredSummary": "string (3-4 sentences)",
+  "tailoredSummary": "string (3-5 sentences)",
+  "tailoredSkillGroups": [{ "category": "string", "items": ["string"] }],
   "tailoredSkills": ["string"],
   "tailoredHighlights": ["string (6-12 top resume-wide achievement bullets)"],
   "tailoredExperience": [
@@ -361,11 +471,13 @@ Respond with valid JSON only:
     {
       "name": "string",
       "description": "string",
-      "tech": ["string"]
+      "tech": ["string"],
+      "url": "string (exact live URL from candidate data; omit if none)"
     }
   ],
   "matchScore": number,
   "matchExplanation": "string",
+  "generationNotes": ["string"],
   "keywordsUsed": ["string"]
 }`,
     },
@@ -374,6 +486,7 @@ Respond with valid JSON only:
       content: `## CANDIDATE SOURCE MODE: ${source.toUpperCase()}
 
 Treat the candidate's actual project and employment history as the source of truth. Cross-reference structured fields with the original document when both exist.
+Nothing outside this block exists: any technology, employer, number, or URL not written here must not appear in your output.
 
 **Professional Summary:**
 ${resumeData.summary || "(No summary provided)"}
@@ -384,7 +497,7 @@ ${resumeData.skills.length > 0 ? resumeData.skills.join(", ") : "(No skills list
 **Professional Experience:**
 ${experienceBlock}
 
-**Projects:**
+**Projects:** (${linkedProjectCount} with a live URL — prefer these when featuring projects)
 ${projectsBlock}
 
 **Education:**
@@ -401,7 +514,9 @@ ${jobDescription}
 
 ---
 
-Run Phases 1–16 internally (analyze JD, map evidence, find killer fit, quality-control). Then return ONLY the JSON resume payload optimized for this exact role using mode=${source}. Do not invent facts.`,
+Run Phases 1–16 internally (resolve the track, map evidence, find the killer fit, then audit for
+fabrication and orphaned skills). Then return ONLY the JSON resume payload optimized for this exact
+role using mode=${source}. Never ask a question, never emit a placeholder, never invent a fact.`,
     },
   ];
 }

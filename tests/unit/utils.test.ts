@@ -6,6 +6,7 @@ import {
   sanitizeForAI,
   escapeRegex,
   sleep,
+  isWeakEmployerLabel,
 } from '@/lib/utils';
 
 describe('cn() - Class Name Merging', () => {
@@ -188,5 +189,20 @@ describe('sleep()', () => {
   it('should return a Promise', () => {
     const result = sleep(1);
     expect(result).toBeInstanceOf(Promise);
+  });
+});
+
+describe("isWeakEmployerLabel", () => {
+  it("flags work arrangements posing as employers", () => {
+    expect(isWeakEmployerLabel("Freelance")).toBe(true);
+    expect(isWeakEmployerLabel("  self-employed ")).toBe(true);
+    expect(isWeakEmployerLabel("Various Clients")).toBe(true);
+    expect(isWeakEmployerLabel("Contractor")).toBe(true);
+  });
+
+  it("leaves real employers alone", () => {
+    expect(isWeakEmployerLabel("Northwind Labs")).toBe(false);
+    expect(isWeakEmployerLabel("Freelance Media Group")).toBe(false);
+    expect(isWeakEmployerLabel("")).toBe(false);
   });
 });

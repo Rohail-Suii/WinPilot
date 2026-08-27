@@ -10,6 +10,7 @@
 
 import PDFDocument from "pdfkit";
 import { getDefaultResume } from "./resume-service";
+import { isWeakEmployerLabel } from "@/lib/utils";
 
 interface TailoredExperienceItem {
   company?: string;
@@ -22,11 +23,20 @@ interface TailoredProjectItem {
   name?: string;
   description?: string;
   tech?: string[];
+  /** Live product URL — printed as readable text and attached as a real link. */
+  url?: string;
+}
+
+interface TailoredSkillGroup {
+  category?: string;
+  items?: string[];
 }
 
 interface TailoredData {
   summary?: string;
   skills?: string[];
+  /** AI-chosen skill categories; falls back to the static categorizer when absent. */
+  skillGroups?: TailoredSkillGroup[];
   highlights?: string[];
   experience?: TailoredExperienceItem[];
   projects?: TailoredProjectItem[];
@@ -35,13 +45,31 @@ interface TailoredData {
 type ResumeBase = Awaited<ReturnType<typeof getDefaultResume>>;
 type Doc = PDFKit.PDFDocument;
 
-// Hard caps keep the rendered PDF to roughly 1-2 pages regardless of how much
-// the AI (or an uploaded resume) returns. The tailoring prompt already orders
-// bullets/entries strongest-first, so trimming from the tail preserves the
-// highest-impact content.
-const MAX_EXPERIENCE_ENTRIES = 5;
-const MAX_BULLETS_PER_ROLE = 5;
-const MAX_PROJECTS = 4;
+/**
+ * Recruiters and ATS both prefer one page, so the document is rendered
+ * repeatedly against progressively tighter content budgets until it fits.
+ * Only content is trimmed — body text never drops below 9.5pt and margins
+ * never tighten below ~17mm, because that is where ATS parsing and human
+ * readability start to suffer. The tailoring prompt orders bullets and entries
+ * strongest-first, so trimming from the tail preserves the highest-impact work.
+ */
+interface Density {
+  maxExperienceEntries: number;
+  maxBulletsPerRole: number;
+  maxProjects: number;
+  /** Multiplier applied to the vertical rhythm (section/entry gaps). */
+  spacing: number;
+  /** Drop role description paragraphs, keeping only the achievement bullets. */
+  dropRoleDescriptions: boolean;
+}
+
+const DENSITY_LADDER: Density[] = [
+  { maxExperienceEntries: 5, maxBulletsPerRole: 5, maxProjects: 4, spacing: 1, dropRoleDescriptions: false },
+  { maxExperienceEntries: 5, maxBulletsPerRole: 4, maxProjects: 3, spacing: 0.85, dropRoleDescriptions: false },
+  { maxExperienceEntries: 4, maxBulletsPerRole: 4, maxProjects: 3, spacing: 0.7, dropRoleDescriptions: true },
+  { maxExperienceEntries: 4, maxBulletsPerRole: 3, maxProjects: 2, spacing: 0.6, dropRoleDescriptions: true },
+  { maxExperienceEntries: 3, maxBulletsPerRole: 3, maxProjects: 2, spacing: 0.5, dropRoleDescriptions: true },
+];
 
 const FONT = {
   regular: "Helvetica",
@@ -161,19 +189,47 @@ export async function generateTailoredResumePDF(
     throw new Error("No resume found");
   }
 
-  const doc = new PDFDocument({ size: "A4", margins: PAGE_MARGINS });
-
-  const chunks: Buffer[] = [];
-  doc.on("data", (chunk: Buffer) => chunks.push(chunk));
-  const finished = new Promise<void>((resolve) => doc.on("end", resolve));
-
-  // --- Header / Name ---
   const rawName =
     resume.contactInfo?.name || resume.contactInfo?.email?.split("@")[0] || "Applicant";
   const displayName = resume.contactInfo?.name
     ? rawName
     : rawName.replace(/[._-]/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 
+  // Render at each budget until the resume lands on a single page; the last
+  // (tightest) attempt is accepted as-is rather than cutting a whole role.
+  let pdfBuffer: Buffer | null = null;
+  for (const [index, density] of DENSITY_LADDER.entries()) {
+    const attempt = await renderResumeDocument(resume, displayName, tailoredData, density);
+    pdfBuffer = attempt.buffer;
+    if (attempt.pageCount === 1 || index === DENSITY_LADDER.length - 1) break;
+  }
+
+  const base64 = pdfBuffer!.toString("base64");
+
+  const safeName = displayName.replace(/[^\w\s-]/g, "").trim().replace(/\s+/g, "_") || "Resume";
+  const fileName = `${safeName}_Resume.pdf`;
+
+  return { base64, fileName };
+}
+
+/** One full render pass at a given content budget. */
+async function renderResumeDocument(
+  resume: NonNullable<ResumeBase>,
+  displayName: string,
+  tailoredData: TailoredData,
+  density: Density
+): Promise<{ buffer: Buffer; pageCount: number }> {
+  const doc = new PDFDocument({ size: "A4", margins: PAGE_MARGINS });
+
+  const chunks: Buffer[] = [];
+  let pageCount = 1;
+  doc.on("data", (chunk: Buffer) => chunks.push(chunk));
+  doc.on("pageAdded", () => {
+    pageCount += 1;
+  });
+  const finished = new Promise<void>((resolve) => doc.on("end", resolve));
+
+  // --- Header / Name ---
   doc
     .font(FONT.bold)
     .fontSize(SIZE.name)
@@ -186,33 +242,34 @@ export async function generateTailoredResumePDF(
 
   gap(doc, 4);
   renderContactLine(doc, resume);
-  gap(doc, 10);
+  gap(doc, 10 * density.spacing);
 
-  // --- Summary ---
+  // --- Professional Summary ---
   const summary = tailoredData.summary || resume.summary;
   if (summary?.trim()) {
     sectionHeader(doc, "Professional Summary");
     paragraph(doc, summary.trim());
-    gap(doc, 8);
+    gap(doc, 8 * density.spacing);
   }
 
-  // --- Skills (grouped by category for scannability + ATS section parsing) ---
+  // --- Skills (grouped plain-text lines — never a table, for ATS parsing) ---
   const skills = (tailoredData.skills?.length ? tailoredData.skills : resume.skills)?.filter(
     (s) => !!s?.trim()
   );
-  if (skills?.length) {
+  const aiGroups = normalizeAiSkillGroups(tailoredData.skillGroups);
+  if (aiGroups.length || skills?.length) {
     sectionHeader(doc, "Skills");
-    renderGroupedSkills(doc, skills);
-    gap(doc, 8);
+    renderGroupedSkills(doc, skills || [], aiGroups);
+    gap(doc, 8 * density.spacing);
   }
 
   const tailoredExp = (tailoredData.experience?.length ? tailoredData.experience : null)?.slice(
     0,
-    MAX_EXPERIENCE_ENTRIES
+    density.maxExperienceEntries
   );
   const tailoredProjects = (tailoredData.projects?.length ? tailoredData.projects : null)?.slice(
     0,
-    MAX_PROJECTS
+    density.maxProjects
   );
 
   // Thin-experience profiles (career switchers, juniors leaning on Career Data
@@ -222,8 +279,9 @@ export async function generateTailoredResumePDF(
   const projectEntryCount = tailoredProjects?.length ?? resume.projects?.length ?? 0;
   const projectsFirst = experienceEntryCount <= 1 && projectEntryCount >= 2;
 
-  const renderExperience = () => renderExperienceSection(doc, resume!, tailoredData, tailoredExp);
-  const renderProjects = () => renderProjectsSection(doc, resume!, tailoredProjects);
+  const renderExperience = () =>
+    renderExperienceSection(doc, resume, tailoredData, tailoredExp, density);
+  const renderProjects = () => renderProjectsSection(doc, resume, tailoredProjects, density);
 
   if (projectsFirst) {
     renderProjects();
@@ -233,19 +291,13 @@ export async function generateTailoredResumePDF(
     renderProjects();
   }
 
-  renderEducationSection(doc, resume);
-  renderCertificationsSection(doc, resume);
+  renderEducationSection(doc, resume, density);
+  renderCertificationsSection(doc, resume, density);
 
   doc.end();
   await finished;
 
-  const pdfBuffer = Buffer.concat(chunks);
-  const base64 = pdfBuffer.toString("base64");
-
-  const safeName = displayName.replace(/[^\w\s-]/g, "").trim().replace(/\s+/g, "_") || "Resume";
-  const fileName = `${safeName}_Resume.pdf`;
-
-  return { base64, fileName };
+  return { buffer: Buffer.concat(chunks), pageCount };
 }
 
 // ─── Section renderers ─────────────────────────────────────────────
@@ -254,7 +306,8 @@ function renderExperienceSection(
   doc: Doc,
   resume: NonNullable<ResumeBase>,
   tailoredData: TailoredData,
-  tailoredExp: TailoredExperienceItem[] | null | undefined
+  tailoredExp: TailoredExperienceItem[] | null | undefined,
+  density: Density
 ) {
   if (tailoredExp?.length) {
     sectionHeader(doc, "Experience");
@@ -263,45 +316,63 @@ function renderExperienceSection(
       const company = exp.company?.trim() || "";
       const baseMatch = findBaseExperience(resume, company, title);
 
-      entryHeading(doc, title, company, formatDateRange(baseMatch));
+      // "Freelance" as an employer reads as a gap filler; print the role and
+      // its dates instead of advertising the arrangement.
+      entryHeading(
+        doc,
+        title,
+        isWeakEmployerLabel(company) ? "" : company,
+        formatDateRange(baseMatch)
+      );
 
-      if (exp.description?.trim()) paragraph(doc, exp.description.trim());
-      renderBullets(doc, exp.highlights);
+      if (exp.description?.trim() && !density.dropRoleDescriptions) {
+        paragraph(doc, exp.description.trim());
+      }
+      renderBullets(doc, exp.highlights, density);
 
-      if (i < tailoredExp.length - 1) gap(doc, 6);
+      if (i < tailoredExp.length - 1) gap(doc, 6 * density.spacing);
     });
-    gap(doc, 8);
+    gap(doc, 8 * density.spacing);
     return;
   }
 
   if (!resume.experience?.length) return;
 
-  const entries = resume.experience.slice(0, MAX_EXPERIENCE_ENTRIES);
+  const entries = resume.experience.slice(0, density.maxExperienceEntries);
   sectionHeader(doc, "Experience");
   entries.forEach((exp, i) => {
-    entryHeading(doc, exp.title || "Role", exp.company || "", formatDateRange(exp));
+    const company = exp.company?.trim() || "";
+    entryHeading(
+      doc,
+      exp.title || "Role",
+      isWeakEmployerLabel(company) ? "" : company,
+      formatDateRange(exp)
+    );
 
-    if (exp.description?.trim()) paragraph(doc, exp.description.trim());
+    if (exp.description?.trim() && !density.dropRoleDescriptions) {
+      paragraph(doc, exp.description.trim());
+    }
 
     // Tailored highlights only apply to the most recent role; older roles keep
     // whatever the parsed resume already had.
     const highlights =
       i === 0 && tailoredData.highlights?.length ? tailoredData.highlights : exp.highlights;
-    renderBullets(doc, highlights);
+    renderBullets(doc, highlights, density);
 
-    if (i < entries.length - 1) gap(doc, 6);
+    if (i < entries.length - 1) gap(doc, 6 * density.spacing);
   });
-  gap(doc, 8);
+  gap(doc, 8 * density.spacing);
 }
 
 function renderProjectsSection(
   doc: Doc,
   resume: NonNullable<ResumeBase>,
-  tailoredProjects: TailoredProjectItem[] | null | undefined
+  tailoredProjects: TailoredProjectItem[] | null | undefined,
+  density: Density
 ) {
   const projects: TailoredProjectItem[] | undefined = tailoredProjects?.length
     ? tailoredProjects
-    : resume.projects?.slice(0, MAX_PROJECTS);
+    : resume.projects?.slice(0, density.maxProjects);
 
   if (!projects?.length) return;
 
@@ -310,12 +381,35 @@ function renderProjectsSection(
     const tech = proj.tech?.filter(Boolean) ?? [];
     entryHeading(doc, proj.name?.trim() || "Project", "", tech.length ? tech.join(" · ") : "");
     if (proj.description?.trim()) paragraph(doc, proj.description.trim());
-    if (i < projects.length - 1) gap(doc, 5);
+    if (proj.url?.trim()) projectLink(doc, proj.url.trim());
+    if (i < projects.length - 1) gap(doc, 5 * density.spacing);
   });
-  gap(doc, 8);
+  gap(doc, 8 * density.spacing);
 }
 
-function renderEducationSection(doc: Doc, resume: NonNullable<ResumeBase>) {
+/**
+ * A recruiter has to be able to reach the running product. The full URL is
+ * printed as readable text (so it survives printing or a viewer that strips
+ * annotations) and the same run carries the clickable link annotation.
+ */
+function projectLink(doc: Doc, url: string) {
+  const href = normalizeUrl(url);
+  ensureSpace(doc, 14);
+  doc
+    .font(FONT.regular)
+    .fontSize(SIZE.contact)
+    .fillColor(COLOR.link)
+    .text(href, leftEdge(doc), doc.y, {
+      width: usableWidth(doc),
+      link: href,
+      lineBreak: false,
+    });
+  doc.x = leftEdge(doc);
+  doc.y += 1;
+  doc.fillColor(COLOR.body);
+}
+
+function renderEducationSection(doc: Doc, resume: NonNullable<ResumeBase>, density: Density) {
   if (!resume.education?.length) return;
 
   sectionHeader(doc, "Education");
@@ -328,12 +422,12 @@ function renderEducationSection(doc: Doc, resume: NonNullable<ResumeBase>) {
         .fillColor(COLOR.body)
         .text(`GPA: ${edu.gpa}`, leftEdge(doc), doc.y, { width: usableWidth(doc) });
     }
-    if (i < resume.education!.length - 1) gap(doc, 5);
+    if (i < resume.education!.length - 1) gap(doc, 5 * density.spacing);
   });
-  gap(doc, 8);
+  gap(doc, 8 * density.spacing);
 }
 
-function renderCertificationsSection(doc: Doc, resume: NonNullable<ResumeBase>) {
+function renderCertificationsSection(doc: Doc, resume: NonNullable<ResumeBase>, density: Density) {
   if (!resume.certifications?.length) return;
 
   sectionHeader(doc, "Certifications");
@@ -343,7 +437,7 @@ function renderCertificationsSection(doc: Doc, resume: NonNullable<ResumeBase>) 
     const detail = [cert.issuer, cert.date].filter(Boolean).join(" · ");
     bulletLine(doc, detail ? `${name} — ${detail}` : name);
   }
-  gap(doc, 6);
+  gap(doc, 6 * density.spacing);
 }
 
 // ─── Text primitives ───────────────────────────────────────────────
@@ -450,8 +544,8 @@ function paragraph(doc: Doc, text: string) {
   doc.y += 1.5;
 }
 
-function renderBullets(doc: Doc, highlights: string[] | undefined) {
-  const items = highlights?.filter((h) => !!h?.trim()).slice(0, MAX_BULLETS_PER_ROLE);
+function renderBullets(doc: Doc, highlights: string[] | undefined, density: Density) {
+  const items = highlights?.filter((h) => !!h?.trim()).slice(0, density.maxBulletsPerRole);
   if (!items?.length) return;
   for (const item of items) bulletLine(doc, item.trim());
 }
@@ -662,8 +756,45 @@ export function categorizeSkills(skills: string[]): { label: string; items: stri
   return grouped;
 }
 
-function renderGroupedSkills(doc: Doc, skills: string[]) {
-  const grouped = categorizeSkills(skills);
+/**
+ * Prefer the categories the AI chose for this job (it knows the JD's vocabulary
+ * and can name a "Payments" or "Testing" group the static map has no concept
+ * of); fall back to the keyword categorizer when the model returns nothing
+ * usable. Skills missing from the AI's groups are appended rather than dropped.
+ */
+export function normalizeAiSkillGroups(
+  groups: TailoredSkillGroup[] | undefined
+): { label: string; items: string[] }[] {
+  if (!Array.isArray(groups)) return [];
+  return groups
+    .map((group) => ({
+      label: group?.category?.trim() || "",
+      items: (group?.items || []).map((item) => item?.trim()).filter((i): i is string => !!i),
+    }))
+    .filter((group) => !!group.label && group.items.length > 0);
+}
+
+function mergeUngroupedSkills(
+  grouped: { label: string; items: string[] }[],
+  skills: string[]
+): { label: string; items: string[] }[] {
+  const known = new Set(grouped.flatMap((g) => g.items).map((i) => i.toLowerCase()));
+  const leftovers = skills.map((s) => s.trim()).filter((s) => s && !known.has(s.toLowerCase()));
+  if (!leftovers.length) return grouped;
+
+  const largest = grouped.reduce((a, b) => (b.items.length > a.items.length ? b : a));
+  return grouped.map((g) =>
+    g === largest ? { ...g, items: [...g.items, ...leftovers] } : g
+  );
+}
+
+function renderGroupedSkills(
+  doc: Doc,
+  skills: string[],
+  aiGroups: { label: string; items: string[] }[] = []
+) {
+  const grouped =
+    aiGroups.length >= 2 ? mergeUngroupedSkills(aiGroups, skills) : categorizeSkills(skills);
 
   // Fewer than 2 categories isn't worth a categorized layout — a flat line reads cleaner.
   if (grouped.length < 2) {
@@ -715,14 +846,26 @@ function renderGroupedSkills(doc: Doc, skills: string[]) {
 
 // ─── Small formatters ──────────────────────────────────────────────
 
+/**
+ * Resume dates are printed year-only ("2023", "2025 – Present"). Month-level
+ * precision advertises exactly how short a short tenure was, and recruiters
+ * screen on it; the year alone stays truthful without inviting that read.
+ */
+export function toYearOnly(value?: string | null): string {
+  const trimmed = value?.trim();
+  if (!trimmed) return "";
+  const year = trimmed.match(/(?:19|20)\d{2}/);
+  return year ? year[0] : trimmed;
+}
+
 export function formatDateRange(entry?: {
   startDate?: string | null;
   endDate?: string | null;
   current?: boolean;
 } | null): string {
   if (!entry) return "";
-  const end = entry.current ? "Present" : entry.endDate;
-  const parts = [entry.startDate, end].map((p) => p?.trim()).filter(Boolean);
+  const end = entry.current ? "Present" : toYearOnly(entry.endDate);
+  const parts = [toYearOnly(entry.startDate), end].map((p) => p?.trim()).filter(Boolean);
   if (!parts.length) return "";
   return parts.length === 2 && parts[0] === parts[1] ? parts[0]! : parts.join(" – ");
 }

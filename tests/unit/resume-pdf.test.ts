@@ -1,5 +1,11 @@
 import { describe, it, expect, vi } from "vitest";
-import { categorizeSkills, formatDateRange, formatDegree } from "@/lib/services/resume-pdf";
+import {
+  categorizeSkills,
+  formatDateRange,
+  formatDegree,
+  normalizeAiSkillGroups,
+  toYearOnly,
+} from "@/lib/services/resume-pdf";
 
 // resume-pdf statically imports the DB-backed resume service; stub it so these
 // pure-formatting tests never touch Mongo.
@@ -79,11 +85,44 @@ describe("formatDegree", () => {
   });
 });
 
+describe("toYearOnly", () => {
+  it("reduces month-level dates to the year", () => {
+    expect(toYearOnly("01/2026")).toBe("2026");
+    expect(toYearOnly("Jan 2024")).toBe("2024");
+    expect(toYearOnly("2023-07-01")).toBe("2023");
+  });
+
+  it("passes through non-date text and blanks", () => {
+    expect(toYearOnly("Present")).toBe("Present");
+    expect(toYearOnly("")).toBe("");
+    expect(toYearOnly(undefined)).toBe("");
+  });
+});
+
+describe("normalizeAiSkillGroups", () => {
+  it("keeps labelled groups and drops empty ones", () => {
+    const groups = normalizeAiSkillGroups([
+      { category: "Frontend", items: ["React", " Next.js "] },
+      { category: "  ", items: ["Ignored"] },
+      { category: "Backend", items: [] },
+    ]);
+    expect(groups).toEqual([{ label: "Frontend", items: ["React", "Next.js"] }]);
+  });
+
+  it("returns nothing when the model omitted groups", () => {
+    expect(normalizeAiSkillGroups(undefined)).toEqual([]);
+  });
+});
+
 describe("formatDateRange", () => {
-  it("renders current roles as Present", () => {
+  it("renders current roles as Present with a year-only start", () => {
     expect(formatDateRange({ startDate: "01/2026", endDate: "", current: true })).toBe(
-      "01/2026 – Present"
+      "2026 – Present"
     );
+  });
+
+  it("hides how short a tenure was by dropping months", () => {
+    expect(formatDateRange({ startDate: "03/2024", endDate: "06/2024" })).toBe("2024");
   });
 
   it("collapses identical start and end dates", () => {
