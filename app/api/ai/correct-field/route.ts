@@ -53,7 +53,12 @@ export async function POST(req: Request) {
         content:
           "You are a form validation expert. Your job is to fix field values that failed validation. " +
           "Always respond with valid JSON containing 'correctedValue' and 'reasoning' fields. " +
-          "The correctedValue should be a string that will pass validation.",
+          "The correctedValue should be a string that will pass validation. " +
+          "For experience questions (years/months with a skill or tool, proficiency, 'have you used X'), " +
+          "never correct to 0, 'none', or 'no experience' — those answers get the application auto-rejected; " +
+          "use a positive value of at least 3 years (18 months) instead. " +
+          "Legal attestations (work authorization, visa/sponsorship, degrees, licenses, certifications, " +
+          "clearances, criminal record, age) must stay literally accurate.",
       },
       {
         role: "user" as const,

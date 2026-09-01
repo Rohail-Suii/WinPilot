@@ -686,6 +686,42 @@ function isMissingFieldValue(field) {
   return !value;
 }
 
+// ─── Optimistic experience answers ────────────────────────────────
+// Screening filters auto-reject on "0 years". Experience answers always land on
+// a positive floor. Legal attestations (visa, degree, clearance, age) are never
+// touched — those must stay literally accurate.
+const EXPERIENCE_MIN_YEARS = "3";
+const EXPERIENCE_MIN_MONTHS = "18";
+
+const LEGAL_ATTESTATION_LABEL_RE =
+  /\b(sponsor\w*|visa|work permit|authoriz\w*|eligib\w*|citizen\w*|residen\w*|felony|convict\w*|criminal|background check|drug (?:test|screen)\w*|clearance|degrees?|diplomas?|bachelors?|masters?|phd|licen[cs]\w*|certif\w*|18 years|age)\b/i;
+
+const NON_EXPERIENCE_LABEL_RE =
+  /\b(notice|start date|availab\w*|salary|compensation|ctc|pay|rate|gpa|zip|postal|phone|hours per week|references|dependents)\b/i;
+
+function isExperienceLabel(label) {
+  const text = (label || "").toString();
+  if (!text) return false;
+  if (NON_EXPERIENCE_LABEL_RE.test(text)) return false;
+  if (LEGAL_ATTESTATION_LABEL_RE.test(text)) return false;
+  return /\b(experienc\w*|years?|months?|yrs?|how long|proficien\w*|familiar\w*|worked with|hands[- ]on|expertise|skill\w*|knowledge of|exposure to|used)\b/i.test(text);
+}
+
+/** Positive floor in the unit the question asked for. */
+function optimisticExperienceValue(label) {
+  const text = (label || "").toString();
+  const months = /\bmonths?\b/i.test(text) && !/\byears?\b/i.test(text);
+  return months ? EXPERIENCE_MIN_MONTHS : EXPERIENCE_MIN_YEARS;
+}
+
+function isZeroishOptionText(text) {
+  const value = (text || "").toString().trim();
+  if (!value) return true;
+  if (/^(none|no|n\/?a|zero|no experience|not applicable|never used)\b/i.test(value)) return true;
+  const numbers = (value.match(/\d+(?:\.\d+)?/g) || []).map(Number);
+  return /^0\b/.test(value) && (!numbers.length || Math.max(...numbers) === 0);
+}
+
 function normalizeAnswerForField(field, rawAnswer) {
   const label = (field?.label || "").toLowerCase();
   const inputType = (field?.inputType || "").toLowerCase();
@@ -736,14 +772,19 @@ function normalizeAnswerForField(field, rawAnswer) {
     const firstNumber = text.match(/\d[\d,]*(?:\.\d+)?/);
     if (firstNumber) {
       const cleaned = firstNumber[0].replace(/,/g, "");
-      // For years/experience prefer integer
+      // For years/experience prefer integer — but never hand back a zero
       if (label.includes("year") || label.includes("experience") || label.includes("how many")) {
-        return String(parseInt(cleaned, 10));
+        const asInt = parseInt(cleaned, 10);
+        if (!(asInt > 0) && isExperienceLabel(label)) {
+          return optimisticExperienceValue(label);
+        }
+        return String(asInt);
       }
       return cleaned.replace(/\..*$/, ""); // salary etc. as integer digits
     }
     if (label.includes("phone")) return "0000000000";
     if (label.includes("salary")) return "5000";
+    if (isExperienceLabel(label)) return optimisticExperienceValue(label);
     if (label.includes("year") || label.includes("experience")) return "3";
     return "1";
   }
@@ -768,6 +809,7 @@ function fallbackAnswerForField(field) {
 
   if (isNumericPrompt) {
     if (label.includes("scale")) return "8";
+    if (isExperienceLabel(label)) return optimisticExperienceValue(label);
     if (label.includes("decimal") || label.includes("million") || label.includes("capital") || label.includes("usd")) {
       return "5.0";
     }
@@ -775,6 +817,14 @@ function fallbackAnswerForField(field) {
   }
 
   const pickBestSelectOption = (options = []) => {
+    // On experience questions, drop the "None" / "0" buckets before choosing —
+    // the lowest option is what gets the application filtered out.
+    if (isExperienceLabel(label)) {
+      const positive = options.filter(
+        (o) => !isZeroishOptionText(o?.text || o?.label || o?.value)
+      );
+      if (positive.length) options = positive;
+    }
     // Always prefer "Yes" — it keeps doors open
     const yesOpt = options.find((o) => {
       const val = (o?.value || "").toString().trim().toLowerCase();
@@ -793,13 +843,20 @@ function fallbackAnswerForField(field) {
 
   if (field.type === "checkbox") return "true";
   if (field.type === "radio") {
+    let radioOptions = field.options || [];
+    if (isExperienceLabel(label)) {
+      const positive = radioOptions.filter(
+        (o) => !isZeroishOptionText(o?.label || o?.text || o?.value)
+      );
+      if (positive.length) radioOptions = positive;
+    }
     // Prefer "Yes" for radio buttons too
-    const yesRadio = (field.options || []).find((o) => {
+    const yesRadio = radioOptions.find((o) => {
       const lbl = (o.label || o.text || "").toLowerCase();
       const val = (o.value || "").toLowerCase();
       return lbl === "yes" || val === "yes";
     });
-    return yesRadio?.value || yesRadio?.label || field.options?.[0]?.value || field.options?.[0]?.label || "Yes";
+    return yesRadio?.value || yesRadio?.label || radioOptions[0]?.value || radioOptions[0]?.label || "Yes";
   }
   if (field.type === "select" || field.type === "custom-dropdown") {
     return pickBestSelectOption(field.options || []);

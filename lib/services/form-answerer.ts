@@ -6,6 +6,12 @@
 import { getUserAIProvider } from "@/lib/ai/key-manager";
 import { buildFormAnswerPrompt, type FormAnswerFieldMeta } from "@/lib/ai/prompts/form-answer";
 import { getDefaultResume, resumeToText } from "./resume-service";
+import {
+  applyOptimisticFloor,
+  estimateCareerYears,
+  resolveOptimismSettings,
+  type ExperienceOptimismSettings,
+} from "./experience-optimism";
 
 export type FormPlatform = "linkedin" | "indeed";
 
@@ -114,6 +120,59 @@ function formatAnswerForField(
   return answer;
 }
 
+interface AnswerContext {
+  resumeContext: string;
+  optimism: ExperienceOptimismSettings;
+}
+
+/**
+ * Load resume text + the optimism floors once per batch. The floors are capped
+ * by the candidate's real career length so answers stay credible.
+ */
+async function loadAnswerContext(
+  userId: string,
+  userPreferences: Record<string, string>
+): Promise<AnswerContext> {
+  const resume = await getDefaultResume(userId);
+  return {
+    resumeContext: resume ? resumeToText(resume) : "",
+    optimism: resolveOptimismSettings(
+      userPreferences,
+      estimateCareerYears(resume?.experience)
+    ),
+  };
+}
+
+/**
+ * Used when AI is unavailable. An empty answer leaves the field blank (or lets
+ * the extension fall back to a literal zero), so answer experience questions
+ * positively even here.
+ */
+function fallbackAnswer(
+  question: string,
+  fieldType: string,
+  options: string[] | undefined,
+  maxLength: number | undefined,
+  expectedFormat: FormAnswerFieldMeta["expectedFormat"],
+  userPreferences: Record<string, string>
+): FormAnswer {
+  const settings = resolveOptimismSettings(userPreferences);
+  const optimistic = applyOptimisticFloor({
+    question,
+    answer: "",
+    expectedFormat,
+    fieldType,
+    options,
+    settings,
+  });
+  if (!optimistic) return { answer: "", confidence: 0, source: "fallback" };
+  return {
+    answer: formatAnswerForField(optimistic, question, fieldType, options, maxLength, expectedFormat),
+    confidence: 40,
+    source: "fallback",
+  };
+}
+
 /**
  * Answer a single form question
  */
@@ -122,7 +181,8 @@ export async function answerFormQuestion(
   question: string,
   userPreferences: Record<string, string> = {},
   fieldMeta: FormAnswerFieldMeta = {},
-  platform: FormPlatform = "linkedin"
+  platform: FormPlatform = "linkedin",
+  preloaded?: AnswerContext
 ): Promise<FormAnswer> {
   const questionLower = question.toLowerCase().trim();
   const fieldType = fieldMeta.fieldType || "text";
@@ -149,22 +209,36 @@ export async function answerFormQuestion(
   try {
     const ai = await getUserAIProvider(userId);
     if (!ai) {
-      return { answer: "", confidence: 0, source: "fallback" };
+      return fallbackAnswer(question, fieldType, options, maxLength, expectedFormat, userPreferences);
     }
 
-    const resume = await getDefaultResume(userId);
-    const resumeContext = resume ? resumeToText(resume) : "";
+    const context = preloaded || (await loadAnswerContext(userId, userPreferences));
 
-    const messages = buildFormAnswerPrompt(question, resumeContext, userPreferences, {
+    const messages = buildFormAnswerPrompt(
+      question,
+      context.resumeContext,
+      userPreferences,
+      {
+        fieldType,
+        options,
+        maxLength,
+        expectedFormat,
+        platform,
+      },
+      context.optimism
+    );
+    const result = await ai.generateJSON<{ answer: string; confidence: number }>(messages);
+    // Never let a screening filter see a zero — see experience-optimism.ts.
+    const optimistic = applyOptimisticFloor({
+      question,
+      answer: result.answer || "",
+      expectedFormat,
       fieldType,
       options,
-      maxLength,
-      expectedFormat,
-      platform,
+      settings: context.optimism,
     });
-    const result = await ai.generateJSON<{ answer: string; confidence: number }>(messages);
     const answer = formatAnswerForField(
-      result.answer || "",
+      optimistic,
       question,
       fieldType,
       options,
@@ -178,7 +252,7 @@ export async function answerFormQuestion(
       source: "ai",
     };
   } catch {
-    return { answer: "", confidence: 0, source: "fallback" };
+    return fallbackAnswer(question, fieldType, options, maxLength, expectedFormat, userPreferences);
   }
 }
 
@@ -234,6 +308,7 @@ export async function answerFormQuestions(
 
   // Process AI questions concurrently (batch of 3)
   if (aiNeeded.length > 0) {
+    const context = await loadAnswerContext(userId, userPreferences);
     const CONCURRENCY = 3;
     for (let i = 0; i < aiNeeded.length; i += CONCURRENCY) {
       const batch = aiNeeded.slice(i, i + CONCURRENCY);
@@ -249,7 +324,8 @@ export async function answerFormQuestions(
               maxLength: item.input.maxLength,
               expectedFormat: item.input.expectedFormat,
             },
-            platform
+            platform,
+            context
           )
         )
       );
@@ -263,7 +339,14 @@ export async function answerFormQuestions(
           answer:
             result.status === "fulfilled"
               ? result.value
-              : { answer: "", confidence: 0, source: "fallback" },
+              : fallbackAnswer(
+                  item.input.question,
+                  item.input.fieldType,
+                  item.input.options,
+                  item.input.maxLength,
+                  item.input.expectedFormat,
+                  userPreferences
+                ),
         };
       }
     }
@@ -274,7 +357,14 @@ export async function answerFormQuestions(
       results[i] || {
         question: q.question,
         fieldType: q.fieldType,
-        answer: { answer: "", confidence: 0, source: "fallback" as const },
+        answer: fallbackAnswer(
+          q.question,
+          q.fieldType,
+          q.options,
+          q.maxLength,
+          q.expectedFormat,
+          userPreferences
+        ),
       }
   );
 }
