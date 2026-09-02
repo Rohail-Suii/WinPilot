@@ -105,7 +105,7 @@ function makeConfig(overrides: Record<string, unknown> = {}) {
     enabled: true,
     mode: "feed",
     mission: "",
-    feed: { commentRatio: 0.5, pitchOnJobPosts: true, postsPerSweep: 25, postsPerPass: 5 },
+    feed: { commentRatio: 0.5, pitchOnJobPosts: true, postsPerSweep: 25, postsPerPass: 5, unlimited: false },
     workingHours: { start: 0, end: 24, timezone: "UTC", activeDays: [0, 1, 2, 3, 4, 5, 6] },
     weeklyBudgets: {
       connects: 75,
@@ -270,7 +270,7 @@ describe("topUpFeedQueue", () => {
     await topUpFeedQueue(
       USER,
       makeConfig({
-        feed: { commentRatio: 1, pitchOnJobPosts: true, postsPerSweep: 25, postsPerPass: 5 },
+        feed: { commentRatio: 1, pitchOnJobPosts: true, postsPerSweep: 25, postsPerPass: 5, unlimited: false },
       }) as never
     );
 
@@ -296,7 +296,7 @@ describe("topUpFeedQueue", () => {
     await topUpFeedQueue(
       USER,
       makeConfig({
-        feed: { commentRatio: 0.5, pitchOnJobPosts: false, postsPerSweep: 40, postsPerPass: 5 },
+        feed: { commentRatio: 0.5, pitchOnJobPosts: false, postsPerSweep: 40, postsPerPass: 5, unlimited: false },
       }) as never
     );
 
@@ -349,5 +349,44 @@ describe("budget spillover", () => {
     const kinds = m.taskCreate.mock.calls.map(([doc]) => doc.kind);
     expect(created).toBeGreaterThan(0);
     expect(kinds.every((k) => k === "like_post")).toBe(true);
+  });
+});
+
+describe("no limits", () => {
+  const unlimited = () =>
+    makeConfig({
+      feed: {
+        commentRatio: 0.7,
+        pitchOnJobPosts: true,
+        postsPerSweep: 25,
+        postsPerPass: 5,
+        unlimited: true,
+      },
+    });
+
+  it("queues uncapped comment passes and nothing else", async () => {
+    const created = await topUpFeedQueue(USER, unlimited() as never);
+
+    const docs = m.taskCreate.mock.calls.map(([doc]) => doc);
+    expect(created).toBe(docs.length);
+    expect(docs.length).toBeGreaterThan(0);
+    // maxEngagements 0 is the runner's "keep going until the feed runs dry".
+    expect(docs.every((d) => d.kind === "comment_on_feed")).toBe(true);
+    expect(docs.every((d) => d.payload.maxEngagements === 0)).toBe(true);
+    expect(docs.every((d) => d.payload.alsoLike === true)).toBe(true);
+  });
+
+  it("keeps queueing after the day's budgets are spent", async () => {
+    m.usageFindOne.mockImplementation(usedToday({ comments: 999, likes: 999 }));
+
+    const created = await topUpFeedQueue(USER, unlimited() as never);
+
+    expect(created).toBeGreaterThan(0);
+  });
+
+  it("still stops when the queue is already deep enough", async () => {
+    m.taskCountDocuments.mockImplementation(countingBy({ queued: 50 }));
+
+    expect(await topUpFeedQueue(USER, unlimited() as never)).toBe(0);
   });
 });

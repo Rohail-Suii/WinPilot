@@ -18,6 +18,7 @@ import {
   Rss,
   Briefcase,
   MessageSquare,
+  Zap,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -89,6 +90,7 @@ interface FeedSettings {
   pitchOnJobPosts: boolean;
   postsPerSweep: number;
   postsPerPass: number;
+  unlimited: boolean;
 }
 
 interface WorkingHours {
@@ -155,6 +157,7 @@ export function AutopilotClient() {
     pitchOnJobPosts: true,
     postsPerSweep: 25,
     postsPerPass: 5,
+    unlimited: true,
   });
   const [savedFeed, setSavedFeed] = useState<FeedSettings | null>(null);
   const [liveEntries, setLiveEntries] = useState<JournalEntry[]>([]);
@@ -176,6 +179,7 @@ export function AutopilotClient() {
         pitchOnJobPosts: true,
         postsPerSweep: 25,
         postsPerPass: 5,
+        unlimited: true,
       };
       setFeed(feedSettings);
       setSavedFeed(feedSettings);
@@ -612,7 +616,41 @@ export function AutopilotClient() {
                 </p>
               </div>
 
-              <div>
+              <div className="flex items-start justify-between gap-4">
+                <div className="min-w-0">
+                  <p className="text-sm text-gray-300 flex items-center gap-2">
+                    <Zap className="h-4 w-4 text-gray-500" />
+                    No limits
+                  </p>
+                  <p className="text-xs text-gray-500 mt-1">
+                    Like and comment on every post the feed shows, ignoring the daily
+                    budget and the pause between actions, reloading the feed when it
+                    runs dry and continuing until you turn Autopilot off. Working hours
+                    still apply, and it still stops for six hours if LinkedIn pushes
+                    back. Running without those ceilings can get the account
+                    restricted — that is the trade you are making.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={feed.unlimited}
+                  onClick={() => setFeed({ ...feed, unlimited: !feed.unlimited })}
+                  className={cn(
+                    "relative h-6 w-11 shrink-0 rounded-full transition-colors",
+                    feed.unlimited ? "bg-indigo-500" : "bg-gray-700"
+                  )}
+                >
+                  <span
+                    className={cn(
+                      "absolute top-0.5 h-5 w-5 rounded-full bg-white transition-transform",
+                      feed.unlimited ? "translate-x-5" : "translate-x-0.5"
+                    )}
+                  />
+                </button>
+              </div>
+
+              <div className={cn(feed.unlimited && "opacity-40")}>
                 <label htmlFor="posts-per-pass" className="text-sm text-gray-300">
                   Posts engaged per pass
                 </label>
@@ -621,6 +659,7 @@ export function AutopilotClient() {
                   type="number"
                   min={1}
                   max={25}
+                  disabled={feed.unlimited}
                   value={feed.postsPerPass}
                   onChange={(e) =>
                     setFeed({
@@ -633,7 +672,7 @@ export function AutopilotClient() {
                 <p className="text-xs text-gray-500 mt-1.5">
                   It likes and comments on every post it reads that it has not been
                   through before, up to this many per trip down the feed. Your weekly
-                  budgets are still the hard ceiling.
+                  budgets are still the hard ceiling. Ignored while No limits is on.
                 </p>
               </div>
 

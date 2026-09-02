@@ -90,6 +90,16 @@ function readingTimeMs(text) {
 const SWEEP_TIME_BUDGET_MS = 11 * 60 * 1000;
 
 /**
+ * How many reloads in a row may come back with nothing new before the pass
+ * gives up.
+ *
+ * One empty load does not mean the feed is exhausted — LinkedIn renders a
+ * different slice on each load, so the next one usually has more. Only a run
+ * of empty loads means there is genuinely nothing left to work right now.
+ */
+const EMPTY_ROUNDS_BEFORE_STOPPING = 3;
+
+/**
  * One pass over the home feed.
  *
  * Reads the feed, drops what the server has already been through, then walks
@@ -106,118 +116,130 @@ const SWEEP_TIME_BUDGET_MS = 11 * 60 * 1000;
 async function sweepFeed(task, tabId, ctx, { withComment }) {
   const { taskId, payload } = task;
 
-  await ctx.navigateAndWait(tabId, "https://www.linkedin.com/feed/");
-  if (!(await ctx.ensureSessionHealthy(tabId))) {
-    return { ok: false, error: "session lost", signal: "session lost" };
-  }
-
-  // Let the feed settle, and look at it the way a person opening LinkedIn does
-  await ctx.randomDelay(4000, 9000);
-
-  let scraped = [];
-  try {
-    const res = await ctx.sendToContentScript(tabId, {
-      type: "EXECUTE_ACTION",
-      command: "SCRAPE_FEED_POSTS",
-      actionId: `autopilot-feed-${taskId}`,
-      maxPosts: payload.postsPerSweep || 25,
-    });
-    scraped = res?.data?.posts || [];
-  } catch (e) {
-    return { ok: false, error: `Could not read the feed: ${e.message}` };
-  }
-
-  if (scraped.length === 0) {
-    return {
-      ok: true,
-      result: {
-        skipped: true,
-        source: "feed",
-        reason: "The feed did not render any posts I could read",
-      },
-    };
-  }
-
-  ctx.emitLog("info", "autopilot", `Read ${scraped.length} posts off the feed`);
-
-  // The server owns dedupe: it is the only side that knows what has already
-  // been acted on, across every pass and every session.
-  const cap = Math.max(1, Math.min(payload.maxEngagements || 5, scraped.length));
-  let queue = [];
-  try {
-    const res = await ctx.apiCall("/api/autopilot/generate", {
-      taskId,
-      action: "unseen_posts",
-      source: "feed",
-      limit: cap,
-      posts: scraped.slice(0, 40).map(summarise),
-    });
-    queue = res?.posts || [];
-  } catch (e) {
-    return { ok: false, error: `Could not check which posts are new: ${e.message}` };
-  }
-
-  if (queue.length === 0) {
-    return {
-      ok: true,
-      result: {
-        skipped: true,
-        source: "feed",
-        reason: "I have already been through everything currently on the feed",
-      },
-    };
-  }
-
-  ctx.emitLog(
-    "info",
-    "autopilot",
-    `${queue.length} of them are new — working through all of them`
-  );
+  // 0 means no cap: keep going until the time budget or the user stops the
+  // agent. Anything else is the slice of the day's budget this pass was given.
+  const cap = payload.maxEngagements > 0 ? payload.maxEngagements : Infinity;
 
   const engagements = [];
-  let sawFailure = null;
   const startedAt = Date.now();
+  let lastError = null;
+  let emptyRounds = 0;
 
-  for (const [index, post] of queue.entries()) {
-    // The server reclaims a task it has heard nothing about for 15 minutes, so
-    // a long pass has to stop and report before that rather than have its work
-    // thrown away and redone. Whatever is left is still on the feed for the
-    // next pass.
-    if (Date.now() - startedAt > SWEEP_TIME_BUDGET_MS) {
-      ctx.emitLog(
-        "info",
-        "autopilot",
-        `Out of time for this pass at ${index} of ${queue.length} — the rest will come round again`
-      );
-      break;
-    }
+  for (let round = 0; engagements.length < cap; round++) {
+    if (Date.now() - startedAt > SWEEP_TIME_BUDGET_MS) break;
 
+    // Every round is a fresh load of the feed. Reloading is what gets new
+    // posts once the ones on screen have all been worked — LinkedIn reorders
+    // and refills the feed on each load, so this is the "start again from the
+    // top" the pass needs in order to keep going indefinitely.
+    await ctx.navigateAndWait(tabId, "https://www.linkedin.com/feed/");
     if (!(await ctx.ensureSessionHealthy(tabId))) {
       return finishSweep(engagements, { signal: "session lost" });
     }
 
-    const readMs = readingTimeMs(post.postContent);
+    // Let the feed settle, and look at it the way a person opening LinkedIn does
+    await ctx.randomDelay(4000, 9000);
+
+    let scraped = [];
+    try {
+      const res = await ctx.sendToContentScript(tabId, {
+        type: "EXECUTE_ACTION",
+        command: "SCRAPE_FEED_POSTS",
+        actionId: `autopilot-feed-${taskId}-${round}`,
+        maxPosts: payload.postsPerSweep || 25,
+      });
+      scraped = res?.data?.posts || [];
+    } catch (e) {
+      lastError = `Could not read the feed: ${e.message}`;
+      break;
+    }
+
+    ctx.emitLog("info", "autopilot", `Read ${scraped.length} posts off the feed`);
+
+    // The server owns dedupe: it is the only side that knows what has already
+    // been acted on, across every round, every pass and every session.
+    let queue = [];
+    if (scraped.length > 0) {
+      try {
+        const res = await ctx.apiCall("/api/autopilot/generate", {
+          taskId,
+          action: "unseen_posts",
+          source: "feed",
+          limit: cap === Infinity ? 0 : Math.max(1, cap - engagements.length),
+          posts: scraped.slice(0, 40).map(summarise),
+        });
+        queue = res?.posts || [];
+      } catch (e) {
+        lastError = `Could not check which posts are new: ${e.message}`;
+        break;
+      }
+    }
+
+    if (queue.length === 0) {
+      // Nothing new on this load. Give the feed a few more chances to turn
+      // over before concluding it really has run dry — it usually has more
+      // behind it, just not on this render.
+      emptyRounds++;
+      ctx.emitLog(
+        "info",
+        "autopilot",
+        `Nothing new on the feed this time (${emptyRounds}/${EMPTY_ROUNDS_BEFORE_STOPPING})`
+      );
+      if (emptyRounds >= EMPTY_ROUNDS_BEFORE_STOPPING) break;
+      await ctx.randomDelay(20000, 45000);
+      continue;
+    }
+
+    emptyRounds = 0;
     ctx.emitLog(
       "info",
       "autopilot",
-      `Post ${index + 1}/${queue.length} by ${post.authorName || "someone"} — reading (${Math.round(readMs / 1000)}s)`
+      `${queue.length} of them are new — working through all of them`
     );
-    await ctx.randomDelay(readMs * 0.9, readMs * 1.1);
 
-    const outcome = await engageOnePost(post, task, tabId, ctx, { withComment });
-    engagements.push(outcome);
+    for (const [index, post] of queue.entries()) {
+      if (engagements.length >= cap) break;
 
-    if (outcome.signal) return finishSweep(engagements, { signal: outcome.signal });
-    if (outcome.error && !outcome.liked && !outcome.commented) sawFailure = outcome.error;
+      // The server reclaims a task it has heard nothing about for 15 minutes,
+      // so a long pass has to stop and report before that rather than have its
+      // work thrown away and redone. Whatever is left is still on the feed for
+      // the next pass.
+      if (Date.now() - startedAt > SWEEP_TIME_BUDGET_MS) {
+        ctx.emitLog(
+          "info",
+          "autopilot",
+          `Out of time for this pass at ${index} of ${queue.length} — the rest will come round again`
+        );
+        break;
+      }
 
-    // Space the posts out. Back to back engagement down a feed is the single
-    // most obvious automation signature there is.
-    if (index < queue.length - 1) {
-      await ctx.randomDelay(12000, 40000);
+      if (!(await ctx.ensureSessionHealthy(tabId))) {
+        return finishSweep(engagements, { signal: "session lost" });
+      }
+
+      const readMs = readingTimeMs(post.postContent);
+      ctx.emitLog(
+        "info",
+        "autopilot",
+        `Post ${index + 1}/${queue.length} by ${post.authorName || "someone"} — reading (${Math.round(readMs / 1000)}s)`
+      );
+      await ctx.randomDelay(readMs * 0.9, readMs * 1.1);
+
+      const outcome = await engageOnePost(post, task, tabId, ctx, { withComment });
+      engagements.push(outcome);
+
+      if (outcome.signal) return finishSweep(engagements, { signal: outcome.signal });
+      if (outcome.error && !outcome.liked && !outcome.commented) lastError = outcome.error;
+
+      // Space the posts out. Back to back engagement down a feed is the single
+      // most obvious automation signature there is.
+      if (index < queue.length - 1) {
+        await ctx.randomDelay(12000, 40000);
+      }
     }
   }
 
-  return finishSweep(engagements, { error: sawFailure });
+  return finishSweep(engagements, { error: lastError });
 }
 
 /** Roll a pass's per-post outcomes into one task result. */
@@ -232,7 +254,11 @@ function finishSweep(engagements, { signal, error } = {}) {
         skipped: true,
         source: "feed",
         engagements,
-        reason: error || "Could not act on anything the feed showed me",
+        reason:
+          error ||
+          (engagements.length === 0
+            ? "I have already been through everything the feed is showing me"
+            : "Could not act on anything the feed showed me"),
       },
     };
   }

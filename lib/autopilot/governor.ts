@@ -302,9 +302,19 @@ export async function check(input: CheckInput): Promise<GovernorVerdict> {
 
   const budget = TASK_BUDGET[input.kind];
 
+  // Feed mode's "unlimited" switch. The user asked for every post on the feed
+  // to be liked and commented on with no ceiling, so the budget and cooldown
+  // gates come off for the two feed engagement kinds. Everything above this
+  // line still applies: a tripped circuit breaker, working hours, and the
+  // per-kind autonomy setting.
+  const unrestricted =
+    config.mode === "feed" &&
+    config.feed?.unlimited === true &&
+    (input.kind === "comment_on_feed" || input.kind === "like_post");
+
   // Bookkeeping tasks cost no LinkedIn action — they skip budget and cooldown,
   // but still need the extension for anything that touches the DOM.
-  if (budget) {
+  if (budget && !unrestricted) {
     // 4. Budget
     const ceiling = dailyCeiling(config, budget, now);
     const used = await usedToday(input.userId, budget, config.workingHours.timezone);

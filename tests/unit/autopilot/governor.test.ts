@@ -293,3 +293,81 @@ describe("trip", () => {
     expect(updateOne).not.toHaveBeenCalled();
   });
 });
+
+describe("feed mode with no limits", () => {
+  const unlimitedConfig = (over: Record<string, unknown> = {}) =>
+    makeConfig({
+      mode: "feed",
+      feed: { commentRatio: 0.7, pitchOnJobPosts: true, postsPerSweep: 25, postsPerPass: 5, unlimited: true },
+      ...over,
+    });
+
+  it("lets a feed comment through with the day's comment budget spent", async () => {
+    usageFindOne.mockReturnValue({ lean: async () => ({ actions: { comments: 9999 } }) });
+
+    const verdict = await governor.check({
+      userId: "u1",
+      kind: "comment_on_feed",
+      config: unlimitedConfig() as never,
+    });
+
+    expect(verdict.allowed).toBe(true);
+  });
+
+  it("lets a feed like through with the like budget spent", async () => {
+    usageFindOne.mockReturnValue({ lean: async () => ({ actions: { likes: 9999 } }) });
+
+    const verdict = await governor.check({
+      userId: "u1",
+      kind: "like_post",
+      config: unlimitedConfig() as never,
+    });
+
+    expect(verdict.allowed).toBe(true);
+  });
+
+  it("still holds every other kind to its budget", async () => {
+    usageFindOne.mockReturnValue({ lean: async () => ({ actions: { profileViews: 9999 } }) });
+
+    const verdict = await governor.check({
+      userId: "u1",
+      kind: "view_target_profile",
+      config: unlimitedConfig() as never,
+    });
+
+    expect(verdict.allowed).toBe(false);
+    expect(verdict.gate).toBe("budget");
+  });
+
+  it("still stops for a tripped circuit breaker", async () => {
+    usageFindOne.mockReturnValue({ lean: async () => ({ actions: {} }) });
+
+    const verdict = await governor.check({
+      userId: "u1",
+      kind: "comment_on_feed",
+      config: unlimitedConfig({
+        pausedUntil: new Date(Date.now() + 3600_000),
+        pauseReason: "LinkedIn pushed back",
+      }) as never,
+    });
+
+    expect(verdict.allowed).toBe(false);
+    expect(verdict.gate).toBe("paused");
+  });
+
+  it("holds the budget line when the switch is off", async () => {
+    usageFindOne.mockReturnValue({ lean: async () => ({ actions: { comments: 9999 } }) });
+
+    const verdict = await governor.check({
+      userId: "u1",
+      kind: "comment_on_feed",
+      config: makeConfig({
+        mode: "feed",
+        feed: { commentRatio: 0.7, pitchOnJobPosts: true, postsPerSweep: 25, postsPerPass: 5, unlimited: false },
+      }) as never,
+    });
+
+    expect(verdict.allowed).toBe(false);
+    expect(verdict.gate).toBe("budget");
+  });
+});

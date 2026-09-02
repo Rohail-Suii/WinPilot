@@ -62,8 +62,8 @@ const bodySchema = z.object({
    * post on the feed to be engaged with, not for the agent to curate.
    */
   force: z.boolean().default(false),
-  /** unseen_posts only — how many to hand back. */
-  limit: z.number().int().min(1).max(40).default(5),
+  /** unseen_posts only — how many to hand back. 0 means all of them. */
+  limit: z.number().int().min(0).max(60).default(5),
   posts: z.array(postSchema).max(60).optional(),
   post: postSchema.optional(),
 });
@@ -151,7 +151,8 @@ async function unseenPosts(
   const fresh = posts.filter((p) => !seenSet.has(keyOf(p)));
 
   return NextResponse.json({
-    posts: fresh.slice(0, limit),
+    // limit 0 is an uncapped pass asking for everything the feed has left.
+    posts: limit > 0 ? fresh.slice(0, limit) : fresh,
     total: fresh.length,
   });
 }

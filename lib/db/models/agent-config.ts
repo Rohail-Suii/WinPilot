@@ -94,6 +94,18 @@ export interface IFeedSettings {
    * the feed is allowed to spend in a sitting.
    */
   postsPerPass: number;
+  /**
+   * Take the brakes off: like and comment on every post the feed shows,
+   * ignoring the daily budget and the per-action cooldown, and keep working
+   * down the feed — reloading it when it runs dry — until the agent is turned
+   * off. `postsPerPass` is ignored while this is on.
+   *
+   * This is a deliberate choice with a real cost: budgets and cooldowns are
+   * what keep the account's action volume inside what LinkedIn tolerates, and
+   * without them the account can be restricted. Working hours and the
+   * pushback circuit breaker still apply.
+   */
+  unlimited: boolean;
 }
 
 export const DEFAULT_FEED_SETTINGS: IFeedSettings = {
@@ -101,6 +113,10 @@ export const DEFAULT_FEED_SETTINGS: IFeedSettings = {
   pitchOnJobPosts: true,
   postsPerSweep: 25,
   postsPerPass: 5,
+  // On by default: feed mode exists to work the whole feed, and a capped pass
+  // that stops after five posts is not that. Turned off in the UI when the
+  // daily budgets should apply again.
+  unlimited: true,
 };
 
 export interface IWeeklyBudgets {
@@ -173,6 +189,7 @@ const AgentConfigSchema = new Schema<IAgentConfig>(
       pitchOnJobPosts: { type: Boolean, default: DEFAULT_FEED_SETTINGS.pitchOnJobPosts },
       postsPerSweep: { type: Number, default: DEFAULT_FEED_SETTINGS.postsPerSweep, min: 5, max: 60 },
       postsPerPass: { type: Number, default: DEFAULT_FEED_SETTINGS.postsPerPass, min: 1, max: 25 },
+      unlimited: { type: Boolean, default: DEFAULT_FEED_SETTINGS.unlimited },
     },
     workingHours: {
       start: { type: Number, default: 9, min: 0, max: 23 },

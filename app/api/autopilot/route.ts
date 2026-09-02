@@ -35,6 +35,7 @@ const configSchema = z.object({
       pitchOnJobPosts: z.boolean(),
       postsPerSweep: z.number().min(5).max(60),
       postsPerPass: z.number().min(1).max(25),
+      unlimited: z.boolean(),
     })
     .partial()
     .optional(),

@@ -602,6 +602,30 @@ export async function topUpFeedQueue(
   settings.postsPerPass ||= DEFAULT_FEED_SETTINGS.postsPerPass;
   const ratio = Math.min(1, Math.max(0, settings.commentRatio));
 
+  // Unlimited: no budget arithmetic, because there is no budget. Every queued
+  // pass is an uncapped one that likes and comments on everything the feed has
+  // and reloads it when it runs dry, so the queue only needs to be deep enough
+  // that the next pass starts the moment the last one reports.
+  if (settings.unlimited) {
+    let madeUnlimited = 0;
+    for (let i = 0; i < room; i++) {
+      const task = await createFeedTask(userId, settings, "comment_on_feed", i, 0);
+      if (!task) break;
+      madeUnlimited++;
+    }
+
+    if (madeUnlimited > 0) {
+      await journal({
+        userId,
+        entryType: "decision",
+        phase: "planning",
+        text: `Queued ${madeUnlimited} uncapped feed pass${madeUnlimited === 1 ? "" : "es"}. Each one likes and comments on every post on the feed it has not been through, reloads the feed when it runs out, and keeps going until I am turned off. No daily ceiling is being applied.`,
+      });
+    }
+
+    return madeUnlimited;
+  }
+
   // Actions left today, not tasks left today. A sweep spends one action per
   // post it engages, so sizing the queue off task counts would let the agent
   // run several times over the configured ceiling.
@@ -688,6 +712,7 @@ async function createFeedTask(
   settings: { postsPerSweep: number; pitchOnJobPosts: boolean },
   kind: TaskKind,
   index: number,
+  /** Posts this one pass may engage. 0 means uncapped. */
   maxEngagements: number
 ): Promise<IAgentTask | null> {
   // Spread the batch over the next few hours. The governor's cooldowns are the
@@ -706,7 +731,9 @@ async function createFeedTask(
       postsPerSweep: settings.postsPerSweep,
       pitchOnJobPosts: settings.pitchOnJobPosts,
       // How many posts this one pass may engage. Sized from the day's
-      // remaining action budget, so the sweep cannot outrun the governor.
+      // remaining action budget so the sweep cannot outrun the governor —
+      // except under `unlimited`, where it is 0 and the pass runs until the
+      // feed is exhausted or its time is up.
       maxEngagements,
       // The comment task likes the posts it comments on, the way a person does.
       // A like-only pass likes them regardless — that is the whole task.
@@ -716,9 +743,11 @@ async function createFeedTask(
     scheduledFor,
     priority: kind === "comment_on_feed" ? 60 : 40,
     rationale:
-      kind === "comment_on_feed"
-        ? `Work down the feed and like and comment on up to ${maxEngagements} posts I have not been through yet.`
-        : `Work down the feed and like up to ${maxEngagements} posts I have not been through yet.`,
+      maxEngagements === 0
+        ? "Work down the feed and like and comment on every post I have not been through yet, reloading it when it runs dry."
+        : kind === "comment_on_feed"
+          ? `Work down the feed and like and comment on up to ${maxEngagements} posts I have not been through yet.`
+          : `Work down the feed and like up to ${maxEngagements} posts I have not been through yet.`,
   });
 }
 

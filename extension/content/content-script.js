@@ -3419,6 +3419,19 @@
     return label.replace(/\s+/g, " ").trim();
   }
 
+  /**
+   * The control's visible caption, ignoring aria-label.
+   *
+   * The redesign's action bar labels its Like button "Reaction button state:
+   * no reaction" — accurate for a screen reader, useless for matching — while
+   * the word actually printed on it is "Like". Its Comment button carries no
+   * aria-label at all. So both names have to be checked, not just one.
+   */
+  function visibleText(el) {
+    if (!el) return "";
+    return (el.textContent || "").replace(/\s+/g, " ").trim();
+  }
+
   /** Buttons in `root`, covering both <button> and role="button" divs. */
   function clickableCandidates(root) {
     return Array.from(
@@ -3427,27 +3440,34 @@
   }
 
   /**
-   * Find one social-action button by accessible name.
+   * Find one social-action button by either of its names.
    *
    * `exact` is tried across every candidate before `loose`, because a post's
    * action bar and its social-proof row both mention "comment" and only the
    * exactly-named one is the control we want.
    */
-  function findActionButton(root, exact, loose) {
-    const candidates = clickableCandidates(root);
+  function findActionButton(root, exact, loose, reject) {
+    const candidates = clickableCandidates(root).filter(
+      (el) => !reject || !(reject.test(accessibleName(el)) || reject.test(visibleText(el)))
+    );
     for (const el of candidates) {
-      if (exact.test(accessibleName(el))) return el;
+      if (exact.test(accessibleName(el)) || exact.test(visibleText(el))) return el;
     }
     if (loose) {
       for (const el of candidates) {
-        if (loose.test(accessibleName(el))) return el;
+        if (loose.test(accessibleName(el)) || loose.test(visibleText(el))) return el;
       }
     }
     return null;
   }
 
+  // "Like"/"Unlike" as printed on the button, and the redesign's aria-label,
+  // which spells out the current reaction rather than the action.
   const LIKE_EXACT = /^(react\s+)?(like|unlike)$/i;
-  const LIKE_LOOSE = /^(react|like|unlike)\b/i;
+  const LIKE_LOOSE = /^reaction button state\b/i;
+  // The chevron beside Like opens the reaction picker. Clicking it opens a
+  // menu instead of liking, so it has to be excluded by name.
+  const LIKE_REJECT = /reactions? menu/i;
   const COMMENT_EXACT = /^(comment|add a comment|leave a comment)$/i;
   // "Comment on <name>'s post" — but never "12 comments", which is the
   // social-proof link into the comment list.
@@ -3457,7 +3477,7 @@
     return (
       (root && root.querySelector("[data-test-action='like']")) ||
       (root && root.querySelector(".social-actions-button[aria-label*='Like']")) ||
-      findActionButton(root, LIKE_EXACT, LIKE_LOOSE)
+      findActionButton(root, LIKE_EXACT, LIKE_LOOSE, LIKE_REJECT)
     );
   }
 
@@ -3474,6 +3494,13 @@
     if (btn.getAttribute("aria-pressed") === "true") return true;
     if (btn.classList.contains("react-button--active")) return true;
     if (/^unlike\b/i.test(accessibleName(btn))) return true;
+    if (/^unlike\b/i.test(visibleText(btn))) return true;
+
+    // "Reaction button state: no reaction" means untouched; any other state —
+    // "like", "celebrate", "insightful" — means it has already been reacted to.
+    const state = accessibleName(btn).match(/^reaction button state:\s*(.+)$/i);
+    if (state) return !/^no reaction$/i.test(state[1].trim());
+
     return false;
   }
 
@@ -3540,41 +3567,133 @@
    * open at once, and typing into the wrong one posts the comment under the
    * wrong post.
    */
+  const COMMENT_INPUT_SELECTORS = [
+    ".comments-comment-box__form .ql-editor",
+    ".comments-comment-box .ql-editor",
+    ".comments-comment-texteditor .ql-editor",
+    "[role='textbox'][aria-label*='comment' i]",
+    "[role='textbox'][contenteditable='true']",
+    "[contenteditable='true'][aria-multiline='true']",
+  ];
+
+  /**
+   * The comment editor belonging to `scope`.
+   *
+   * Never widens past the card. A sweep leaves comment boxes open on the posts
+   * behind it, so a document-wide query lands on whichever box opened first
+   * and the comment goes under the wrong post. Better to report "input not
+   * found" and move on than to comment on something at random.
+   */
   function findCommentInput(scope) {
-    const selectors = [
-      ".comments-comment-box__form .ql-editor",
-      ".comments-comment-box .ql-editor",
-      ".comments-comment-texteditor .ql-editor",
-      "[role='textbox'][aria-label*='comment' i]",
-      "[role='textbox'][contenteditable='true']",
-      "[contenteditable='true'][aria-multiline='true']",
-    ];
-    for (const sel of selectors) {
-      const scoped = scope && scope !== document ? scope.querySelector(sel) : null;
-      if (scoped) return scoped;
-    }
-    for (const sel of selectors) {
-      const loose = document.querySelector(sel);
-      if (loose) return loose;
+    const root = scope && scope !== document ? scope : document;
+    for (const sel of COMMENT_INPUT_SELECTORS) {
+      const found = root.querySelector(sel);
+      if (found) return found;
     }
     return null;
   }
 
-  /** The button that actually publishes what was typed into `input`. */
+  /**
+   * The button that actually publishes what was typed into `input`.
+   *
+   * Searched outwards from the editor rather than inwards from the card: a
+   * post with a video attached puts forty-odd video-player controls inside the
+   * same card, and the comment box's own subtree is the only scope guaranteed
+   * to hold nothing but the comment box. As with the input, this never widens
+   * to the document — submitting into another post's box is worse than
+   * failing.
+   */
   function findCommentSubmit(scope, input) {
-    // The editor's own form is the tightest scope there is, and the redesign
-    // still wraps the box in one.
-    const form = input?.closest("form") || null;
-    const roots = [form, scope, document].filter(Boolean);
+    // The card is a hard ceiling on the search. Walking above it reaches the
+    // feed container and, from there, the submit button of whichever other
+    // post has its box open — which would publish this comment under that post.
+    const ceiling = scope && scope !== document ? scope : null;
+
+    const roots = [];
+    if (input) {
+      const form = input.closest("form");
+      if (form && (!ceiling || ceiling.contains(form))) roots.push(form);
+      const box = input.closest("[class*='comments-comment-box'], [class*='comment-box']");
+      if (box && (!ceiling || ceiling.contains(box))) roots.push(box);
+
+      let hop = input.parentElement;
+      for (let up = 0; up < 5 && hop; up++) {
+        roots.push(hop);
+        if (ceiling && hop === ceiling) break;
+        hop = hop.parentElement;
+        if (ceiling && hop && !ceiling.contains(hop)) break;
+      }
+    }
+    if (ceiling && !roots.includes(ceiling)) roots.push(ceiling);
 
     for (const root of roots) {
       const direct =
         root.querySelector?.(".comments-comment-box__submit-button:not([disabled])") ||
-        root.querySelector?.("[class*='comments-comment-box'] button[type='submit']:not([disabled])");
+        root.querySelector?.("[class*='comments-comment-box'] button[type='submit']:not([disabled])") ||
+        root.querySelector?.("button[type='submit']:not([disabled])");
       if (direct) return direct;
 
-      const named = findActionButton(root, /^(post|submit|reply)$/i);
+      const named = findActionButton(root, /^(post|submit|reply)$/i, null, SUBMIT_REJECT);
       if (named) return named;
+    }
+    return null;
+  }
+
+  // The card's own Comment button reopens the box rather than submitting it,
+  // and a video attachment brings its own "Play"/"Pause"/"Done" controls. None
+  // of them are the submit button, however they are named.
+  const SUBMIT_REJECT = /^(comment|start a post|play|pause|done|reset|close)/i;
+
+  /** Buttons near the editor that are currently disabled. */
+  function disabledNear(input, ceiling) {
+    const box = commentBoxScope(input, ceiling);
+    if (!box) return [];
+    return Array.from(box.querySelectorAll("button, [role='button']")).filter(
+      (el) => el.disabled === true || el.getAttribute("aria-disabled") === "true"
+    );
+  }
+
+  /**
+   * The smallest container holding the whole comment box and nothing else.
+   *
+   * Bounded by the card for the same reason the submit search is: a scope that
+   * climbs past it snapshots another post's submit button, and the wake-up
+   * check would then click that one.
+   */
+  function commentBoxScope(input, ceiling) {
+    if (!input) return null;
+    const within = (el) => el && (!ceiling || ceiling === document || ceiling.contains(el));
+
+    const form = input.closest("form");
+    if (within(form)) return form;
+
+    const box = input.closest("[class*='comments-comment-box'], [class*='comment-box']");
+    if (within(box)) return box;
+
+    let hop = input.parentElement;
+    for (let up = 0; up < 3 && hop; up++) {
+      if (ceiling && hop === ceiling) return hop;
+      const next = hop.parentElement;
+      if (!within(next)) return hop;
+      hop = next;
+    }
+    return hop || input.parentElement || null;
+  }
+
+  /**
+   * The submit button, identified by what it does rather than what it is
+   * called.
+   *
+   * LinkedIn keeps the comment box's submit disabled until there is text in
+   * the editor, so the control that flips from disabled to enabled the moment
+   * the comment is typed is the submit button — whatever the redesign has
+   * renamed it to this week. Matching on behaviour is the one approach that
+   * does not go stale every time the markup is reshuffled.
+   */
+  function newlyEnabled(before) {
+    for (const el of before) {
+      const stillOff = el.disabled === true || el.getAttribute("aria-disabled") === "true";
+      if (!stillOff && el.isConnected) return el;
     }
     return null;
   }
@@ -3604,6 +3723,10 @@
     }
     if (!commentInput) return { commented: false, error: "Comment input not found" };
 
+    // Snapshot what is disabled before typing, so the button that wakes up in
+    // response to the text can be identified by that alone.
+    const wasDisabled = disabledNear(commentInput, scope);
+
     await HumanBehavior.humanType(commentInput, commentText);
     await HumanBehavior.sleep(HumanBehavior.clampedGaussian(800, 1800));
 
@@ -3611,7 +3734,7 @@
     // it after typing rather than before.
     let submitBtn = null;
     for (let attempt = 0; attempt < 8 && !submitBtn; attempt++) {
-      submitBtn = findCommentSubmit(scope, commentInput);
+      submitBtn = newlyEnabled(wasDisabled) || findCommentSubmit(scope, commentInput);
       if (!submitBtn) await HumanBehavior.sleep(400);
     }
     if (!submitBtn) return { commented: false, error: "Submit button not found" };
@@ -3742,9 +3865,11 @@
    */
   async function expandSeeMore(item) {
     try {
-      const more = clickableCandidates(item).find((el) =>
-        /^(…|\.\.\.)?\s*see more$/i.test(accessibleName(el))
-      );
+      const more =
+        item.querySelector("[data-testid='expandable-text-button']") ||
+        clickableCandidates(item).find((el) =>
+          /^(…|\.\.\.)?\s*(see )?more$/i.test(accessibleName(el))
+        );
       if (!more) return;
       more.click();
       await new Promise((r) => setTimeout(r, 250));
@@ -3772,6 +3897,9 @@
    */
   function extractPostText(item) {
     const known = [
+      // The redesign's commentary block. It is the one part of a post card
+      // that still carries a testid, so it is the most reliable hook there is.
+      "[data-testid='expandable-text-box']",
       ".update-components-text .break-words",
       ".feed-shared-inline-show-more-text .break-words",
       ".update-components-text span[dir]",
@@ -3780,19 +3908,42 @@
     ];
     for (const sel of known) {
       const el = item.querySelector(sel);
-      const text = el?.textContent?.trim();
-      if (text && text.length >= 40) return text;
+      if (!el) continue;
+      const text = readVisibleText(el);
+      if (text.length >= 40) return text;
     }
 
     let best = "";
     for (const el of item.querySelectorAll("p, span[dir], div[dir]")) {
       // Anything inside a control or the actor header is chrome, not the post.
       if (el.closest("button, [role='button'], a, h2, figure")) continue;
-      if (el.querySelector("button, [role='button'], img, figure")) continue;
-      const text = el.textContent?.trim() || "";
+      const text = readVisibleText(el);
       if (text.length > best.length) best = text;
     }
     return best;
+  }
+
+  /**
+   * An element's text as a reader sees it.
+   *
+   * Strips the controls LinkedIn nests inside the commentary — the "…more"
+   * expander lives inside the text block itself — and turns <br> into the line
+   * breaks the author actually typed, so the model is given the post rather
+   * than the post with "…more" welded onto the end of it.
+   */
+  function readVisibleText(el) {
+    if (!el) return "";
+    const copy = el.cloneNode(true);
+    for (const junk of copy.querySelectorAll("button, [role='button'], style, script")) {
+      junk.remove();
+    }
+    for (const br of copy.querySelectorAll("br")) {
+      br.replaceWith("\n");
+    }
+    return (copy.textContent || "")
+      .replace(/[ \t\u00a0]+/g, " ")
+      .replace(/\n{3,}/g, "\n\n")
+      .trim();
   }
 
   /**
@@ -3815,14 +3966,23 @@
 
       // Redesign: the only place the author is named in plain text is the
       // control-menu button's label, "Open control menu for post by <name>".
+      //
+      // Those two labels are checked before the profile links because a card
+      // that surfaced through someone else's reaction opens with "View
+      // company: Nayatel" — the reactor, not the person who wrote the post.
       if (!authorName) {
-        for (const el of item.querySelectorAll("[aria-label]")) {
-          const match = accessibleName(el).match(
-            /(?:control menu for post by|hide post by|view)\s+(.+?)(?:’s|'s)?\s*(?:profile)?$/i
-          );
-          if (match && match[1]) {
-            authorName = match[1].trim();
-            break;
+        const patterns = [
+          /(?:open control menu for post by|hide post by)\s+(.+)$/i,
+          /^view\s+(.+?)(?:’s|'s)\s+profile$/i,
+          /^view\s+(?:company:\s*)?(.+)$/i,
+        ];
+        outer: for (const pattern of patterns) {
+          for (const el of item.querySelectorAll("[aria-label]")) {
+            const match = accessibleName(el).match(pattern);
+            if (match && match[1]) {
+              authorName = match[1].trim();
+              break outer;
+            }
           }
         }
       }
