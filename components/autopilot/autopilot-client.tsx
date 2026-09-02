@@ -15,6 +15,9 @@ import {
   Clock,
   Download,
   ListChecks,
+  Rss,
+  Briefcase,
+  MessageSquare,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -79,6 +82,14 @@ interface Goal {
   };
 }
 
+type AutopilotMode = "feed" | "strategist";
+
+interface FeedSettings {
+  commentRatio: number;
+  pitchOnJobPosts: boolean;
+  postsPerSweep: number;
+}
+
 interface WorkingHours {
   start: number;
   end: number;
@@ -89,7 +100,9 @@ interface WorkingHours {
 interface AutopilotState {
   config: {
     enabled: boolean;
+    mode: AutopilotMode;
     mission: string;
+    feed: FeedSettings;
     workingHours: WorkingHours;
     weeklyBudgets: Record<string, number>;
     pausedUntil?: string;
@@ -136,6 +149,12 @@ export function AutopilotClient() {
     activeDays: [1, 2, 3, 4, 5],
   });
   const [savedHours, setSavedHours] = useState<WorkingHours | null>(null);
+  const [feed, setFeed] = useState<FeedSettings>({
+    commentRatio: 0.7,
+    pitchOnJobPosts: true,
+    postsPerSweep: 25,
+  });
+  const [savedFeed, setSavedFeed] = useState<FeedSettings | null>(null);
   const [liveEntries, setLiveEntries] = useState<JournalEntry[]>([]);
   const sseRef = useRef<EventSource | null>(null);
 
@@ -149,6 +168,14 @@ export function AutopilotClient() {
       setMission((current) => (current ? current : data.config.mission));
       setHours(data.config.workingHours);
       setSavedHours(data.config.workingHours);
+      // A config document written before feed mode existed has no `feed` path.
+      const feedSettings = data.config.feed ?? {
+        commentRatio: 0.7,
+        pitchOnJobPosts: true,
+        postsPerSweep: 25,
+      };
+      setFeed(feedSettings);
+      setSavedFeed(feedSettings);
       setLiveEntries([]);
     } catch (e) {
       toast.error((e as Error).message);
@@ -204,26 +231,45 @@ export function AutopilotClient() {
     }
   };
 
-  const saveMission = async () => {
+  /** PATCH the config and reload. Every settings control routes through here. */
+  const patchConfig = async (
+    body: Record<string, unknown>,
+    successMessage: string
+  ): Promise<Record<string, unknown> | null> => {
     setBusy(true);
     try {
       const res = await fetch("/api/autopilot", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ mission }),
+        body: JSON.stringify(body),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Could not save");
-      toast.success(
-        data.missionChanged
-          ? "Mission saved. Hit Replan to rebuild the goal around it."
-          : "Mission saved."
-      );
+      toast.success(successMessage);
       await load(true);
+      return data;
     } catch (e) {
       toast.error((e as Error).message);
+      return null;
     } finally {
       setBusy(false);
+    }
+  };
+
+  const switchMode = (next: AutopilotMode) =>
+    patchConfig(
+      { mode: next },
+      next === "feed"
+        ? "Feed mode on. The agent reads your feed and responds to it."
+        : "Strategist mode on. Set a mission, then Replan."
+    );
+
+  const saveFeed = () => patchConfig({ feed }, "Feed settings saved.");
+
+  const saveMission = async () => {
+    const data = await patchConfig({ mission }, "Mission saved.");
+    if (data?.missionChanged && state?.config.mode === "strategist") {
+      toast.info("Hit Replan to rebuild the goal around it.");
     }
   };
 
@@ -278,6 +324,9 @@ export function AutopilotClient() {
   const journal = [...liveEntries, ...state.journal];
   const hoursDirty =
     savedHours !== null && JSON.stringify(hours) !== JSON.stringify(savedHours);
+  const feedDirty =
+    savedFeed !== null && JSON.stringify(feed) !== JSON.stringify(savedFeed);
+  const feedMode = config.mode === "feed";
 
   return (
     <div className="space-y-6">
@@ -300,7 +349,9 @@ export function AutopilotClient() {
             <h1 className="text-2xl font-semibold text-white">Autopilot</h1>
             <p className="text-sm text-gray-400">
               {config.enabled
-                ? `Running · week ${cycle?.weekNumber ?? 1} · ${Math.round(config.rampFactor * 100)}% of budget`
+                ? feedMode
+                  ? `Working your feed · ${Math.round(config.rampFactor * 100)}% of budget`
+                  : `Running · week ${cycle?.weekNumber ?? 1} · ${Math.round(config.rampFactor * 100)}% of budget`
                 : "Stopped"}
             </p>
           </div>
@@ -311,15 +362,17 @@ export function AutopilotClient() {
             <RefreshCw className="h-4 w-4 mr-1.5" />
             Refresh
           </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => act("replan", "Replanned this week")}
-            disabled={busy || !config.enabled}
-          >
-            <Sparkles className="h-4 w-4 mr-1.5" />
-            Replan
-          </Button>
+          {!feedMode && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => act("replan", "Replanned this week")}
+              disabled={busy || !config.enabled}
+            >
+              <Sparkles className="h-4 w-4 mr-1.5" />
+              Replan
+            </Button>
+          )}
           {config.enabled ? (
             <Button
               variant="destructive"
@@ -338,6 +391,45 @@ export function AutopilotClient() {
           )}
         </div>
       </div>
+
+      {/* ── Mode ───────────────────────────────────────────────── */}
+      <Card className="p-4">
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div className="min-w-0">
+            <h2 className="text-sm font-medium text-gray-300">How it works</h2>
+            <p className="text-sm text-gray-500 mt-1 max-w-2xl">
+              {feedMode
+                ? "It reads down your LinkedIn feed, opens each post it picks, and spends real time on it before doing anything. It likes what is worth liking and comments where it has something concrete to add. Hiring posts get a pitch built from your actual projects. Anything it has nothing real to say about, it skips."
+                : "It turns your mission into a goal, plans the week around it, searches for posts matching your niche, and reviews itself every seven days."}
+            </p>
+          </div>
+
+          <div className="flex rounded-lg bg-gray-900/70 p-1 shrink-0">
+            {(
+              [
+                ["feed", "Feed", Rss],
+                ["strategist", "Strategist", Target],
+              ] as const
+            ).map(([value, label, Icon]) => (
+              <button
+                key={value}
+                type="button"
+                disabled={busy || config.mode === value}
+                onClick={() => switchMode(value)}
+                className={cn(
+                  "flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm transition-colors",
+                  config.mode === value
+                    ? "bg-gray-700 text-white"
+                    : "text-gray-400 hover:text-gray-200 disabled:opacity-50"
+                )}
+              >
+                <Icon className="h-4 w-4" />
+                {label}
+              </button>
+            ))}
+          </div>
+        </div>
+      </Card>
 
       {/* ── Status banners ─────────────────────────────────────── */}
       {status.paused && (
@@ -395,8 +487,12 @@ export function AutopilotClient() {
       <Tabs defaultValue="week">
         <TabsList>
           <TabsTrigger value="week">
-            <Target className="h-4 w-4 mr-1.5" />
-            This Week
+            {feedMode ? (
+              <Rss className="h-4 w-4 mr-1.5" />
+            ) : (
+              <Target className="h-4 w-4 mr-1.5" />
+            )}
+            {feedMode ? "Feed" : "This Week"}
           </TabsTrigger>
           <TabsTrigger value="journal">
             <BookOpen className="h-4 w-4 mr-1.5" />
@@ -414,7 +510,112 @@ export function AutopilotClient() {
 
         {/* ── This Week ─────────────────────────────────────────── */}
         <TabsContent value="week" className="space-y-4">
-          {!cycle ? (
+          {feedMode ? (
+            <Card className="p-5 space-y-5">
+              <div>
+                <h3 className="text-sm font-medium text-gray-300">Feed settings</h3>
+                <p className="text-xs text-gray-500 mt-0.5">
+                  Daily volume still comes from the comment and like budgets on the
+                  Mission tab. These only shape what happens inside that envelope.
+                </p>
+              </div>
+
+              <div>
+                <div className="flex items-center justify-between mb-2">
+                  <label
+                    htmlFor="comment-ratio"
+                    className="text-sm text-gray-300 flex items-center gap-2"
+                  >
+                    <MessageSquare className="h-4 w-4 text-gray-500" />
+                    Comment vs like
+                  </label>
+                  <span className="text-sm text-gray-400 tabular-nums">
+                    {Math.round(feed.commentRatio * 100)}% commented
+                  </span>
+                </div>
+                <input
+                  id="comment-ratio"
+                  type="range"
+                  min={0}
+                  max={100}
+                  step={5}
+                  value={Math.round(feed.commentRatio * 100)}
+                  onChange={(e) =>
+                    setFeed({ ...feed, commentRatio: Number(e.target.value) / 100 })
+                  }
+                  className="w-full accent-indigo-500"
+                />
+                <p className="text-xs text-gray-500 mt-1.5">
+                  The rest of the posts it picks get read and liked, nothing written.
+                  Commenting on everything reads as automated; this is the dial for how
+                  loud you want to be.
+                </p>
+              </div>
+
+              <div className="flex items-start justify-between gap-4">
+                <div className="min-w-0">
+                  <p className="text-sm text-gray-300 flex items-center gap-2">
+                    <Briefcase className="h-4 w-4 text-gray-500" />
+                    Pitch on hiring posts
+                  </p>
+                  <p className="text-xs text-gray-500 mt-1">
+                    When a post turns out to be someone hiring, lead with the closest
+                    real project from your career profile and how you built it, then
+                    offer a walkthrough. Off, it comments on the substance instead.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={feed.pitchOnJobPosts}
+                  onClick={() =>
+                    setFeed({ ...feed, pitchOnJobPosts: !feed.pitchOnJobPosts })
+                  }
+                  className={cn(
+                    "relative h-6 w-11 shrink-0 rounded-full transition-colors",
+                    feed.pitchOnJobPosts ? "bg-indigo-500" : "bg-gray-700"
+                  )}
+                >
+                  <span
+                    className={cn(
+                      "absolute top-0.5 h-5 w-5 rounded-full bg-white transition-transform",
+                      feed.pitchOnJobPosts ? "translate-x-5" : "translate-x-0.5"
+                    )}
+                  />
+                </button>
+              </div>
+
+              <div>
+                <label htmlFor="posts-per-sweep" className="text-sm text-gray-300">
+                  Posts read per pass
+                </label>
+                <Input
+                  id="posts-per-sweep"
+                  type="number"
+                  min={5}
+                  max={60}
+                  value={feed.postsPerSweep}
+                  onChange={(e) =>
+                    setFeed({
+                      ...feed,
+                      postsPerSweep: Math.max(5, Math.min(60, Number(e.target.value) || 5)),
+                    })
+                  }
+                  className="mt-1.5 max-w-[8rem]"
+                />
+                <p className="text-xs text-gray-500 mt-1.5">
+                  How far down the feed it scrolls before choosing. More gives it a
+                  better pick and takes longer.
+                </p>
+              </div>
+
+              {feedDirty && (
+                <Button size="sm" onClick={saveFeed} disabled={busy}>
+                  Save feed settings
+                </Button>
+              )}
+            </Card>
+          ) : !cycle ? (
             <Card className="p-6 text-center text-gray-400">
               No plan yet. Set a mission and press Start — the agent writes its own first
               week.
@@ -513,44 +714,45 @@ export function AutopilotClient() {
                 </Card>
               )}
 
-              <Card className="p-5">
-                <h3 className="text-sm font-medium text-gray-300 mb-3 flex items-center gap-2">
-                  <ListChecks className="h-4 w-4" />
-                  Queue ({queue.length})
-                </h3>
-                {queue.length === 0 ? (
-                  <p className="text-sm text-gray-500">
-                    Nothing queued. The planner tops this up on its next tick.
-                  </p>
-                ) : (
-                  <div className="space-y-2">
-                    {queue.slice(0, 10).map((task) => (
-                      <div
-                        key={task._id}
-                        className="flex items-start justify-between gap-3 rounded-lg bg-gray-900/60 p-3"
-                      >
-                        <div className="min-w-0">
-                          <p className="text-sm text-gray-200">
-                            {task.kind.replace(/_/g, " ")}
-                          </p>
-                          <p className="text-xs text-gray-500 truncate">{task.rationale}</p>
-                        </div>
-                        <div className="text-right shrink-0">
-                          <Badge variant="info">{task.state}</Badge>
-                          <p className="text-xs text-gray-500 mt-1">
-                            {new Date(task.scheduledFor).toLocaleTimeString([], {
-                              hour: "2-digit",
-                              minute: "2-digit",
-                            })}
-                          </p>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </Card>
             </>
           )}
+
+            <Card className="p-5">
+              <h3 className="text-sm font-medium text-gray-300 mb-3 flex items-center gap-2">
+                <ListChecks className="h-4 w-4" />
+                Queue ({queue.length})
+              </h3>
+              {queue.length === 0 ? (
+                <p className="text-sm text-gray-500">
+                  Nothing queued. The planner tops this up on its next tick.
+                </p>
+              ) : (
+                <div className="space-y-2">
+                  {queue.slice(0, 10).map((task) => (
+                    <div
+                      key={task._id}
+                      className="flex items-start justify-between gap-3 rounded-lg bg-gray-900/60 p-3"
+                    >
+                      <div className="min-w-0">
+                        <p className="text-sm text-gray-200">
+                          {task.kind.replace(/_/g, " ")}
+                        </p>
+                        <p className="text-xs text-gray-500 truncate">{task.rationale}</p>
+                      </div>
+                      <div className="text-right shrink-0">
+                        <Badge variant="info">{task.state}</Badge>
+                        <p className="text-xs text-gray-500 mt-1">
+                          {new Date(task.scheduledFor).toLocaleTimeString([], {
+                            hour: "2-digit",
+                            minute: "2-digit",
+                          })}
+                        </p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </Card>
         </TabsContent>
 
         {/* ── Journal ───────────────────────────────────────────── */}
@@ -658,10 +860,13 @@ export function AutopilotClient() {
         {/* ── Mission ───────────────────────────────────────────── */}
         <TabsContent value="mission" className="space-y-4">
           <Card className="p-5">
-            <h3 className="text-sm font-medium text-gray-300 mb-1">Mission</h3>
+            <h3 className="text-sm font-medium text-gray-300 mb-1">
+              Mission {feedMode && <span className="text-gray-500">(optional here)</span>}
+            </h3>
             <p className="text-xs text-gray-500 mb-3">
-              One sentence. The agent decomposes this into a measurable goal and plans every
-              week against it.
+              {feedMode
+                ? "Feed mode does not need this — it runs off your career profile. If you set one anyway, it steers which posts get picked off the feed. It only becomes required in strategist mode."
+                : "One sentence. The agent decomposes this into a measurable goal and plans every week against it."}
             </p>
             <div className="flex gap-2">
               <Input

@@ -3,7 +3,7 @@
  *
  * GET    — everything the dashboard renders: config, goal, current cycle,
  *          queue, recent journal, memory, pipeline funnel
- * PATCH  — update config (mission, hours, budgets, autonomy)
+ * PATCH  — update config (mode, mission, feed settings, hours, budgets, autonomy)
  * POST   — start | stop | replan | force_review
  */
 
@@ -27,7 +27,16 @@ import { getSchedulerStatus } from "@/lib/autopilot/scheduler";
 import * as governor from "@/lib/autopilot/governor";
 
 const configSchema = z.object({
+  mode: z.enum(["feed", "strategist"]).optional(),
   mission: z.string().max(500).optional(),
+  feed: z
+    .object({
+      commentRatio: z.number().min(0).max(1),
+      pitchOnJobPosts: z.boolean(),
+      postsPerSweep: z.number().min(5).max(60),
+    })
+    .partial()
+    .optional(),
   workingHours: z
     .object({
       start: z.number().min(0).max(23),
@@ -107,7 +116,9 @@ export async function GET() {
     return NextResponse.json({
       config: {
         enabled: config.enabled,
+        mode: config.mode,
         mission: config.mission,
+        feed: config.feed,
         workingHours: config.workingHours,
         weeklyBudgets: config.weeklyBudgets,
         autonomy: Object.fromEntries(config.autonomy ?? new Map()),
@@ -157,9 +168,12 @@ export async function PATCH(req: Request) {
     }
 
     const config = await getOrCreateConfig(userId);
-    const { mission, workingHours, weeklyBudgets, autonomy } = parsed.data;
+    const { mode, mission, feed, workingHours, weeklyBudgets, autonomy } = parsed.data;
     const missionChanged = mission !== undefined && mission !== config.mission;
+    const modeChanged = mode !== undefined && mode !== config.mode;
 
+    if (mode !== undefined) config.mode = mode;
+    if (feed) Object.assign(config.feed, feed);
     if (mission !== undefined) config.mission = mission;
     if (workingHours) {
       Object.assign(config.workingHours, workingHours);
@@ -172,12 +186,34 @@ export async function PATCH(req: Request) {
     }
     if (weeklyBudgets) Object.assign(config.weeklyBudgets, weeklyBudgets);
     if (autonomy) {
-      for (const [kind, mode] of Object.entries(autonomy)) {
-        config.autonomy.set(kind, mode);
+      for (const [kind, autonomyMode] of Object.entries(autonomy)) {
+        config.autonomy.set(kind, autonomyMode);
       }
     }
 
     await config.save();
+
+    // Queued work belongs to the mode that planned it — a strategist keyword
+    // task left in the queue would send the agent off searching the moment
+    // feed mode started, against a goal the user just stopped using.
+    let cancelled = 0;
+    if (modeChanged) {
+      const { modifiedCount } = await AgentTask.updateMany(
+        { userId, state: { $in: ["queued", "dispatched", "running"] } },
+        { $set: { state: "skipped", error: "Cancelled when the mode changed" } }
+      );
+      cancelled = modifiedCount;
+
+      await journal({
+        userId,
+        entryType: "decision",
+        phase: "planning",
+        text:
+          mode === "feed"
+            ? `Switched to feed mode. I will read down your feed, like what is worth liking, and comment where I have something real to add. No mission or weekly plan needed. Dropped ${cancelled} task${cancelled === 1 ? "" : "s"} the old mode had queued.`
+            : `Switched to strategist mode. I will work from your mission, decompose it into a goal and plan the week around it. Dropped ${cancelled} feed task${cancelled === 1 ? "" : "s"}.`,
+      });
+    }
 
     if (missionChanged) {
       await journal({
@@ -188,7 +224,7 @@ export async function PATCH(req: Request) {
       });
     }
 
-    return NextResponse.json({ ok: true, missionChanged });
+    return NextResponse.json({ ok: true, missionChanged, modeChanged, cancelled });
   } catch (error) {
     console.error("[Autopilot] PATCH failed:", error);
     return NextResponse.json({ error: "Internal server error" }, { status: 500 });
@@ -216,9 +252,11 @@ export async function POST(req: Request) {
 
     switch (parsed.data.action) {
       case "start": {
-        if (!config.mission?.trim()) {
+        // Feed mode has nothing to decompose, so it needs no mission — that
+        // requirement is the whole reason it exists.
+        if (config.mode !== "feed" && !config.mission?.trim()) {
           return NextResponse.json(
-            { error: "Set a mission before starting autopilot" },
+            { error: "Set a mission before starting autopilot in strategist mode" },
             { status: 400 }
           );
         }
@@ -228,11 +266,16 @@ export async function POST(req: Request) {
         if (!config.rampStartedAt) config.rampStartedAt = new Date();
         await config.save();
 
+        const hours = `Working ${config.workingHours.start}:00-${config.workingHours.end}:00 ${config.workingHours.timezone}, ramping in at ${Math.round(governor.rampFactor(config) * 100)}% of budget.`;
+
         await journal({
           userId,
           entryType: "decision",
           phase: "general",
-          text: `Autopilot started. Mission: "${config.mission}". Working ${config.workingHours.start}:00-${config.workingHours.end}:00 ${config.workingHours.timezone}, ramping in at ${Math.round(governor.rampFactor(config) * 100)}% of budget.`,
+          text:
+            config.mode === "feed"
+              ? `Autopilot started in feed mode. I will read down your feed, like posts worth liking, and comment where I have something real to say${config.feed?.pitchOnJobPosts === false ? "" : ", pitching properly on anything that turns out to be a hiring post"}. ${hours}`
+              : `Autopilot started. Mission: "${config.mission}". ${hours}`,
         });
 
         // Don't make the user wait up to a full interval for the first move.

@@ -54,6 +54,12 @@ const USAGE_FOR_KIND: Partial<Record<TaskKind, string>> = {
   audit_own_profile: "scrapes",
 };
 
+/** Where the agent found the post, phrased for a human reading the journal. */
+function foundVia(result: Record<string, unknown>): string {
+  if (result.source === "feed") return " off my feed";
+  return result.keyword ? ` (found via "${result.keyword}")` : "";
+}
+
 /** Human-readable one-liner for the journal, per kind. */
 function describe(kind: TaskKind, result: Record<string, unknown>): string {
   const author = (result.authorName as string) || "someone";
@@ -61,10 +67,17 @@ function describe(kind: TaskKind, result: Record<string, unknown>): string {
 
   switch (kind) {
     case "comment_on_feed":
-    case "engage_target_post":
-      return `Commented on ${author}'s post${result.keyword ? ` (found via "${result.keyword}")` : ""}: "${String(result.comment || "").slice(0, 200)}"${url ? `\n${url}` : ""}`;
+    case "engage_target_post": {
+      const kindOfPost = result.postType ? ` It read as a ${result.postType} post.` : "";
+      // The angle is the model's own one-line justification. Surfacing it is
+      // what lets the user judge the agent's taste rather than only its output.
+      const angle = result.angle ? ` My angle: ${String(result.angle).slice(0, 200)}` : "";
+      const pitched = result.isPitch ? " I pitched myself on it, since they are hiring." : "";
+      const liked = result.liked ? " Liked it first." : "";
+      return `Commented on ${author}'s post${foundVia(result)}.${kindOfPost}${pitched}${liked}${angle}\n\n"${String(result.comment || "").slice(0, 400)}"${url ? `\n${url}` : ""}`;
+    }
     case "like_post":
-      return `Liked ${author}'s post${result.keyword ? ` about "${result.keyword}"` : ""}.${url ? ` ${url}` : ""}`;
+      return `Liked ${author}'s post${foundVia(result)}.${url ? ` ${url}` : ""}`;
     case "view_target_profile":
       return `Viewed ${(result.name as string) || "a target's"} profile — they get a notification, which is the cheapest way onto their radar.${url ? ` ${url}` : ""}`;
     default:
@@ -216,6 +229,14 @@ export async function POST(req: Request) {
       const usageKey = USAGE_FOR_KIND[task.kind];
       if (usageKey) {
         await incrementUsage(userId, usageKey as Parameters<typeof incrementUsage>[1]);
+      }
+
+      // Feed mode likes the post it comments on, the way a person does. That is
+      // a second real LinkedIn action, so it has to be charged to the like
+      // budget too — otherwise the governor undercounts and the day's true
+      // action volume runs above what the user configured.
+      if (result.liked === true && usageKey !== "likes") {
+        await incrementUsage(userId, "likes" as Parameters<typeof incrementUsage>[1]);
       }
 
       await advanceTarget(userId, task.kind, task.payload, result, taskId);

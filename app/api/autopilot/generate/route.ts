@@ -8,6 +8,11 @@
  *
  * This endpoint also owns post-level deduplication: it never hands back a post
  * the agent has already acted on.
+ *
+ * Two sources feed in:
+ *   "feed"   — feed mode. No goal required. Classifies the post and writes to
+ *              it in one call, pitching on hiring posts.
+ *   "search" — strategist mode. Keyword search results, judged against a goal.
  */
 
 import { NextResponse } from "next/server";
@@ -21,12 +26,19 @@ import ActivityLog from "@/lib/db/models/activity-log";
 import { getUserAIProvider } from "@/lib/ai/key-manager";
 import { sanitizeForAI } from "@/lib/utils";
 import { recallBlock } from "@/lib/autopilot/memory";
-import { personaBlock } from "@/lib/ai/prompts/autopilot";
+import { buildPersonaSnapshot } from "@/lib/autopilot/persona";
+import {
+  personaBlock,
+  buildFeedPickPrompt,
+  buildFeedCommentPrompt,
+  type FeedCommentResult,
+} from "@/lib/ai/prompts/autopilot";
 import { applyRandomSkipping } from "@/lib/anti-detection/patterns";
+import { polishComment, rejectReason } from "@/lib/autopilot/comment-quality";
 
 const postSchema = z.object({
   postUrl: z.string().max(600),
-  postContent: z.string().max(2000).default(""),
+  postContent: z.string().max(4000).default(""),
   authorName: z.string().max(200).default(""),
   authorHeadline: z.string().max(400).default(""),
 });
@@ -34,7 +46,11 @@ const postSchema = z.object({
 const bodySchema = z.object({
   taskId: z.string().length(24),
   action: z.enum(["pick_post", "comment"]),
-  posts: z.array(postSchema).max(20).optional(),
+  /** Where the posts came from. Selects which brain judges them. */
+  source: z.enum(["feed", "search"]).default("search"),
+  /** Feed mode only — mirrors config.feed.pitchOnJobPosts. */
+  pitchOnJobPosts: z.boolean().default(true),
+  posts: z.array(postSchema).max(60).optional(),
   post: postSchema.optional(),
 });
 
@@ -62,11 +78,15 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "Task not found" }, { status: 404 });
     }
 
-    if (parsed.data.action === "pick_post") {
-      return pickPost(userId, parsed.data.posts ?? []);
+    const { action, source, pitchOnJobPosts } = parsed.data;
+
+    if (action === "pick_post") {
+      return pickPost(userId, parsed.data.posts ?? [], source, pitchOnJobPosts);
     }
 
-    return generateComment(userId, parsed.data.post);
+    return source === "feed"
+      ? feedComment(userId, parsed.data.post, pitchOnJobPosts)
+      : generateComment(userId, parsed.data.post);
   } catch (error) {
     console.error("[Autopilot/Generate] Failed:", error);
     return NextResponse.json({ error: "Internal server error" }, { status: 500 });
@@ -77,7 +97,9 @@ export async function POST(req: Request) {
 
 async function pickPost(
   userId: string,
-  posts: z.infer<typeof postSchema>[]
+  posts: z.infer<typeof postSchema>[],
+  source: "feed" | "search",
+  pitchOnJobPosts: boolean
 ): Promise<NextResponse> {
   if (posts.length === 0) {
     return NextResponse.json({ post: null, reason: "No posts scraped" });
@@ -97,19 +119,33 @@ async function pickPost(
   let fresh = posts.filter((p) => !seenSet.has(normaliseUrl(p.postUrl)));
 
   if (fresh.length === 0) {
-    return NextResponse.json({ post: null, reason: "Every post here was already engaged with" });
+    return NextResponse.json({
+      post: null,
+      reason:
+        source === "feed"
+          ? "I have already been through everything currently on the feed"
+          : "Every post here was already engaged with",
+    });
   }
 
-  // Humans do not act on everything they scroll past. Skipping ~20% at random
-  // is a cheap, meaningful difference between this and an obvious bot.
-  const sampled = applyRandomSkipping(fresh, 0.2);
+  // Humans do not act on everything they scroll past. Skipping at random is a
+  // cheap, meaningful difference between this and an obvious bot. Feed mode
+  // skips far less: the intent there is to work the whole feed, and anything
+  // passed over comes back around on the next sweep anyway.
+  const sampled = applyRandomSkipping(fresh, source === "feed" ? 0.08 : 0.2);
   if (sampled.length > 0) fresh = sampled;
 
-  const goal = await AgentGoal.findOne({ userId }).lean();
-  const provider = await getUserAIProvider(userId);
+  const [goal, provider] = await Promise.all([
+    AgentGoal.findOne({ userId }).lean(),
+    getUserAIProvider(userId),
+  ]);
 
-  if (!provider || !goal) {
-    return NextResponse.json({ post: fresh[0], reason: "No AI available — took the first unseen post" });
+  // Feed mode has no goal to judge against, so only the provider is required.
+  if (!provider || (source === "search" && !goal)) {
+    return NextResponse.json({
+      post: fresh[0],
+      reason: "No AI available — took the first unseen post",
+    });
   }
 
   const listing = fresh
@@ -119,29 +155,41 @@ async function pickPost(
     )
     .join("\n\n");
 
-  let answer = "";
-  try {
-    answer = await provider.generateText(
-      [
-        {
-          role: "system",
-          content: `You pick which ONE LinkedIn post is worth a thoughtful comment from this person, to advance this goal:
-${sanitizeForAI(goal.northStar)}
+  const messages =
+    source === "feed"
+      ? buildFeedPickPrompt({
+          listing,
+          pitchOnJobPosts,
+          northStar: goal ? sanitizeForAI(goal.northStar) : undefined,
+          targeting: goal
+            ? sanitizeForAI((goal.constraints?.targetRoles || []).join(", "))
+            : undefined,
+        })
+      : [
+          {
+            role: "system" as const,
+            content: `You pick which ONE LinkedIn post is worth a thoughtful comment from this person, to advance this goal:
+${sanitizeForAI(goal!.northStar)}
 
-They are targeting: ${sanitizeForAI((goal.constraints?.targetRoles || []).join(", ") || "decision-makers")} in ${sanitizeForAI((goal.constraints?.niche || []).join(", ") || "their niche")}.
+They are targeting: ${sanitizeForAI((goal!.constraints?.targetRoles || []).join(", ") || "decision-makers")} in ${sanitizeForAI((goal!.constraints?.niche || []).join(", ") || "their niche")}.
 
 Pick the post where THIS person can add something genuinely useful from their own experience, and where the author is someone worth being visible to.
 Prefer posts by founders, hiring managers and operators over posts by other job seekers or agencies.
 Skip anything political, promotional, or where they have nothing real to add.
 
 Reply with ONLY the index number, or -1 if none is worth commenting on.`,
-        },
-        { role: "user", content: listing },
-      ],
-      { temperature: 0.2, maxTokens: 10 }
-    );
+          },
+          { role: "user" as const, content: listing },
+        ];
+
+  let answer = "";
+  try {
+    answer = await provider.generateText(messages, { temperature: 0.2, maxTokens: 10 });
   } catch {
-    return NextResponse.json({ post: fresh[0], reason: "Selection AI failed — took the first unseen post" });
+    return NextResponse.json({
+      post: fresh[0],
+      reason: "Selection AI failed — took the first unseen post",
+    });
   }
 
   const index = parseInt((answer.match(/-?\d+/) || ["-1"])[0], 10);
@@ -149,10 +197,109 @@ Reply with ONLY the index number, or -1 if none is worth commenting on.`,
     return NextResponse.json({ post: null, reason: "Nothing here was worth commenting on" });
   }
 
-  return NextResponse.json({ post: fresh[index], reason: "Selected as the best fit for the goal" });
+  return NextResponse.json({ post: fresh[index], reason: "Selected as the best fit" });
 }
 
-// ── Write the comment ───────────────────────────────────────────────────────
+// ── Feed mode: classify and write in one call ───────────────────────────────
+
+async function feedComment(
+  userId: string,
+  post: z.infer<typeof postSchema> | undefined,
+  pitchOnJobPosts: boolean
+): Promise<NextResponse> {
+  if (!post) {
+    return NextResponse.json({ error: "No post provided" }, { status: 400 });
+  }
+
+  const provider = await getUserAIProvider(userId);
+  if (!provider) {
+    return NextResponse.json(
+      { error: "No AI provider configured — add an API key in Settings" },
+      { status: 400 }
+    );
+  }
+
+  // Feed mode runs without a goal. If one happens to exist (the user has also
+  // used strategist mode) its persona and north star are better context than
+  // rebuilding from the career profile, so prefer it.
+  const goal = await AgentGoal.findOne({ userId }).lean();
+  const [persona, memories] = await Promise.all([
+    goal?.personaSnapshot
+      ? Promise.resolve(goal.personaSnapshot)
+      : buildPersonaSnapshot(userId),
+    recallBlock(userId, { kinds: ["pattern", "insight"], limit: 8 }),
+  ]);
+
+  // Without real projects the agent can only produce the generic slop the whole
+  // design exists to avoid, and a pitch would be outright fabrication.
+  if (!persona.signatureProjects?.length && !persona.summary) {
+    return NextResponse.json(
+      {
+        error:
+          "Your career profile is empty, so I have nothing real to comment from. Fill in your projects and experience first.",
+      },
+      { status: 400 }
+    );
+  }
+
+  let generated: FeedCommentResult;
+  try {
+    generated = await provider.generateJSON<FeedCommentResult>(
+      buildFeedCommentPrompt({
+        persona,
+        memories,
+        northStar: goal ? sanitizeForAI(goal.northStar) : undefined,
+        pitchOnJobPosts,
+        post: {
+          authorName: sanitizeForAI(post.authorName),
+          authorHeadline: sanitizeForAI(post.authorHeadline),
+          postContent: sanitizeForAI(post.postContent).slice(0, 2500),
+        },
+      }),
+      { temperature: 0.8, maxTokens: 600 }
+    );
+  } catch (error) {
+    return NextResponse.json(
+      { error: `Comment generation failed: ${(error as Error).message}` },
+      { status: 502 }
+    );
+  }
+
+  const postType = generated.postType || "opinion";
+
+  // The model decided there was nothing worth saying. That is a valid outcome,
+  // not an error — 200 so the extension records a clean skip rather than a
+  // failure that burns a retry.
+  if (generated.engage === false) {
+    return NextResponse.json({
+      skip: true,
+      postType,
+      reason: generated.skipReason || `Nothing worth adding to a ${postType} post`,
+    });
+  }
+
+  const comment = polishComment(generated.comment || "");
+  // A pitch is allowed to be longer, so it gets a higher floor too.
+  const isPitch = postType === "hiring" && pitchOnJobPosts;
+  const problem = rejectReason(comment, isPitch ? 40 : 15);
+
+  if (problem) {
+    return NextResponse.json({
+      skip: true,
+      postType,
+      reason: `The comment I wrote ${problem}, so I said nothing instead`,
+    });
+  }
+
+  return NextResponse.json({
+    comment: comment.slice(0, isPitch ? 700 : 400),
+    postType,
+    angle: (generated.angle || "").slice(0, 300),
+    isPitch,
+  });
+}
+
+// ── Strategist mode: write the comment against the goal ─────────────────────
 
 async function generateComment(
   userId: string,
@@ -224,14 +371,14 @@ Write the comment.`,
     );
   }
 
-  comment = comment.trim().replace(/^["']|["']$/g, "").slice(0, 600);
+  comment = polishComment(comment).slice(0, 600);
 
   // A model that ignored the rules and produced boilerplate is worse than
   // posting nothing — the whole point is not sounding like a bot.
-  const banned = /^(great post|love this|thanks for sharing|couldn'?t agree more|so true|well said|100%)/i;
-  if (!comment || comment.length < 15 || banned.test(comment)) {
+  const problem = rejectReason(comment);
+  if (problem) {
     return NextResponse.json(
-      { error: "Generated comment was generic or empty — skipping this post" },
+      { error: `Generated comment ${problem} — skipping this post` },
       { status: 422 }
     );
   }

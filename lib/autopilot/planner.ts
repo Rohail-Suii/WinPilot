@@ -5,26 +5,35 @@
  * the user from "has a mission" to "has a task in flight", re-deriving state
  * from Mongo every time so that a server restart is a non-event.
  *
- *   tick()
+ * There are two brains behind the same queue, selected by `config.mode`:
+ *
+ *   tick()  "feed" mode — the default, and the one that works with zero setup
+ *     ├─ topUpFeedQueue()  thin queue? → queue like/comment passes over the feed
+ *     ├─ pickNextTask()
+ *     ├─ governor.check()
+ *     └─ dispatch()        → sendToExtension
+ *
+ *   tick()  "strategist" mode — the full planning stack
  *     ├─ ensureGoal()    no goal?  → AI decomposes the mission
  *     ├─ ensureCycle()   no cycle? → review the last one, plan the next 7 days
  *     ├─ topUpQueue()    thin queue? → generate the next batch of tasks
  *     ├─ pickNextTask()  highest priority, due, not blocked
  *     ├─ governor.check()
  *     └─ dispatch()      → sendToExtension
+ *
+ * Both paths share selection, the governor, dispatch and the result handler, so
+ * a mode switch changes only which tasks land in the queue.
  */
 
 import mongoose from "mongoose";
 import connectDB from "@/lib/db/connection";
 import AgentConfig, {
   IMPLEMENTED_TASK_KINDS,
+  DEFAULT_FEED_SETTINGS,
   type IAgentConfig,
   type TaskKind,
 } from "@/lib/db/models/agent-config";
-import AgentGoal, {
-  type IAgentGoal,
-  type IPersonaSnapshot,
-} from "@/lib/db/models/agent-goal";
+import AgentGoal, { type IAgentGoal } from "@/lib/db/models/agent-goal";
 import AgentCycle, {
   DEFAULT_CHANNEL_MIX,
   type IAgentCycle,
@@ -32,9 +41,6 @@ import AgentCycle, {
 import AgentTask, { type IAgentTask } from "@/lib/db/models/agent-task";
 import AgentJournal from "@/lib/db/models/agent-journal";
 import AgentTarget from "@/lib/db/models/agent-target";
-import CareerProfile from "@/lib/db/models/career-profile";
-import ProfileAnalysis from "@/lib/db/models/profile-analysis";
-import User from "@/lib/db/models/user";
 import { getUserAIProvider } from "@/lib/ai/key-manager";
 import {
   buildGoalDecompositionPrompt,
@@ -47,6 +53,7 @@ import { sendToExtension } from "@/lib/websocket/server";
 import { pushSseEvent } from "@/lib/sse";
 import { journal, journalDigest } from "./journal";
 import { recallBlock } from "./memory";
+import { buildPersonaSnapshot } from "./persona";
 import { closeCycle } from "./reviewer";
 import * as governor from "./governor";
 
@@ -61,62 +68,10 @@ const CYCLE_LENGTH_MS = 7 * 24 * 60 * 60 * 1000;
 // ── Persona ─────────────────────────────────────────────────────────────────
 
 /**
- * Freeze the user's real background into the shape every prompt reads.
- *
- * This is the anti-slop mechanism: generation prompts are only ever allowed to
- * reference what is in here, so the agent writes about actual projects instead
- * of inventing a career.
+ * Re-exported so existing callers keep importing it from the planner. The
+ * implementation moved to ./persona once feed mode needed it without a goal.
  */
-export async function buildPersonaSnapshot(userId: string): Promise<IPersonaSnapshot> {
-  await connectDB();
-
-  const [career, analysis, user] = await Promise.all([
-    CareerProfile.findOne({ userId }).lean(),
-    ProfileAnalysis.findOne({ userId }).lean(),
-    User.findById(userId).lean(),
-  ]);
-
-  const experience = career?.experience ?? [];
-  const projects = career?.projects ?? [];
-
-  // Years of experience from the earliest dated role we can parse.
-  let yearsExperience = 0;
-  const startYears = experience
-    .map((e) => parseInt((e.startDate || "").slice(0, 4), 10))
-    .filter((y) => Number.isFinite(y) && y > 1970);
-  if (startYears.length > 0) {
-    yearsExperience = Math.max(0, new Date().getFullYear() - Math.min(...startYears));
-  }
-
-  const signatureProjects = [
-    ...projects.map((p) => ({
-      name: p.name || "",
-      whatIDid: p.description || "",
-      tech: p.tech || [],
-    })),
-    ...experience.map((e) => ({
-      name: `${e.title} @ ${e.company}`,
-      whatIDid: e.highlights?.length ? e.highlights.join("; ") : e.description || "",
-      tech: [] as string[],
-    })),
-  ]
-    .filter((p) => p.name && p.whatIDid)
-    .slice(0, 8);
-
-  return {
-    headline:
-      analysis?.sections?.headline?.current ||
-      user?.linkedinProfile?.headline ||
-      experience[0]?.title ||
-      "",
-    summary: career?.summary || analysis?.sections?.summary?.current || "",
-    topSkills: (career?.skills ?? []).slice(0, 15),
-    signatureProjects,
-    voiceNotes: "",
-    yearsExperience,
-    location: career?.contactInfo?.location || "",
-  };
-}
+export { buildPersonaSnapshot } from "./persona";
 
 // ── Goal ────────────────────────────────────────────────────────────────────
 
@@ -607,6 +562,133 @@ async function buildPayload(
   }
 }
 
+// ── Feed mode ───────────────────────────────────────────────────────────────
+
+/**
+ * Queue a batch of feed passes.
+ *
+ * Feed mode has no goal, no cycle and no channel mix to apportion — the whole
+ * decision is "how many comments and how many bare likes, inside today's
+ * budget". Each queued task is one trip down the feed: the extension reads it,
+ * the server picks the next post it has not touched, and the extension acts on
+ * that one post. Working through the feed is what happens across the day's
+ * worth of tasks, not inside any single one.
+ *
+ * Splitting comments and likes into separate tasks (rather than one task that
+ * does both) is deliberate: the governor prices, paces and rate-limits per
+ * action, so a comment that also likes would spend two budgets under one
+ * cooldown. The extension does like the post it comments on — that pairing is
+ * reported in the result and charged to both counters there.
+ */
+export async function topUpFeedQueue(
+  userId: string,
+  config: IAgentConfig
+): Promise<number> {
+  await connectDB();
+
+  const queued = await AgentTask.countDocuments({
+    userId,
+    state: { $in: ["queued", "dispatched", "running"] },
+  });
+  if (queued >= QUEUE_TARGET) return 0;
+
+  const room = QUEUE_TARGET - queued;
+  const settings = { ...DEFAULT_FEED_SETTINGS, ...(config.feed ?? {}) };
+  const ratio = Math.min(1, Math.max(0, settings.commentRatio));
+
+  // Round the comment share up: on a small queue the user would rather see one
+  // comment and one like than two likes.
+  const wantComments = Math.min(room, Math.ceil(room * ratio));
+
+  const [commentRoom, likeRoom] = await Promise.all([
+    remainingToday(userId, config, "comment_on_feed"),
+    remainingToday(userId, config, "like_post"),
+  ]);
+
+  const comments = Math.min(wantComments, commentRoom);
+  // Whatever the comment budget could not absorb goes to likes rather than
+  // leaving the queue half empty — a spent comment budget should slow the agent
+  // down, not stop it.
+  const likes = Math.min(room - comments, likeRoom);
+
+  let created = 0;
+  const made: Record<string, number> = { comment_on_feed: 0, like_post: 0 };
+
+  for (const [kind, count] of [
+    ["comment_on_feed", comments],
+    ["like_post", likes],
+  ] as [TaskKind, number][]) {
+    for (let i = 0; i < count && created < room; i++) {
+      const task = await createFeedTask(userId, settings, kind, created);
+      if (!task) break;
+      made[kind]++;
+      created++;
+    }
+  }
+
+  if (created > 0) {
+    await journal({
+      userId,
+      entryType: "decision",
+      phase: "planning",
+      text: `Queued ${created} feed pass${created === 1 ? "" : "es"} — ${made.comment_on_feed} to read and comment on, ${made.like_post} to read and like. I work down the feed one post at a time and skip anything I have nothing real to say about.`,
+    });
+  } else if (queued === 0) {
+    const why =
+      commentRoom <= 0 && likeRoom <= 0
+        ? "Today's comment and like budgets are both spent."
+        : "Nothing could be queued this tick.";
+    const text = `${why} I will pick the feed back up when the budget resets.`;
+
+    // Once per day, not once per tick — this fires every 5 minutes otherwise.
+    const since = new Date(Date.now() - 12 * 60 * 60 * 1000);
+    const alreadySaid = await AgentJournal.exists({
+      userId,
+      text,
+      createdAt: { $gte: since },
+    });
+    if (!alreadySaid) {
+      await journal({ userId, entryType: "observation", phase: "planning", text });
+    }
+  }
+
+  return created;
+}
+
+async function createFeedTask(
+  userId: string,
+  settings: { postsPerSweep: number; pitchOnJobPosts: boolean },
+  kind: TaskKind,
+  index: number
+): Promise<IAgentTask | null> {
+  // Spread the batch over the next few hours. The governor's cooldowns are the
+  // real pacing; this only stops everything coming due at once.
+  const scheduledFor = new Date(
+    Date.now() + index * (5 + Math.random() * 25) * 60 * 1000
+  );
+
+  return AgentTask.create({
+    userId,
+    kind,
+    // No dedupeKey: which post this lands on is only known at runtime, so
+    // duplicate protection happens against the post URL in /generate.
+    payload: {
+      source: "feed",
+      postsPerSweep: settings.postsPerSweep,
+      pitchOnJobPosts: settings.pitchOnJobPosts,
+      // The comment task likes the post it comments on, the way a person does.
+      alsoLike: kind === "comment_on_feed",
+    },
+    state: "queued",
+    scheduledFor,
+    priority: kind === "comment_on_feed" ? 60 : 40,
+    rationale:
+      kind === "comment_on_feed"
+        ? "Read the feed, find a post worth a real response, like it and comment."
+        : "Read the feed and like a post worth being seen on.",
+  });
+}
+
 // ── Selection & dispatch ────────────────────────────────────────────────────
 
 /** Requeue tasks the extension took but never reported on. */
@@ -707,13 +789,19 @@ export async function tick(userId: string): Promise<TickResult> {
 
   await reclaimStuckTasks(userId);
 
-  const goal = await ensureGoal(userId, config);
-  if (!goal) return { ran: false, reason: "no goal" };
+  if (config.mode === "feed") {
+    // Feed mode skips the whole goal/cycle stack. There is nothing to decompose
+    // and nothing to review: the plan is "read the feed and respond well".
+    await topUpFeedQueue(userId, config);
+  } else {
+    const goal = await ensureGoal(userId, config);
+    if (!goal) return { ran: false, reason: "no goal" };
 
-  const cycle = await ensureCycle(userId, config, goal);
-  if (!cycle) return { ran: false, reason: "no cycle" };
+    const cycle = await ensureCycle(userId, config, goal);
+    if (!cycle) return { ran: false, reason: "no cycle" };
 
-  await topUpQueue(userId, config, goal, cycle);
+    await topUpQueue(userId, config, goal, cycle);
+  }
 
   const task = await pickNextTask(userId);
   if (!task) return { ran: false, reason: "queue empty" };

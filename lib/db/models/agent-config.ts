@@ -57,6 +57,41 @@ export const IMPLEMENTED_TASK_KINDS: TaskKind[] = [
 
 export type AutonomyMode = "auto" | "review";
 
+/**
+ * Which brain drives the agent.
+ *
+ * "feed"       — the simple one. Work down the LinkedIn home feed, read each
+ *                post, like it, and leave a comment worth reading. No mission,
+ *                no goal decomposition, no weekly cycles. This is the default
+ *                because it is the mode that produces visible activity on day
+ *                one without any setup beyond a career profile.
+ * "strategist" — the full autonomous stack: mission -> goal -> weekly cycle ->
+ *                planned channel mix -> review. More powerful, far more moving
+ *                parts, and useless until a mission is set.
+ */
+export type AutopilotMode = "feed" | "strategist";
+
+export interface IFeedSettings {
+  /**
+   * Share of engaged posts that get a written comment; the rest are liked and
+   * left. 1 means comment on everything the agent decides to engage with.
+   */
+  commentRatio: number;
+  /** On a hiring post, comment with a real pitch backed by real projects. */
+  pitchOnJobPosts: boolean;
+  /**
+   * How far down the feed to read in one pass. Higher gives the picker more to
+   * choose from at the cost of a longer scroll.
+   */
+  postsPerSweep: number;
+}
+
+export const DEFAULT_FEED_SETTINGS: IFeedSettings = {
+  commentRatio: 0.7,
+  pitchOnJobPosts: true,
+  postsPerSweep: 25,
+};
+
 export interface IWeeklyBudgets {
   connects: number;
   comments: number;
@@ -69,8 +104,12 @@ export interface IWeeklyBudgets {
 export interface IAgentConfig extends Document {
   userId: mongoose.Types.ObjectId;
   enabled: boolean;
+  /** Which brain drives the agent. See AutopilotMode. */
+  mode: AutopilotMode;
   /** One-sentence mission, e.g. "land an international React/Next.js contract" */
   mission: string;
+  /** Tuning for "feed" mode. Ignored entirely in "strategist" mode. */
+  feed: IFeedSettings;
   workingHours: {
     start: number; // 0-23, local to `timezone`
     end: number; // 0-23, exclusive
@@ -116,7 +155,13 @@ const AgentConfigSchema = new Schema<IAgentConfig>(
       index: true,
     },
     enabled: { type: Boolean, default: false },
+    mode: { type: String, enum: ["feed", "strategist"], default: "feed" },
     mission: { type: String, default: "", maxlength: 500 },
+    feed: {
+      commentRatio: { type: Number, default: DEFAULT_FEED_SETTINGS.commentRatio, min: 0, max: 1 },
+      pitchOnJobPosts: { type: Boolean, default: DEFAULT_FEED_SETTINGS.pitchOnJobPosts },
+      postsPerSweep: { type: Number, default: DEFAULT_FEED_SETTINGS.postsPerSweep, min: 5, max: 60 },
+    },
     workingHours: {
       start: { type: Number, default: 9, min: 0, max: 23 },
       end: { type: Number, default: 21, min: 1, max: 24 },

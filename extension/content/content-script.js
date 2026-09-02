@@ -787,7 +787,13 @@
         }
 
         case "COMMENT_ON_POST": {
-          const commentResult = await commentOnPost(action.selector, action.comment);
+          // `commentText` is the autopilot task runner's name for it, `comment`
+          // the lead-gen loop's. Accept both rather than silently typing
+          // undefined into the box.
+          const commentResult = await commentOnPost(
+            action.selector,
+            action.comment ?? action.commentText
+          );
           return {
             status: "success",
             actionId: action.actionId,
@@ -822,6 +828,16 @@
             await HumanBehavior.sleep(HumanBehavior.clampedGaussian(400, 1200));
           }
           return { status: "success", actionId: action.actionId };
+        }
+
+        // ─── Autopilot: read down the LinkedIn home feed ─────────────────
+        case "SCRAPE_FEED_POSTS": {
+          const feedPosts = await scrapeFeedPosts(action.maxPosts || 25);
+          return {
+            status: "success",
+            actionId: action.actionId,
+            data: { posts: feedPosts },
+          };
         }
 
         // ─── Lead Generation: scrape posts from LinkedIn search results ───
@@ -3316,13 +3332,35 @@
 
   // --- Phase 2: Engagement Helpers ---
 
+  /**
+   * The post card the page is "about".
+   *
+   * On a post permalink every comment carries its own Like and Reply buttons,
+   * so a bare document-wide query can land on a reply to the post instead of
+   * the post. Scoping to the first update card keeps the action on the thing
+   * that was actually read. Falls back to the whole document when the page is
+   * not shaped like a feed card.
+   */
+  function primaryPostRoot() {
+    return (
+      document.querySelector("div.feed-shared-update-v2") ||
+      document.querySelector("div[data-urn^='urn:li:activity']") ||
+      document.querySelector("div[data-id^='urn:li:activity']") ||
+      document
+    );
+  }
+
   async function likePost(postSelector) {
     const post = postSelector
       ? document.querySelector(postSelector)
-      : null;
-    const likeBtn = post
-      ? post.querySelector("[data-test-action='like'], button[aria-label*='Like']")
-      : document.querySelector("[data-test-action='like'], button[aria-label*='Like']");
+      : primaryPostRoot();
+    const root = post || document;
+
+    const likeBtn =
+      root.querySelector("[data-test-action='like']") ||
+      root.querySelector(".social-actions-button[aria-label*='Like']") ||
+      root.querySelector("button[aria-label*='Like']") ||
+      document.querySelector("[data-test-action='like'], button[aria-label*='Like']");
 
     if (!likeBtn) return { liked: false, error: "Like button not found" };
 
@@ -3341,10 +3379,15 @@
       ? document.querySelector(postSelector)
       : null;
 
+    if (!commentText || !String(commentText).trim()) {
+      return { commented: false, error: "No comment text supplied" };
+    }
+
     // Click comment button to open comment box
-    const commentBtn = post
-      ? post.querySelector("button[aria-label*='Comment'], button[aria-label*='comment']")
-      : document.querySelector("button[aria-label*='Comment'], button[aria-label*='comment']");
+    const root = post || primaryPostRoot() || document;
+    const commentBtn =
+      root.querySelector("button[aria-label*='Comment'], button[aria-label*='comment']") ||
+      document.querySelector("button[aria-label*='Comment'], button[aria-label*='comment']");
 
     if (!commentBtn) return { commented: false, error: "Comment button not found" };
 
@@ -3380,6 +3423,169 @@
     }
 
     return { commented: false, error: "Submit button not found" };
+  }
+
+  // ─── Autopilot: read down the LinkedIn home feed ──────────────────────────
+
+  /**
+   * Scroll the home feed and collect what is on it.
+   *
+   * Separate from scrapeKeywordPosts because the feed and the search results
+   * page are different pages with different containers: search wraps each hit
+   * in a result container, the feed renders bare update cards. Sharing one
+   * scraper across both meant whichever page was not being tested silently
+   * returned nothing.
+   *
+   * Scrolls incrementally rather than jumping to the bottom — the feed is
+   * infinite and lazily rendered, so a jump loses everything in between.
+   */
+  async function scrapeFeedPosts(maxPosts) {
+    const FEED_ITEM_SELECTOR =
+      "div.feed-shared-update-v2, " +
+      "div[data-id^='urn:li:activity'], " +
+      "div[data-urn^='urn:li:activity'], " +
+      ".scaffold-finite-scroll__content > div";
+
+    try {
+      await waitForElement(FEED_ITEM_SELECTOR, 12000);
+    } catch {
+      console.warn("[WinPilot CS] scrapeFeedPosts: feed never rendered any cards");
+    }
+
+    await new Promise((r) => setTimeout(r, 1500));
+
+    const posts = [];
+    const seenUrls = new Set();
+    let stalledPasses = 0;
+
+    // Up to 12 passes down the feed. The loop exits early once we have enough,
+    // or once two passes in a row add nothing new (end of feed, or a render
+    // the selectors do not recognise).
+    for (let pass = 0; pass < 12 && posts.length < maxPosts; pass++) {
+      const before = posts.length;
+
+      for (const item of document.querySelectorAll(FEED_ITEM_SELECTOR)) {
+        if (posts.length >= maxPosts) break;
+        const parsed = parseFeedCard(item);
+        if (!parsed) continue;
+        if (seenUrls.has(parsed.normalizedUrl)) continue;
+        seenUrls.add(parsed.normalizedUrl);
+        delete parsed.normalizedUrl;
+        posts.push(parsed);
+      }
+
+      if (posts.length >= maxPosts) break;
+
+      if (posts.length === before) {
+        stalledPasses++;
+        if (stalledPasses >= 2) break;
+      } else {
+        stalledPasses = 0;
+      }
+
+      // Scroll roughly one card's worth and give the feed time to fill in.
+      if (!document.hidden) {
+        try {
+          await HumanBehavior.idleScroll();
+        } catch {
+          window.scrollBy(0, 700);
+        }
+      } else {
+        window.scrollTo(0, window.scrollY + 800);
+      }
+      await new Promise((r) => setTimeout(r, 1200 + Math.random() * 1200));
+    }
+
+    console.log(`[WinPilot CS] scrapeFeedPosts: collected ${posts.length} posts`);
+    return posts;
+  }
+
+  /**
+   * Pull one feed card apart. Returns null for anything that is not a real
+   * post: ads, "people you may know" carousels, empty placeholder cards.
+   */
+  function parseFeedCard(item) {
+    try {
+      const text = (el) => el?.textContent?.trim() || "";
+
+      const authorName = text(
+        item.querySelector(".update-components-actor__title span[aria-hidden='true']") ||
+        item.querySelector(".update-components-actor__name span[aria-hidden='true']") ||
+        item.querySelector(".update-components-actor__title") ||
+        item.querySelector(".update-components-actor__name") ||
+        item.querySelector("[class*='actor__title'] span[aria-hidden='true']") ||
+        item.querySelector("[class*='actor__name']")
+      );
+
+      const authorHeadline = text(
+        item.querySelector(".update-components-actor__description span[aria-hidden='true']") ||
+        item.querySelector("[class*='actor__description'] span[aria-hidden='true']") ||
+        item.querySelector("[class*='actor__description']")
+      );
+
+      const authorProfileUrl =
+        item.querySelector("a.update-components-actor__meta-link")?.href ||
+        item.querySelector("a.update-components-actor__container-link")?.href ||
+        item.querySelector("a[href*='/in/']")?.href ||
+        "";
+
+      let postContent = text(
+        item.querySelector(".update-components-text .break-words") ||
+        item.querySelector(".feed-shared-inline-show-more-text .break-words") ||
+        item.querySelector(".update-components-text span[dir]") ||
+        item.querySelector("[class*='commentary'] .break-words") ||
+        item.querySelector(".update-components-text")
+      );
+
+      // A promoted card has no commentary worth reading and a "Promoted"
+      // label; skip both it and any card with nothing to react to.
+      const itemText = (item.textContent || "").trim();
+      if (/\bPromoted\b/.test(itemText.slice(0, 400))) return null;
+      if (!postContent || postContent.length < 40) return null;
+
+      // The feed rarely renders a direct post link, but every real update
+      // carries its activity urn — which is enough to build the permalink.
+      const urn =
+        item.getAttribute("data-urn") ||
+        item.getAttribute("data-id") ||
+        item.querySelector("[data-urn^='urn:li:activity']")?.getAttribute("data-urn") ||
+        item.querySelector("[data-id^='urn:li:activity']")?.getAttribute("data-id") ||
+        "";
+
+      let postUrl =
+        item.querySelector("a[href*='/feed/update/urn']")?.href ||
+        item.querySelector("a[href*='/posts/']")?.href ||
+        "";
+      if (!postUrl && urn.startsWith("urn:li:activity")) {
+        postUrl = `https://www.linkedin.com/feed/update/${urn}/`;
+      }
+      if (!postUrl) return null;
+
+      const normalizedUrl = postUrl.split("?")[0].replace(/\/$/, "");
+
+      const reactionsEl = item.querySelector(
+        "[class*='social-details-social-counts__reactions-count'], " +
+        "[class*='social-counts'] [aria-label*='reaction']"
+      );
+      const commentsEl = item.querySelector(
+        "[class*='social-details-social-counts__comments'], [class*='comments-count']"
+      );
+
+      return {
+        postUrl,
+        normalizedUrl,
+        postId: urn,
+        authorName,
+        authorHeadline,
+        authorProfileUrl,
+        postContent: postContent.slice(0, 3000),
+        likeCount: parseInt(text(reactionsEl).replace(/[^\d]/g, "") || "0", 10) || 0,
+        commentCount: parseInt(text(commentsEl).replace(/[^\d]/g, "") || "0", 10) || 0,
+      };
+    } catch (e) {
+      console.warn("[WinPilot CS] parseFeedCard failed:", e.message);
+      return null;
+    }
   }
 
   // ─── Lead Generation: scrape posts from LinkedIn search/feed ──────────────

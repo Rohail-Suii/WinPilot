@@ -8,6 +8,14 @@
 //
 // It deliberately owns no decisions of its own beyond timing. Everything that
 // needs the user's goal, persona, or history happens server-side.
+//
+// Engagement tasks arrive from one of two sources, set by the server on the
+// payload:
+//   payload.source === "feed"  — feed mode. Open the home feed, read down it,
+//                                act on the next post the server has not seen.
+//   otherwise                  — strategist mode. Search content by keyword.
+// Both then follow the same path: open the post, spend real time on it, like
+// it, and comment if the task calls for one.
 
 /**
  * Execute one task.
@@ -42,54 +50,61 @@ export async function runTask(task, ctx) {
   }
 }
 
-// ── Engagement: find a post worth acting on, then comment or like it ────────
+// ── Reading time ────────────────────────────────────────────────────────────
+
+/**
+ * How long to sit on a post before doing anything to it.
+ *
+ * Scaled to its actual length, because a fixed dwell on every post regardless
+ * of size is one of the easier automation patterns to spot, and because the
+ * comment is supposed to be a response to something that was actually read.
+ */
+function readingTimeMs(text) {
+  const words = String(text || "").trim().split(/\s+/).filter(Boolean).length;
+  const estimate = 6000 + words * 220;
+  return Math.max(8000, Math.min(42000, estimate));
+}
+
+// ── Engagement: find a post worth acting on, then like and/or comment ───────
 
 async function engagePost(task, tabId, ctx, { withComment }) {
   const { taskId, payload } = task;
-  const keyword = payload.keyword || "";
-  if (!keyword) return { ok: false, error: "No keyword in payload" };
+  const source = payload.source === "feed" ? "feed" : "search";
 
-  // 1. Search recent content for the keyword
-  const searchUrl =
-    `https://www.linkedin.com/search/results/content/?keywords=${encodeURIComponent(keyword)}&sortBy=date_posted`;
-  await ctx.navigateAndWait(tabId, searchUrl);
+  // 1. Get in front of some posts
+  const gathered =
+    source === "feed"
+      ? await gatherFromFeed(task, tabId, ctx)
+      : await gatherFromSearch(task, tabId, ctx);
 
-  if (!(await ctx.ensureSessionHealthy(tabId))) {
-    return { ok: false, error: "session lost", signal: "session lost" };
-  }
-
-  // Read the results the way a person would before acting on anything
-  await ctx.randomDelay(3000, 8000);
-
-  let posts = [];
-  try {
-    const res = await ctx.sendToContentScript(tabId, {
-      type: "EXECUTE_ACTION",
-      command: "SCRAPE_KEYWORD_POSTS",
-      actionId: `autopilot-scrape-${taskId}`,
-      keyword,
-    });
-    posts = res?.data?.posts || [];
-  } catch (e) {
-    return { ok: false, error: `Could not scrape posts: ${e.message}` };
-  }
+  if (gathered.error) return gathered.error;
+  const posts = gathered.posts;
 
   if (posts.length === 0) {
     return {
       ok: true,
-      result: { skipped: true, reason: `No posts found for "${keyword}"`, keyword },
+      result: {
+        skipped: true,
+        source,
+        reason:
+          source === "feed"
+            ? "The feed did not render any posts I could read"
+            : `No posts found for "${payload.keyword || ""}"`,
+      },
     };
   }
 
-  ctx.emitLog("info", "autopilot", `Found ${posts.length} posts for "${keyword}"`);
+  ctx.emitLog("info", "autopilot", `Read ${posts.length} posts off the ${source}`);
 
-  // 2. Ask the server which one is worth it (it also filters ones already used)
+  // 2. Ask the server which one to act on (it also filters ones already used)
   let chosen = null;
   try {
     const pick = await ctx.apiCall("/api/autopilot/generate", {
       taskId,
       action: "pick_post",
-      posts: posts.slice(0, 15).map((p) => ({
+      source,
+      pitchOnJobPosts: payload.pitchOnJobPosts !== false,
+      posts: posts.slice(0, 30).map((p) => ({
         postUrl: p.postUrl || "",
         postContent: (p.postContent || "").slice(0, 2000),
         authorName: p.authorName || "",
@@ -102,8 +117,8 @@ async function engagePost(task, tabId, ctx, { withComment }) {
         ok: true,
         result: {
           skipped: true,
+          source,
           reason: pick?.reason || "Nothing worth engaging with",
-          keyword,
         },
       };
     }
@@ -117,7 +132,7 @@ async function engagePost(task, tabId, ctx, { withComment }) {
     return { ok: false, error: "session lost", signal: "session lost" };
   }
 
-  const readMs = 6000 + Math.random() * 14000;
+  const readMs = readingTimeMs(chosen.postContent);
   ctx.emitLog("info", "autopilot", `Reading the post (${Math.round(readMs / 1000)}s)`);
   await ctx.randomDelay(readMs * 0.9, readMs * 1.1);
 
@@ -132,67 +147,82 @@ async function engagePost(task, tabId, ctx, { withComment }) {
     // Scroll simulation is cosmetic — never fail a task over it
   }
 
+  const base = {
+    source,
+    postUrl: chosen.postUrl,
+    authorName: chosen.authorName,
+    authorHeadline: chosen.authorHeadline,
+    keyword: payload.keyword,
+  };
+
   // 4a. Like only
   if (!withComment) {
-    try {
-      const res = await ctx.sendToContentScript(tabId, {
-        type: "EXECUTE_ACTION",
-        command: "LIKE_POST",
-        actionId: `autopilot-like-${taskId}`,
-      });
-      const data = res?.data || {};
-      if (!data.liked && !data.alreadyLiked) {
-        return { ok: false, error: data.error || "Like button not found" };
-      }
-      return {
-        ok: true,
-        result: {
-          skipped: Boolean(data.alreadyLiked),
-          reason: data.alreadyLiked ? "Already liked" : undefined,
-          postUrl: chosen.postUrl,
-          authorName: chosen.authorName,
-          keyword,
-        },
-      };
-    } catch (e) {
-      return { ok: false, error: `Like failed: ${e.message}` };
-    }
+    const like = await likeCurrentPost(taskId, tabId, ctx);
+    if (like.error) return { ok: false, error: like.error };
+    return {
+      ok: true,
+      result: {
+        ...base,
+        liked: like.liked,
+        skipped: like.alreadyLiked,
+        reason: like.alreadyLiked ? "Already liked" : undefined,
+      },
+    };
   }
 
-  // 4b. Ask the server for the comment text
-  let comment = "";
+  // 4b. Ask the server what to say. It classifies the post and may come back
+  //     with "say nothing", which is a legitimate answer and not a failure.
+  let generated;
   try {
-    const gen = await ctx.apiCall("/api/autopilot/generate", {
+    generated = await ctx.apiCall("/api/autopilot/generate", {
       taskId,
       action: "comment",
+      source,
+      pitchOnJobPosts: payload.pitchOnJobPosts !== false,
       post: {
         postUrl: chosen.postUrl,
-        postContent: (chosen.postContent || "").slice(0, 2000),
+        postContent: (chosen.postContent || "").slice(0, 4000),
         authorName: chosen.authorName || "",
         authorHeadline: chosen.authorHeadline || "",
       },
     });
-    comment = gen?.comment || "";
   } catch (e) {
     // A 422 here means the model produced boilerplate. Skipping is the correct
     // outcome — posting "Great post!" is worse than posting nothing.
     return {
       ok: true,
-      result: { skipped: true, reason: `No usable comment written: ${e.message}`, keyword },
+      result: { ...base, skipped: true, reason: `No usable comment written: ${e.message}` },
     };
   }
 
-  if (!comment) {
-    return { ok: true, result: { skipped: true, reason: "Empty comment returned", keyword } };
+  if (generated?.skip || !generated?.comment) {
+    return {
+      ok: true,
+      result: {
+        ...base,
+        skipped: true,
+        postType: generated?.postType,
+        reason: generated?.reason || "Nothing worth adding here",
+      },
+    };
   }
 
-  // 5. Post it
+  // 5. Like before commenting, the way a person does when a post lands.
+  let liked = false;
+  if (payload.alsoLike !== false) {
+    const like = await likeCurrentPost(taskId, tabId, ctx);
+    liked = Boolean(like.liked || like.alreadyLiked);
+    await ctx.randomDelay(1500, 4000);
+  }
+
+  // 6. Post the comment
   try {
     const res = await ctx.sendToContentScript(tabId, {
       type: "EXECUTE_ACTION",
       command: "COMMENT_ON_POST",
       actionId: `autopilot-comment-${taskId}`,
-      commentText: comment,
+      selector: null,
+      comment: generated.comment,
     });
     const data = res?.data || {};
     if (!data.commented) {
@@ -205,13 +235,97 @@ async function engagePost(task, tabId, ctx, { withComment }) {
   return {
     ok: true,
     result: {
-      postUrl: chosen.postUrl,
-      authorName: chosen.authorName,
-      authorHeadline: chosen.authorHeadline,
-      comment,
-      keyword,
+      ...base,
+      liked,
+      comment: generated.comment,
+      postType: generated.postType,
+      angle: generated.angle,
+      isPitch: Boolean(generated.isPitch),
     },
   };
+}
+
+// ── Gathering posts ─────────────────────────────────────────────────────────
+
+/** Feed mode: open the home feed and read down it. */
+async function gatherFromFeed(task, tabId, ctx) {
+  const { taskId, payload } = task;
+
+  await ctx.navigateAndWait(tabId, "https://www.linkedin.com/feed/");
+
+  if (!(await ctx.ensureSessionHealthy(tabId))) {
+    return { error: { ok: false, error: "session lost", signal: "session lost" } };
+  }
+
+  // Let the feed settle, and look at it the way a person opening LinkedIn does
+  await ctx.randomDelay(4000, 9000);
+
+  try {
+    const res = await ctx.sendToContentScript(tabId, {
+      type: "EXECUTE_ACTION",
+      command: "SCRAPE_FEED_POSTS",
+      actionId: `autopilot-feed-${taskId}`,
+      maxPosts: payload.postsPerSweep || 25,
+    });
+    return { posts: res?.data?.posts || [] };
+  } catch (e) {
+    return { error: { ok: false, error: `Could not read the feed: ${e.message}` } };
+  }
+}
+
+/** Strategist mode: search recent content for the task's keyword. */
+async function gatherFromSearch(task, tabId, ctx) {
+  const { taskId, payload } = task;
+  const keyword = payload.keyword || "";
+  if (!keyword) return { error: { ok: false, error: "No keyword in payload" } };
+
+  const searchUrl =
+    `https://www.linkedin.com/search/results/content/?keywords=${encodeURIComponent(keyword)}&sortBy=date_posted`;
+  await ctx.navigateAndWait(tabId, searchUrl);
+
+  if (!(await ctx.ensureSessionHealthy(tabId))) {
+    return { error: { ok: false, error: "session lost", signal: "session lost" } };
+  }
+
+  // Read the results the way a person would before acting on anything
+  await ctx.randomDelay(3000, 8000);
+
+  try {
+    const res = await ctx.sendToContentScript(tabId, {
+      type: "EXECUTE_ACTION",
+      command: "SCRAPE_KEYWORD_POSTS",
+      actionId: `autopilot-scrape-${taskId}`,
+      keyword,
+    });
+    return { posts: res?.data?.posts || [] };
+  } catch (e) {
+    return { error: { ok: false, error: `Could not scrape posts: ${e.message}` } };
+  }
+}
+
+// ── Liking ──────────────────────────────────────────────────────────────────
+
+/**
+ * Like the post currently open in the tab.
+ *
+ * Returns rather than throws so a failed like never sinks a comment that was
+ * otherwise ready to post.
+ */
+async function likeCurrentPost(taskId, tabId, ctx) {
+  try {
+    const res = await ctx.sendToContentScript(tabId, {
+      type: "EXECUTE_ACTION",
+      command: "LIKE_POST",
+      actionId: `autopilot-like-${taskId}`,
+    });
+    const data = res?.data || {};
+    if (!data.liked && !data.alreadyLiked) {
+      return { liked: false, error: data.error || "Like button not found" };
+    }
+    return { liked: Boolean(data.liked), alreadyLiked: Boolean(data.alreadyLiked) };
+  } catch (e) {
+    return { liked: false, error: `Like failed: ${e.message}` };
+  }
 }
 
 // ── Prospecting: view a target's profile ────────────────────────────────────
@@ -235,7 +349,8 @@ async function viewProfile(task, tabId, ctx) {
       command: "SCRAPE_USER_PROFILE",
       actionId: `autopilot-profile-${taskId}`,
     });
-    profile = res?.data || {};
+    // SCRAPE_USER_PROFILE nests its payload one level down.
+    profile = res?.data?.profileData || res?.data || {};
   } catch {
     // The view is the point; the scrape is a bonus
   }
