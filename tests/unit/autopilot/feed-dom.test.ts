@@ -36,6 +36,10 @@ interface FeedHelpers {
   findCommentSubmit: (scope: Element | Document, input: Element | null) => Element | null;
   newlyEnabled: (before: Element[]) => Element | null;
   disabledNear: (input: Element, ceiling?: Element | Document) => Element[];
+  nextFeedPost: (opts?: { reset?: boolean }) => Promise<{
+    post: Record<string, unknown> | null;
+    exhausted?: boolean;
+  }>;
 }
 
 function loadFeedHelpers(): FeedHelpers {
@@ -50,7 +54,7 @@ function loadFeedHelpers(): FeedHelpers {
     "getElementByText",
     "dispatchNativeClick",
     `${SOURCE.slice(start, end)}
-    return { parseFeedCard, findFeedCards, findLikeButton, findCommentButton, isAlreadyLiked, accessibleName, visibleText, findCommentInput, findCommentSubmit, newlyEnabled, disabledNear };`
+    return { parseFeedCard, findFeedCards, findLikeButton, findCommentButton, isAlreadyLiked, accessibleName, visibleText, findCommentInput, findCommentSubmit, newlyEnabled, disabledNear, nextFeedPost };`
   );
 
   return factory(
@@ -581,5 +585,128 @@ describe("the comment box", () => {
 
     expect(h.findCommentSubmit(second, h.findCommentInput(second)!)!.id).toBe("second-submit");
     expect(h.findCommentSubmit(first, h.findCommentInput(first)!)!.id).toBe("real-submit");
+  });
+});
+
+/** A feed of `n` distinct, engageable posts. */
+function feedOf(...bodies: string[]) {
+  const cards = bodies
+    .map(
+      (body, i) => `
+      <div role="listitem" id="card-${i}">
+        <button type="button" aria-label="Open control menu for post by Author ${i}"></button>
+        <p><span data-testid="expandable-text-box">${body}</span></p>
+        <div>
+          <button type="button" aria-label="Reaction button state: no reaction"><span><span>Like</span></span></button>
+          <button type="button"><span><span>Comment</span></span></button>
+        </div>
+      </div>`
+    )
+    .join("");
+  document.body.innerHTML = `<main><div role="list" data-testid="mainFeed">${cards}</div></main>`;
+}
+
+const POSTS = [
+  "we moved the RAG pipeline off pgvector and the recall barely moved at all",
+  "hiring two senior next.js contractors for a six month build, remote is fine",
+  "the thing nobody tells you about server components is the waterfall problem",
+];
+
+describe("walking the feed one post at a time", () => {
+  it("hands back the first post rather than the whole feed", async () => {
+    const h = loadFeedHelpers();
+    feedOf(...POSTS);
+
+    const first = await h.nextFeedPost({ reset: true });
+
+    expect(first.post).not.toBeNull();
+    expect(first.post!.postContent).toBe(POSTS[0]);
+  });
+
+  it("moves down the feed in order, one call per post", async () => {
+    const h = loadFeedHelpers();
+    feedOf(...POSTS);
+
+    const seen: string[] = [];
+    for (let i = 0; i < 3; i++) {
+      const next = await h.nextFeedPost({ reset: i === 0 });
+      seen.push(String(next.post!.postContent));
+    }
+
+    // The order the feed showed them in, and each exactly once — reading the
+    // whole feed up front and then going back to the top is what this replaces.
+    expect(seen).toEqual(POSTS);
+  });
+
+  it("never hands the same post back twice in a pass", async () => {
+    const h = loadFeedHelpers();
+    feedOf(...POSTS);
+
+    const keys = new Set<string>();
+    for (let i = 0; i < 3; i++) {
+      const next = await h.nextFeedPost({ reset: i === 0 });
+      keys.add(String(next.post!.postKey));
+    }
+
+    expect(keys.size).toBe(3);
+  });
+
+  it("reports the feed exhausted once it has been through it", async () => {
+    const h = loadFeedHelpers();
+    feedOf(...POSTS);
+
+    for (let i = 0; i < 3; i++) await h.nextFeedPost({ reset: i === 0 });
+    const done = await h.nextFeedPost();
+
+    expect(done.post).toBeNull();
+    expect(done.exhausted).toBe(true);
+  }, 20000);
+
+  it("starts again from the top when the pass is reset", async () => {
+    const h = loadFeedHelpers();
+    feedOf(...POSTS);
+
+    await h.nextFeedPost({ reset: true });
+    await h.nextFeedPost();
+    const restarted = await h.nextFeedPost({ reset: true });
+
+    // A reload of the feed is a new pass, and the top post is fair game again
+    // — whether it has already been engaged with is the server's call, not the
+    // scraper's.
+    expect(restarted.post!.postContent).toBe(POSTS[0]);
+  });
+
+  it("passes over the share box on its way to the first real post", async () => {
+    const h = loadFeedHelpers();
+    document.body.innerHTML = `
+      <main><div role="list" data-testid="mainFeed">
+        <div role="listitem"><div role="button" aria-label="Start a post"><p>Start a post</p></div></div>
+        <div role="listitem"><div role="button"><p>Sort by: Top</p></div></div>
+        <div role="listitem" id="real">
+          <button type="button" aria-label="Open control menu for post by Someone"></button>
+          <p><span data-testid="expandable-text-box">${POSTS[0]}</span></p>
+          <div>
+            <button type="button" aria-label="Reaction button state: no reaction"><span><span>Like</span></span></button>
+            <button type="button"><span><span>Comment</span></span></button>
+          </div>
+        </div>
+      </div></main>`;
+
+    const next = await h.nextFeedPost({ reset: true });
+
+    expect(next.post!.postContent).toBe(POSTS[0]);
+  });
+
+  it("engages the post it just read, not one it read minutes ago", async () => {
+    const h = loadFeedHelpers();
+    feedOf(...POSTS);
+
+    const next = await h.nextFeedPost({ reset: true });
+    // The card is registered under the key handed back, so the engage step
+    // acts on this exact element while it is still on the page.
+    const card = document.getElementById("card-0")!;
+
+    expect(h.findLikeButton(card)).not.toBeNull();
+    expect(next.post!.postKey).toBeTruthy();
   });
 });

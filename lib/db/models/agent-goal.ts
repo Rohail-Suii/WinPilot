@@ -41,6 +41,14 @@ export interface IPersonaSnapshot {
   voiceNotes: string;
   yearsExperience: number;
   location: string;
+  /**
+   * The user's own portfolio or site, from their career profile.
+   *
+   * Only ever used to close a pitch on a hiring post, where the author has
+   * explicitly asked for people and a link is what they want. Empty for anyone
+   * who has not filled it in, and no link is appended in that case.
+   */
+  portfolioUrl?: string;
 }
 
 export interface IAgentGoal extends Document {
@@ -102,6 +110,7 @@ const AgentGoalSchema = new Schema<IAgentGoal>(
       voiceNotes: { type: String, default: "" },
       yearsExperience: { type: Number, default: 0 },
       location: { type: String, default: "" },
+      portfolioUrl: { type: String, default: "" },
     },
     revisedAt: { type: Date, default: Date.now },
   },

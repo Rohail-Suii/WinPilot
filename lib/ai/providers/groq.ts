@@ -1,6 +1,8 @@
 import type { AIProvider, AIMessage, AIGenerateOptions } from "../provider";
 
 export class GroqProvider implements AIProvider {
+  static readonly DEFAULT_MODEL = "llama-3.3-70b-versatile";
+
   name = "groq";
   private apiKey: string;
   private baseUrl = "https://api.groq.com/openai/v1";
@@ -17,7 +19,7 @@ export class GroqProvider implements AIProvider {
         Authorization: `Bearer ${this.apiKey}`,
       },
       body: JSON.stringify({
-        model: "llama-3.3-70b-versatile",
+        model: options?.model?.trim() || GroqProvider.DEFAULT_MODEL,
         messages: messages.map((m) => ({ role: m.role, content: m.content })),
         temperature: options?.temperature ?? 0.7,
         max_tokens: options?.maxTokens ?? 2048,
@@ -42,7 +44,7 @@ export class GroqProvider implements AIProvider {
         Authorization: `Bearer ${this.apiKey}`,
       },
       body: JSON.stringify({
-        model: "llama-3.3-70b-versatile",
+        model: options?.model?.trim() || GroqProvider.DEFAULT_MODEL,
         messages: messages.map((m) => ({ role: m.role, content: m.content })),
         temperature: options?.temperature ?? 0.3,
         max_tokens: options?.maxTokens ?? 2048,

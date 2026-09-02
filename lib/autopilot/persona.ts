@@ -14,6 +14,42 @@ import ProfileAnalysis from "@/lib/db/models/profile-analysis";
 import User from "@/lib/db/models/user";
 
 /**
+ * The user's portfolio link, read straight from the career profile.
+ *
+ * A persona snapshot frozen onto an AgentGoal before this field existed does
+ * not carry it, and rebuilding the whole snapshot to recover one string is
+ * wasteful — so pitches fall back to this.
+ */
+export async function resolvePortfolioUrl(userId: string): Promise<string> {
+  await connectDB();
+  const career = await CareerProfile.findOne({ userId })
+    .select("contactInfo.portfolio")
+    .lean();
+  return normaliseLink(career?.contactInfo?.portfolio);
+}
+
+/**
+ * A profile link that is safe to paste into a comment.
+ *
+ * Profiles get filled in by hand, so the value can arrive as "rohail.systems",
+ * with stray whitespace, or as something that is not a URL at all. Anything
+ * that does not parse as http(s) is dropped rather than posted.
+ */
+function normaliseLink(raw: string | undefined): string {
+  const trimmed = (raw || "").trim();
+  if (!trimmed) return "";
+  const candidate = /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
+  try {
+    const url = new URL(candidate);
+    if (url.protocol !== "http:" && url.protocol !== "https:") return "";
+    if (!url.hostname.includes(".")) return "";
+    return url.toString().replace(/\/$/, "");
+  } catch {
+    return "";
+  }
+}
+
+/**
  * Freeze the user's real background into the shape every prompt reads.
  *
  * This is the anti-slop mechanism: generation prompts are only ever allowed to
@@ -68,5 +104,6 @@ export async function buildPersonaSnapshot(userId: string): Promise<IPersonaSnap
     voiceNotes: "",
     yearsExperience,
     location: career?.contactInfo?.location || "",
+    portfolioUrl: normaliseLink(career?.contactInfo?.portfolio),
   };
 }

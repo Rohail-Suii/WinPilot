@@ -26,7 +26,7 @@ import ActivityLog from "@/lib/db/models/activity-log";
 import { getUserAIProvider } from "@/lib/ai/key-manager";
 import { sanitizeForAI } from "@/lib/utils";
 import { recallBlock } from "@/lib/autopilot/memory";
-import { buildPersonaSnapshot } from "@/lib/autopilot/persona";
+import { buildPersonaSnapshot, resolvePortfolioUrl } from "@/lib/autopilot/persona";
 import {
   personaBlock,
   buildFeedPickPrompt,
@@ -34,7 +34,14 @@ import {
   type FeedCommentResult,
 } from "@/lib/ai/prompts/autopilot";
 import { applyRandomSkipping } from "@/lib/anti-detection/patterns";
-import { polishComment, rejectReason } from "@/lib/autopilot/comment-quality";
+import AgentConfig, { DEFAULT_FEED_SETTINGS } from "@/lib/db/models/agent-config";
+import { checkBudget, economyModel } from "@/lib/autopilot/ai-budget";
+import { buildAIMetadata, saveAIUsageLog } from "@/lib/ai/usage-history";
+import {
+  appendPortfolio,
+  polishComment,
+  rejectReason,
+} from "@/lib/autopilot/comment-quality";
 
 const postSchema = z.object({
   /**
@@ -284,6 +291,25 @@ async function feedComment(
     );
   }
 
+  const config = await AgentConfig.findOne({ userId }).lean();
+  const feed = { ...DEFAULT_FEED_SETTINGS, ...(config?.feed ?? {}) };
+
+  // Checked before anything is generated. An uncapped feed pass makes one call
+  // per post from the moment it starts, so the only useful place to stop is
+  // before the call, not after the bill.
+  const budget = await checkBudget(
+    userId,
+    { maxCalls: feed.dailyAiCalls, maxCostUsd: feed.dailyAiSpendUsd },
+    config?.workingHours?.timezone || "UTC"
+  );
+  if (!budget.allowed) {
+    return NextResponse.json({ skip: true, budgetSpent: true, reason: budget.reason });
+  }
+
+  // A feed comment is a short, tightly specified writing task. Paying frontier
+  // rates for it, once per post, all day, is the single largest avoidable cost.
+  const model = feed.economyMode ? economyModel(provider.name) : undefined;
+
   // Feed mode runs without a goal. If one happens to exist (the user has also
   // used strategist mode) its persona and north star are better context than
   // rebuilding from the career profile, so prefer it.
@@ -292,7 +318,9 @@ async function feedComment(
     goal?.personaSnapshot
       ? Promise.resolve(goal.personaSnapshot)
       : buildPersonaSnapshot(userId),
-    recallBlock(userId, { kinds: ["pattern", "insight"], limit: 8 }),
+    // Four is enough to steer the voice. Every extra memory is tokens on every
+    // post for the rest of the day.
+    recallBlock(userId, { kinds: ["pattern", "insight"], limit: 4 }),
   ]);
 
   // Without real projects the agent can only produce the generic slop the whole
@@ -307,22 +335,42 @@ async function feedComment(
     );
   }
 
-  let generated: FeedCommentResult;
-  try {
-    generated = await provider.generateJSON<FeedCommentResult>(
+  const write = async (mustEngage: boolean, temperature: number) => {
+    const result = await provider.generateJSON<FeedCommentResult>(
       buildFeedCommentPrompt({
         persona,
         memories,
         northStar: goal ? sanitizeForAI(goal.northStar) : undefined,
         pitchOnJobPosts,
+        mustEngage,
         post: {
           authorName: sanitizeForAI(post.authorName),
           authorHeadline: sanitizeForAI(post.authorHeadline),
-          postContent: sanitizeForAI(post.postContent).slice(0, 2500),
+          // A LinkedIn post makes its point in the first few lines. The tail is
+          // hashtags and sign-off, and it was costing ~325 tokens on every call.
+          postContent: sanitizeForAI(post.postContent).slice(0, 1200),
         },
       }),
-      { temperature: 0.8, maxTokens: 600 }
+      // A three-sentence comment plus a one-line angle needs nowhere near the
+      // old ceiling; this only caps a runaway generation.
+      { temperature, maxTokens: 300, model }
     );
+
+    // Logged per call, not per post, so retries are counted against the day's
+    // allowance the same as first attempts.
+    await saveAIUsageLog({
+      userId,
+      isGuest: false,
+      endpoint: "/api/autopilot/generate",
+      metadata: buildAIMetadata(provider),
+    });
+
+    return result;
+  };
+
+  let generated: FeedCommentResult;
+  try {
+    generated = await write(force, 0.8);
   } catch (error) {
     return NextResponse.json(
       { error: `Comment generation failed: ${(error as Error).message}` },
@@ -333,6 +381,13 @@ async function feedComment(
   const postType = generated.postType || "opinion";
   // A pitch is allowed to be longer, so it gets a higher floor too.
   const isPitch = postType === "hiring" && pitchOnJobPosts;
+  const quality = {
+    minLength: isPitch ? 40 : 15,
+    // On a promotion, a new role or a launch, congratulating them is the right
+    // move and the model will do it unprompted. Rejecting that outright is what
+    // left personal news liked but never commented on.
+    allowCongratulation: postType === "personal_news",
+  };
 
   // The model decided there was nothing worth saying. Normally that is a valid
   // outcome, not an error — 200 so the extension records a clean skip rather
@@ -347,37 +402,39 @@ async function feedComment(
   }
 
   let comment = polishComment(generated.comment || "");
-  let problem = rejectReason(comment, isPitch ? 40 : 15);
+  let problem = rejectReason(comment, quality);
 
-  // Under `force`, a declined or unusable comment gets one more attempt with
-  // the model told plainly that opting out is not on the table. Two bad draws
-  // in a row is rare enough that skipping then is the honest outcome — posting
-  // an empty string, or boilerplate, would be worse than the gap.
+  // Under `force`, a draft that fails the quality gate gets ONE more attempt,
+  // hotter — the failure being worked around is almost always the model
+  // settling into the same safe, generic phrasing it was just told not to use.
+  // A second retry roughly never rescued a post that the first did not, and it
+  // put a third call on the bill for every awkward post on the feed.
   if (force && problem) {
-    try {
-      const retry = await provider.generateJSON<FeedCommentResult>(
-        buildFeedCommentPrompt({
-          persona,
-          memories,
-          northStar: goal ? sanitizeForAI(goal.northStar) : undefined,
-          pitchOnJobPosts,
-          mustEngage: true,
-          post: {
-            authorName: sanitizeForAI(post.authorName),
-            authorHeadline: sanitizeForAI(post.authorHeadline),
-            postContent: sanitizeForAI(post.postContent).slice(0, 2500),
-          },
-        }),
-        { temperature: 0.9, maxTokens: 600 }
-      );
-      const second = polishComment(retry.comment || "");
-      const secondProblem = rejectReason(second, isPitch ? 40 : 15);
-      if (!secondProblem) {
-        comment = second;
-        problem = null;
+    let best = comment;
+    for (const temperature of [1]) {
+      let retry: FeedCommentResult;
+      try {
+        retry = await write(true, temperature);
+      } catch {
+        break;
       }
-    } catch {
-      // Fall through to the skip below — a failed retry is not a task failure
+
+      const candidate = polishComment(retry.comment || "");
+      const candidateProblem = rejectReason(candidate, quality);
+      if (!candidateProblem) {
+        comment = candidate;
+        problem = null;
+        break;
+      }
+      // Keep the longest thing said so far: length is a rough proxy for having
+      // said something, and a flawed real comment beats no comment at all when
+      // the user has asked for every post to get one.
+      if (candidate.length > best.length) best = candidate;
+    }
+
+    if (problem && best.length >= quality.minLength) {
+      comment = best;
+      problem = null;
     }
   }
 
@@ -389,8 +446,20 @@ async function feedComment(
     });
   }
 
+  // Trim before the link goes on, so truncation can never cut the URL in half.
+  let finalComment = comment.slice(0, isPitch ? 620 : 400);
+
+  // A hiring post is the one place a link belongs: the author asked for people,
+  // and the pitch is only as good as what it points at.
+  if (isPitch) {
+    // A snapshot frozen before the field existed carries no link, so fall back
+    // to the profile itself. Only read on a hiring post, where it is used.
+    const portfolio = persona.portfolioUrl || (await resolvePortfolioUrl(userId));
+    finalComment = appendPortfolio(finalComment, portfolio);
+  }
+
   return NextResponse.json({
-    comment: comment.slice(0, isPitch ? 700 : 400),
+    comment: finalComment,
     postType,
     angle: (generated.angle || "").slice(0, 300),
     isPitch,

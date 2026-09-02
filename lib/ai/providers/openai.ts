@@ -1,6 +1,8 @@
 import type { AIProvider, AIMessage, AIGenerateOptions } from "../provider";
 
 export class OpenAIProvider implements AIProvider {
+  static readonly DEFAULT_MODEL = "gpt-4o-mini";
+
   name = "openai";
   private apiKey: string;
   private baseUrl = "https://api.openai.com/v1";
@@ -17,7 +19,7 @@ export class OpenAIProvider implements AIProvider {
         Authorization: `Bearer ${this.apiKey}`,
       },
       body: JSON.stringify({
-        model: "gpt-4o-mini",
+        model: options?.model?.trim() || OpenAIProvider.DEFAULT_MODEL,
         messages: messages.map((m) => ({ role: m.role, content: m.content })),
         temperature: options?.temperature ?? 0.7,
         max_tokens: options?.maxTokens ?? 2048,
@@ -42,7 +44,7 @@ export class OpenAIProvider implements AIProvider {
         Authorization: `Bearer ${this.apiKey}`,
       },
       body: JSON.stringify({
-        model: "gpt-4o-mini",
+        model: options?.model?.trim() || OpenAIProvider.DEFAULT_MODEL,
         messages: messages.map((m) => ({ role: m.role, content: m.content })),
         temperature: options?.temperature ?? 0.3,
         max_tokens: options?.maxTokens ?? 2048,

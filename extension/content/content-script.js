@@ -935,6 +935,16 @@
           };
         }
 
+        // ─── Autopilot: hand back the next unread post on the feed ───────
+        case "NEXT_FEED_POST": {
+          const next = await nextFeedPost({ reset: action.reset === true });
+          return {
+            status: "success",
+            actionId: action.actionId,
+            data: next,
+          };
+        }
+
         // ─── Autopilot: act on one card of the feed, without leaving it ───
         case "ENGAGE_FEED_POST": {
           const engaged = await engageFeedPost({
@@ -3929,6 +3939,88 @@
    * Scrolls incrementally rather than jumping to the bottom — the feed is
    * infinite and lazily rendered, so a jump loses everything in between.
    */
+  /**
+   * Posts already handed out during the current pass down the feed, and the
+   * cards that turned out not to be posts.
+   *
+   * `nextFeedPost` walks the same live DOM on every call, so without these it
+   * would return the topmost card forever. The rejected set is a WeakSet
+   * because the feed recycles card elements as it scrolls.
+   */
+  const feedPassSeenKeys = new Set();
+  let feedPassRejected = new WeakSet();
+
+  /** Scroll far enough to pull the next slice of the feed in. */
+  async function scrollForMore() {
+    if (!document.hidden) {
+      try {
+        await HumanBehavior.idleScroll();
+      } catch {
+        window.scrollBy(0, 700);
+      }
+    } else {
+      window.scrollTo(0, window.scrollY + 800);
+    }
+    await HumanBehavior.sleep(HumanBehavior.clampedGaussian(1200, 2400));
+  }
+
+  /**
+   * The next post down the feed that this pass has not handled yet.
+   *
+   * Reading the whole feed up front and only then going back to the top to act
+   * on it is not how a person uses LinkedIn, and it meant the first post was
+   * engaged with several minutes after it was read — long enough for the feed
+   * to have re-rendered underneath and for the card to no longer be there.
+   * This hands back one post at a time so the caller can read it, act on it,
+   * and only then move down.
+   *
+   * Scrolls when it runs out of rendered cards, since the feed is lazy and
+   * infinite. `exhausted` means several scrolls in a row turned up nothing
+   * new, which is as close to "end of feed" as it gets.
+   */
+  async function nextFeedPost({ reset = false } = {}) {
+    if (reset) {
+      feedPassSeenKeys.clear();
+      feedPassRejected = new WeakSet();
+      feedCardRegistry.clear();
+    }
+
+    try {
+      await waitForElement(FEED_CARD_SELECTORS.join(", "), 12000);
+    } catch {
+      console.warn("[WinPilot CS] nextFeedPost: feed never rendered any cards");
+    }
+
+    for (let attempt = 0; attempt < 10; attempt++) {
+      for (const item of findFeedCards()) {
+        if (feedPassRejected.has(item)) continue;
+
+        await expandSeeMore(item);
+        const parsed = parseFeedCard(item);
+        if (!parsed || feedPassSeenKeys.has(parsed.postKey)) {
+          feedPassRejected.add(item);
+          continue;
+        }
+
+        feedPassSeenKeys.add(parsed.postKey);
+        feedPassRejected.add(item);
+        feedCardRegistry.set(parsed.postKey, item);
+
+        // Put it on screen before handing it back — the caller is about to
+        // spend real time reading it, and a post being read is a post in view.
+        await bringIntoView(item);
+
+        console.log(`[WinPilot CS] nextFeedPost: ${parsed.authorName || "someone"}`);
+        return { post: parsed, index: feedPassSeenKeys.size };
+      }
+
+      await scrollForMore();
+    }
+
+    console.log("[WinPilot CS] nextFeedPost: nothing new after 10 scrolls");
+    return { post: null, exhausted: true };
+  }
+
   async function scrapeFeedPosts(maxPosts) {
     try {
       await waitForElement(FEED_CARD_SELECTORS.join(", "), 12000);
@@ -3975,16 +4067,7 @@
       }
 
       // Scroll roughly one card's worth and give the feed time to fill in.
-      if (!document.hidden) {
-        try {
-          await HumanBehavior.idleScroll();
-        } catch {
-          window.scrollBy(0, 700);
-        }
-      } else {
-        window.scrollTo(0, window.scrollY + 800);
-      }
-      await new Promise((r) => setTimeout(r, 1200 + Math.random() * 1200));
+      await scrollForMore();
     }
 
     console.log(

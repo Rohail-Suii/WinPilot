@@ -19,6 +19,7 @@ import {
   Briefcase,
   MessageSquare,
   Zap,
+  Wallet,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -91,6 +92,9 @@ interface FeedSettings {
   postsPerSweep: number;
   postsPerPass: number;
   unlimited: boolean;
+  economyMode: boolean;
+  dailyAiCalls: number;
+  dailyAiSpendUsd: number;
 }
 
 interface WorkingHours {
@@ -158,6 +162,9 @@ export function AutopilotClient() {
     postsPerSweep: 25,
     postsPerPass: 5,
     unlimited: true,
+    economyMode: true,
+    dailyAiCalls: 150,
+    dailyAiSpendUsd: 0,
   });
   const [savedFeed, setSavedFeed] = useState<FeedSettings | null>(null);
   const [liveEntries, setLiveEntries] = useState<JournalEntry[]>([]);
@@ -180,6 +187,9 @@ export function AutopilotClient() {
         postsPerSweep: 25,
         postsPerPass: 5,
         unlimited: true,
+        economyMode: true,
+        dailyAiCalls: 150,
+        dailyAiSpendUsd: 0,
       };
       setFeed(feedSettings);
       setSavedFeed(feedSettings);
@@ -594,7 +604,7 @@ export function AutopilotClient() {
 
               <div>
                 <label htmlFor="posts-per-sweep" className="text-sm text-gray-300">
-                  Posts read per pass
+                  Posts per trip down the feed
                 </label>
                 <Input
                   id="posts-per-sweep"
@@ -611,8 +621,9 @@ export function AutopilotClient() {
                   className="mt-1.5 max-w-[8rem]"
                 />
                 <p className="text-xs text-gray-500 mt-1.5">
-                  How far down the feed it scrolls in one pass. More posts read means
-                  more it can engage with, and a longer scroll.
+                  How far down the feed it works before going back to the top for a
+                  fresh load. It reads and acts on each post as it reaches it, one at
+                  a time, rather than scanning ahead.
                 </p>
               </div>
 
@@ -673,6 +684,89 @@ export function AutopilotClient() {
                   It likes and comments on every post it reads that it has not been
                   through before, up to this many per trip down the feed. Your weekly
                   budgets are still the hard ceiling. Ignored while No limits is on.
+                </p>
+              </div>
+
+              <div className="flex items-start justify-between gap-4">
+                <div className="min-w-0">
+                  <p className="text-sm text-gray-300 flex items-center gap-2">
+                    <Wallet className="h-4 w-4 text-gray-500" />
+                    Economy mode
+                  </p>
+                  <p className="text-xs text-gray-500 mt-1">
+                    Write comments with the cheapest model your provider offers. A
+                    comment is a short writing task with the whole voice spec already
+                    in the prompt, so the expensive models buy very little here and
+                    cost several times as much on every post.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={feed.economyMode}
+                  onClick={() => setFeed({ ...feed, economyMode: !feed.economyMode })}
+                  className={cn(
+                    "relative h-6 w-11 shrink-0 rounded-full transition-colors",
+                    feed.economyMode ? "bg-indigo-500" : "bg-gray-700"
+                  )}
+                >
+                  <span
+                    className={cn(
+                      "absolute top-0.5 h-5 w-5 rounded-full bg-white transition-transform",
+                      feed.economyMode ? "translate-x-5" : "translate-x-0.5"
+                    )}
+                  />
+                </button>
+              </div>
+
+              <div>
+                <label htmlFor="daily-ai-calls" className="text-sm text-gray-300">
+                  AI calls per day
+                </label>
+                <Input
+                  id="daily-ai-calls"
+                  type="number"
+                  min={0}
+                  max={5000}
+                  value={feed.dailyAiCalls}
+                  onChange={(e) =>
+                    setFeed({
+                      ...feed,
+                      dailyAiCalls: Math.max(0, Math.min(5000, Number(e.target.value) || 0)),
+                    })
+                  }
+                  className="mt-1.5 max-w-[8rem]"
+                />
+                <p className="text-xs text-gray-500 mt-1.5">
+                  Roughly one call per post commented on. When the day&apos;s allowance runs
+                  out it keeps liking posts and starts commenting again tomorrow. 0
+                  removes the limit, which is only safe on a free model.
+                </p>
+              </div>
+
+              <div>
+                <label htmlFor="daily-ai-spend" className="text-sm text-gray-300">
+                  Spend limit per day (USD)
+                </label>
+                <Input
+                  id="daily-ai-spend"
+                  type="number"
+                  min={0}
+                  max={1000}
+                  step={0.5}
+                  value={feed.dailyAiSpendUsd}
+                  onChange={(e) =>
+                    setFeed({
+                      ...feed,
+                      dailyAiSpendUsd: Math.max(0, Math.min(1000, Number(e.target.value) || 0)),
+                    })
+                  }
+                  className="mt-1.5 max-w-[8rem]"
+                />
+                <p className="text-xs text-gray-500 mt-1.5">
+                  A second ceiling, on cost rather than calls. Only providers that
+                  report token usage can enforce it, so treat the call limit above as
+                  the one that always holds. 0 turns it off.
                 </p>
               </div>
 

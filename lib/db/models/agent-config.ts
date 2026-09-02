@@ -81,8 +81,12 @@ export interface IFeedSettings {
   /** On a hiring post, comment with a real pitch backed by real projects. */
   pitchOnJobPosts: boolean;
   /**
-   * How far down the feed to read in one pass. Higher gives the sweep more
-   * posts to work through at the cost of a longer scroll.
+   * How far down the feed one trip goes before reloading and starting again
+   * from the top.
+   *
+   * The pass reads and acts on each post as it reaches it, so this is a depth,
+   * not a batch size. Going back to the top periodically is what keeps an
+   * uncapped pass finding new posts instead of scrolling into the archive.
    */
   postsPerSweep: number;
   /**
@@ -106,6 +110,25 @@ export interface IFeedSettings {
    * pushback circuit breaker still apply.
    */
   unlimited: boolean;
+  /**
+   * Write feed comments with the cheapest model the provider offers.
+   *
+   * A feed comment is a short writing task with the whole voice spec already
+   * in the prompt, so the frontier models buy very little here and cost
+   * several times as much per post. On by default: an uncapped feed pass makes
+   * one call per post all day, and that is where the money goes.
+   */
+  economyMode: boolean;
+  /**
+   * Most AI calls autopilot may make in a day. 0 means uncapped.
+   *
+   * Counted rather than priced because only some providers report token usage,
+   * and a limit that silently never fires is worse than none. When it is
+   * reached the agent keeps liking posts and stops commenting until tomorrow.
+   */
+  dailyAiCalls: number;
+  /** Hard dollar ceiling per day, for providers that report cost. 0 is off. */
+  dailyAiSpendUsd: number;
 }
 
 export const DEFAULT_FEED_SETTINGS: IFeedSettings = {
@@ -117,6 +140,9 @@ export const DEFAULT_FEED_SETTINGS: IFeedSettings = {
   // that stops after five posts is not that. Turned off in the UI when the
   // daily budgets should apply again.
   unlimited: true,
+  economyMode: true,
+  dailyAiCalls: 150,
+  dailyAiSpendUsd: 0,
 };
 
 export interface IWeeklyBudgets {
@@ -190,6 +216,9 @@ const AgentConfigSchema = new Schema<IAgentConfig>(
       postsPerSweep: { type: Number, default: DEFAULT_FEED_SETTINGS.postsPerSweep, min: 5, max: 60 },
       postsPerPass: { type: Number, default: DEFAULT_FEED_SETTINGS.postsPerPass, min: 1, max: 25 },
       unlimited: { type: Boolean, default: DEFAULT_FEED_SETTINGS.unlimited },
+      economyMode: { type: Boolean, default: DEFAULT_FEED_SETTINGS.economyMode },
+      dailyAiCalls: { type: Number, default: DEFAULT_FEED_SETTINGS.dailyAiCalls, min: 0, max: 5000 },
+      dailyAiSpendUsd: { type: Number, default: DEFAULT_FEED_SETTINGS.dailyAiSpendUsd, min: 0, max: 1000 },
     },
     workingHours: {
       start: { type: Number, default: 9, min: 0, max: 23 },

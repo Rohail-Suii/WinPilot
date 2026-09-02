@@ -140,43 +140,21 @@ async function sweepFeed(task, tabId, ctx, { withComment }) {
     // Let the feed settle, and look at it the way a person opening LinkedIn does
     await ctx.randomDelay(4000, 9000);
 
-    let scraped = [];
-    try {
-      const res = await ctx.sendToContentScript(tabId, {
-        type: "EXECUTE_ACTION",
-        command: "SCRAPE_FEED_POSTS",
-        actionId: `autopilot-feed-${taskId}-${round}`,
-        maxPosts: payload.postsPerSweep || 25,
-      });
-      scraped = res?.data?.posts || [];
-    } catch (e) {
-      lastError = `Could not read the feed: ${e.message}`;
-      break;
-    }
+    const before = engagements.length;
+    const outcome = await workDownFeed(task, tabId, ctx, {
+      withComment,
+      cap,
+      startedAt,
+      round,
+      engagements,
+    });
 
-    ctx.emitLog("info", "autopilot", `Read ${scraped.length} posts off the feed`);
+    if (outcome.signal) return finishSweep(engagements, { signal: outcome.signal });
+    if (outcome.error) lastError = outcome.error;
+    if (outcome.outOfTime) break;
 
-    // The server owns dedupe: it is the only side that knows what has already
-    // been acted on, across every round, every pass and every session.
-    let queue = [];
-    if (scraped.length > 0) {
-      try {
-        const res = await ctx.apiCall("/api/autopilot/generate", {
-          taskId,
-          action: "unseen_posts",
-          source: "feed",
-          limit: cap === Infinity ? 0 : Math.max(1, cap - engagements.length),
-          posts: scraped.slice(0, 40).map(summarise),
-        });
-        queue = res?.posts || [];
-      } catch (e) {
-        lastError = `Could not check which posts are new: ${e.message}`;
-        break;
-      }
-    }
-
-    if (queue.length === 0) {
-      // Nothing new on this load. Give the feed a few more chances to turn
+    if (engagements.length === before) {
+      // Nothing to do on this load. Give the feed a few more chances to turn
       // over before concluding it really has run dry — it usually has more
       // behind it, just not on this render.
       emptyRounds++;
@@ -187,59 +165,138 @@ async function sweepFeed(task, tabId, ctx, { withComment }) {
       );
       if (emptyRounds >= EMPTY_ROUNDS_BEFORE_STOPPING) break;
       await ctx.randomDelay(20000, 45000);
-      continue;
-    }
-
-    emptyRounds = 0;
-    ctx.emitLog(
-      "info",
-      "autopilot",
-      `${queue.length} of them are new — working through all of them`
-    );
-
-    for (const [index, post] of queue.entries()) {
-      if (engagements.length >= cap) break;
-
-      // The server reclaims a task it has heard nothing about for 15 minutes,
-      // so a long pass has to stop and report before that rather than have its
-      // work thrown away and redone. Whatever is left is still on the feed for
-      // the next pass.
-      if (Date.now() - startedAt > SWEEP_TIME_BUDGET_MS) {
-        ctx.emitLog(
-          "info",
-          "autopilot",
-          `Out of time for this pass at ${index} of ${queue.length} — the rest will come round again`
-        );
-        break;
-      }
-
-      if (!(await ctx.ensureSessionHealthy(tabId))) {
-        return finishSweep(engagements, { signal: "session lost" });
-      }
-
-      const readMs = readingTimeMs(post.postContent);
-      ctx.emitLog(
-        "info",
-        "autopilot",
-        `Post ${index + 1}/${queue.length} by ${post.authorName || "someone"} — reading (${Math.round(readMs / 1000)}s)`
-      );
-      await ctx.randomDelay(readMs * 0.9, readMs * 1.1);
-
-      const outcome = await engageOnePost(post, task, tabId, ctx, { withComment });
-      engagements.push(outcome);
-
-      if (outcome.signal) return finishSweep(engagements, { signal: outcome.signal });
-      if (outcome.error && !outcome.liked && !outcome.commented) lastError = outcome.error;
-
-      // Space the posts out. Back to back engagement down a feed is the single
-      // most obvious automation signature there is.
-      if (index < queue.length - 1) {
-        await ctx.randomDelay(12000, 40000);
-      }
+    } else {
+      emptyRounds = 0;
     }
   }
 
   return finishSweep(engagements, { error: lastError });
+}
+
+/**
+ * Walk the feed from the top, one post at a time.
+ *
+ * Read a post, act on it, move down to the next one — rather than reading the
+ * whole feed first and then going back to the top to act on what it found.
+ * Besides being the way a person actually reads a feed, it removes the gap
+ * between reading a post and commenting on it: the old shape could spend five
+ * minutes scraping before touching the first card, by which point the feed had
+ * re-rendered and the card was gone.
+ */
+async function workDownFeed(task, tabId, ctx, { withComment, cap, startedAt, round, engagements }) {
+  const { taskId, payload } = task;
+  // Flipped when the server says the day's AI allowance is gone. The pass
+  // carries on liking — that costs nothing — but stops asking for comments it
+  // is not going to get, which saves a round trip per post.
+  let commentsAffordable = withComment;
+
+  // How far down this load of the feed to walk before going back to the top.
+  // The feed reorders and refills on reload, so starting over periodically is
+  // what keeps an uncapped pass finding new posts rather than scrolling into
+  // the archive.
+  const depth = Math.max(1, payload.postsPerSweep || 25);
+
+  let error = null;
+  let position = 0;
+
+  for (;;) {
+    if (engagements.length >= cap) return { error };
+
+    if (position >= depth) {
+      ctx.emitLog(
+        "info",
+        "autopilot",
+        `Worked ${depth} posts down the feed — going back to the top for a fresh load`
+      );
+      return { error };
+    }
+
+    // The server reclaims a task it has heard nothing about for 15 minutes, so
+    // a long pass has to stop and report before that rather than have its work
+    // thrown away and redone. Whatever is left is still on the feed next time.
+    if (Date.now() - startedAt > SWEEP_TIME_BUDGET_MS) {
+      ctx.emitLog("info", "autopilot", "Out of time for this pass — the rest will come round again");
+      return { error, outOfTime: true };
+    }
+
+    if (!(await ctx.ensureSessionHealthy(tabId))) {
+      return { signal: "session lost" };
+    }
+
+    // 1. Scroll to the next post and read it off the page.
+    let post;
+    try {
+      const res = await ctx.sendToContentScript(tabId, {
+        type: "EXECUTE_ACTION",
+        command: "NEXT_FEED_POST",
+        actionId: `autopilot-next-${taskId}-${round}-${position}`,
+        reset: position === 0,
+      });
+      post = res?.data?.post || null;
+      if (!post) return { error };
+    } catch (e) {
+      return { error: `Could not read the next post: ${e.message}` };
+    }
+
+    position++;
+
+    // 2. Has it already been engaged with? The server is the only side that
+    //    knows, across every round, every pass and every session. Asked before
+    //    the dwell so nothing is spent reading a post that will be passed over.
+    let fresh = true;
+    try {
+      const res = await ctx.apiCall("/api/autopilot/generate", {
+        taskId,
+        action: "unseen_posts",
+        source: "feed",
+        limit: 1,
+        posts: [summarise(post)],
+      });
+      fresh = (res?.posts || []).length > 0;
+    } catch (e) {
+      return { error: `Could not check whether this post is new: ${e.message}` };
+    }
+
+    if (!fresh) {
+      ctx.emitLog(
+        "info",
+        "autopilot",
+        `Already been through ${post.authorName || "this one"} — moving on`
+      );
+      continue;
+    }
+
+    // 3. Read it properly.
+    const readMs = readingTimeMs(post.postContent);
+    ctx.emitLog(
+      "info",
+      "autopilot",
+      `Post ${position} by ${post.authorName || "someone"} — reading (${Math.round(readMs / 1000)}s)`
+    );
+    await ctx.randomDelay(readMs * 0.9, readMs * 1.1);
+
+    // 4. Act on it, then move down.
+    const outcome = await engageOnePost(post, task, tabId, ctx, {
+      withComment: commentsAffordable,
+    });
+    engagements.push(outcome);
+
+    if (outcome.budgetSpent && commentsAffordable) {
+      commentsAffordable = false;
+      ctx.emitLog(
+        "warn",
+        "autopilot",
+        outcome.error || "Today's AI allowance is spent — liking only from here"
+      );
+    }
+
+    if (outcome.signal) return { signal: outcome.signal };
+    if (outcome.error && !outcome.liked && !outcome.commented) error = outcome.error;
+
+    // Space the posts out. Back to back engagement down a feed is the single
+    // most obvious automation signature there is.
+    await ctx.randomDelay(12000, 40000);
+  }
 }
 
 /** Roll a pass's per-post outcomes into one task result. */
@@ -292,6 +349,7 @@ async function engageOnePost(post, task, tabId, ctx, { withComment }) {
 
   let comment = "";
   let generated = null;
+  let commentError = null;
 
   if (withComment) {
     try {
@@ -311,10 +369,20 @@ async function engageOnePost(post, task, tabId, ctx, { withComment }) {
         },
       });
       comment = generated?.comment || "";
+      // Under force the server should always come back with something. When it
+      // does not, say so — a post that only gets a like is the visible symptom
+      // and the reason belongs in the journal next to it, not swallowed.
+      if (!comment) {
+        commentError = generated?.reason || "The server returned no comment";
+      }
     } catch (e) {
       // A post we cannot write for still gets a like — dropping it entirely
       // would leave a visible gap in a pass whose whole point is coverage.
-      ctx.emitLog("warn", "autopilot", `No comment written for this one: ${e.message}`);
+      commentError = e.message;
+    }
+
+    if (commentError) {
+      ctx.emitLog("warn", "autopilot", `No comment for this one: ${commentError}`);
     }
   }
 
@@ -339,7 +407,10 @@ async function engageOnePost(post, task, tabId, ctx, { withComment }) {
       postType: generated?.postType,
       angle: generated?.angle,
       isPitch: Boolean(generated?.isPitch),
-      error: data.error || data.likeError,
+      // The day's AI allowance is spent. Reported so the pass can stop asking
+      // for comments it is not going to get, and keep liking.
+      budgetSpent: Boolean(generated?.budgetSpent),
+      error: data.error || commentError || data.likeError,
     };
   } catch (e) {
     return { ...base, liked: false, commented: false, error: `Engagement failed: ${e.message}` };

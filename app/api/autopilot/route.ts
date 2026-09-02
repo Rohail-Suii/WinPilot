@@ -36,6 +36,9 @@ const configSchema = z.object({
       postsPerSweep: z.number().min(5).max(60),
       postsPerPass: z.number().min(1).max(25),
       unlimited: z.boolean(),
+      economyMode: z.boolean(),
+      dailyAiCalls: z.number().min(0).max(5000),
+      dailyAiSpendUsd: z.number().min(0).max(1000),
     })
     .partial()
     .optional(),
