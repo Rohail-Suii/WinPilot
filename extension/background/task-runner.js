@@ -3,19 +3,26 @@
 // The server decides WHAT to do and sends one AgentTask at a time over the
 // WebSocket. This module is the executor: it drives the LinkedIn tab through
 // the steps that task needs, asks the server for any judgement it cannot make
-// locally (which post is worth engaging with, what to actually say), and posts
-// the outcome back to /api/autopilot/task-result.
+// locally (what to actually say), and posts the outcome back to
+// /api/autopilot/task-result.
 //
 // It deliberately owns no decisions of its own beyond timing. Everything that
 // needs the user's goal, persona, or history happens server-side.
 //
 // Engagement tasks arrive from one of two sources, set by the server on the
-// payload:
+// payload, and the two take deliberately different shapes:
+//
 //   payload.source === "feed"  — feed mode. Open the home feed, read down it,
-//                                act on the next post the server has not seen.
-//   otherwise                  — strategist mode. Search content by keyword.
-// Both then follow the same path: open the post, spend real time on it, like
-// it, and comment if the task calls for one.
+//                                and work every post it has not already been
+//                                through: like it, comment on it, move to the
+//                                next card. No post is picked over another and
+//                                nothing is passed over for not being
+//                                interesting enough — the point of feed mode
+//                                is coverage. It never leaves the feed, so a
+//                                post with no permalink still gets engaged.
+//   otherwise                  — strategist mode. Search content by keyword,
+//                                have the server pick the one post worth a
+//                                response, open it, and comment there.
 
 /**
  * Execute one task.
@@ -38,11 +45,17 @@ export async function runTask(task, ctx) {
     return { ok: false, error: "session lost", signal: "session lost" };
   }
 
+  const wantsFeed = task.payload?.source === "feed";
+
   switch (kind) {
     case "comment_on_feed":
-      return engagePost(task, tab.id, ctx, { withComment: true });
+      return wantsFeed
+        ? sweepFeed(task, tab.id, ctx, { withComment: true })
+        : engageSearchPost(task, tab.id, ctx, { withComment: true });
     case "like_post":
-      return engagePost(task, tab.id, ctx, { withComment: false });
+      return wantsFeed
+        ? sweepFeed(task, tab.id, ctx, { withComment: false })
+        : engageSearchPost(task, tab.id, ctx, { withComment: false });
     case "view_target_profile":
       return viewProfile(task, tab.id, ctx);
     default:
@@ -65,18 +78,265 @@ function readingTimeMs(text) {
   return Math.max(8000, Math.min(42000, estimate));
 }
 
-// ── Engagement: find a post worth acting on, then like and/or comment ───────
+// ── Feed mode: work down the feed, engaging every post on it ────────────────
 
-async function engagePost(task, tabId, ctx, { withComment }) {
+/**
+ * How long one pass may run before it reports what it has and stops.
+ *
+ * The server reclaims a dispatched task after 15 minutes. Stopping short of
+ * that means a long sweep's work gets recorded instead of being requeued and
+ * repeated — which on LinkedIn would mean commenting twice on the same posts.
+ */
+const SWEEP_TIME_BUDGET_MS = 11 * 60 * 1000;
+
+/**
+ * One pass over the home feed.
+ *
+ * Reads the feed, drops what the server has already been through, then walks
+ * the rest in feed order. Every remaining post gets liked and — on a comment
+ * task — commented on. The only thing that stops the walk early is the
+ * server's per-pass cap, which is set from the day's remaining budget, or
+ * LinkedIn pushing back.
+ *
+ * All of it happens on the feed page. Opening each post's permalink was what
+ * the old flow did, and it both doubled the page loads and made the whole
+ * thing dependent on a permalink that LinkedIn's redesigned feed frequently
+ * does not render.
+ */
+async function sweepFeed(task, tabId, ctx, { withComment }) {
   const { taskId, payload } = task;
-  const source = payload.source === "feed" ? "feed" : "search";
 
-  // 1. Get in front of some posts
-  const gathered =
-    source === "feed"
-      ? await gatherFromFeed(task, tabId, ctx)
-      : await gatherFromSearch(task, tabId, ctx);
+  await ctx.navigateAndWait(tabId, "https://www.linkedin.com/feed/");
+  if (!(await ctx.ensureSessionHealthy(tabId))) {
+    return { ok: false, error: "session lost", signal: "session lost" };
+  }
 
+  // Let the feed settle, and look at it the way a person opening LinkedIn does
+  await ctx.randomDelay(4000, 9000);
+
+  let scraped = [];
+  try {
+    const res = await ctx.sendToContentScript(tabId, {
+      type: "EXECUTE_ACTION",
+      command: "SCRAPE_FEED_POSTS",
+      actionId: `autopilot-feed-${taskId}`,
+      maxPosts: payload.postsPerSweep || 25,
+    });
+    scraped = res?.data?.posts || [];
+  } catch (e) {
+    return { ok: false, error: `Could not read the feed: ${e.message}` };
+  }
+
+  if (scraped.length === 0) {
+    return {
+      ok: true,
+      result: {
+        skipped: true,
+        source: "feed",
+        reason: "The feed did not render any posts I could read",
+      },
+    };
+  }
+
+  ctx.emitLog("info", "autopilot", `Read ${scraped.length} posts off the feed`);
+
+  // The server owns dedupe: it is the only side that knows what has already
+  // been acted on, across every pass and every session.
+  const cap = Math.max(1, Math.min(payload.maxEngagements || 5, scraped.length));
+  let queue = [];
+  try {
+    const res = await ctx.apiCall("/api/autopilot/generate", {
+      taskId,
+      action: "unseen_posts",
+      source: "feed",
+      limit: cap,
+      posts: scraped.slice(0, 40).map(summarise),
+    });
+    queue = res?.posts || [];
+  } catch (e) {
+    return { ok: false, error: `Could not check which posts are new: ${e.message}` };
+  }
+
+  if (queue.length === 0) {
+    return {
+      ok: true,
+      result: {
+        skipped: true,
+        source: "feed",
+        reason: "I have already been through everything currently on the feed",
+      },
+    };
+  }
+
+  ctx.emitLog(
+    "info",
+    "autopilot",
+    `${queue.length} of them are new — working through all of them`
+  );
+
+  const engagements = [];
+  let sawFailure = null;
+  const startedAt = Date.now();
+
+  for (const [index, post] of queue.entries()) {
+    // The server reclaims a task it has heard nothing about for 15 minutes, so
+    // a long pass has to stop and report before that rather than have its work
+    // thrown away and redone. Whatever is left is still on the feed for the
+    // next pass.
+    if (Date.now() - startedAt > SWEEP_TIME_BUDGET_MS) {
+      ctx.emitLog(
+        "info",
+        "autopilot",
+        `Out of time for this pass at ${index} of ${queue.length} — the rest will come round again`
+      );
+      break;
+    }
+
+    if (!(await ctx.ensureSessionHealthy(tabId))) {
+      return finishSweep(engagements, { signal: "session lost" });
+    }
+
+    const readMs = readingTimeMs(post.postContent);
+    ctx.emitLog(
+      "info",
+      "autopilot",
+      `Post ${index + 1}/${queue.length} by ${post.authorName || "someone"} — reading (${Math.round(readMs / 1000)}s)`
+    );
+    await ctx.randomDelay(readMs * 0.9, readMs * 1.1);
+
+    const outcome = await engageOnePost(post, task, tabId, ctx, { withComment });
+    engagements.push(outcome);
+
+    if (outcome.signal) return finishSweep(engagements, { signal: outcome.signal });
+    if (outcome.error && !outcome.liked && !outcome.commented) sawFailure = outcome.error;
+
+    // Space the posts out. Back to back engagement down a feed is the single
+    // most obvious automation signature there is.
+    if (index < queue.length - 1) {
+      await ctx.randomDelay(12000, 40000);
+    }
+  }
+
+  return finishSweep(engagements, { error: sawFailure });
+}
+
+/** Roll a pass's per-post outcomes into one task result. */
+function finishSweep(engagements, { signal, error } = {}) {
+  const acted = engagements.filter((e) => e.liked || e.commented);
+
+  if (acted.length === 0) {
+    if (signal) return { ok: false, error: signal, signal };
+    return {
+      ok: true,
+      result: {
+        skipped: true,
+        source: "feed",
+        engagements,
+        reason: error || "Could not act on anything the feed showed me",
+      },
+    };
+  }
+
+  // Anything that went wrong after at least one real engagement is reported in
+  // the per-post detail rather than failing the task — the work that landed
+  // has to be recorded, or the budget counters drift and it gets redone.
+  return {
+    ok: true,
+    result: {
+      source: "feed",
+      engagements,
+      engaged: acted.length,
+      liked: acted.some((e) => e.liked),
+      commented: acted.filter((e) => e.commented).length,
+      ...(signal ? { partial: signal } : {}),
+    },
+  };
+}
+
+/** Like, and optionally comment on, one card of the feed. */
+async function engageOnePost(post, task, tabId, ctx, { withComment }) {
+  const { taskId, payload } = task;
+  const base = {
+    source: "feed",
+    postUrl: post.postUrl,
+    postKey: post.postKey,
+    authorName: post.authorName,
+    authorHeadline: post.authorHeadline,
+  };
+
+  let comment = "";
+  let generated = null;
+
+  if (withComment) {
+    try {
+      generated = await ctx.apiCall("/api/autopilot/generate", {
+        taskId,
+        action: "comment",
+        source: "feed",
+        // Feed mode is coverage, not curation: the server is told to write
+        // something for every post rather than judge whether to bother.
+        force: true,
+        pitchOnJobPosts: payload.pitchOnJobPosts !== false,
+        post: {
+          postUrl: post.postUrl,
+          postContent: (post.postContent || "").slice(0, 4000),
+          authorName: post.authorName || "",
+          authorHeadline: post.authorHeadline || "",
+        },
+      });
+      comment = generated?.comment || "";
+    } catch (e) {
+      // A post we cannot write for still gets a like — dropping it entirely
+      // would leave a visible gap in a pass whose whole point is coverage.
+      ctx.emitLog("warn", "autopilot", `No comment written for this one: ${e.message}`);
+    }
+  }
+
+  try {
+    const res = await ctx.sendToContentScript(tabId, {
+      type: "EXECUTE_ACTION",
+      command: "ENGAGE_FEED_POST",
+      actionId: `autopilot-engage-${taskId}-${post.postKey}`,
+      postKey: post.postKey,
+      comment,
+      // A like-only pass always likes. A comment pass likes as well unless the
+      // server turned that pairing off.
+      alsoLike: !withComment || payload.alsoLike !== false,
+    });
+    const data = res?.data || {};
+
+    return {
+      ...base,
+      liked: Boolean(data.liked || data.alreadyLiked),
+      commented: Boolean(data.commented),
+      comment: data.commented ? comment : undefined,
+      postType: generated?.postType,
+      angle: generated?.angle,
+      isPitch: Boolean(generated?.isPitch),
+      error: data.error || data.likeError,
+    };
+  } catch (e) {
+    return { ...base, liked: false, commented: false, error: `Engagement failed: ${e.message}` };
+  }
+}
+
+/** Trim a scraped post down to what the server needs to identify it. */
+function summarise(p) {
+  return {
+    postKey: p.postKey || p.postUrl || "",
+    postUrl: p.postUrl || "",
+    postContent: (p.postContent || "").slice(0, 2000),
+    authorName: p.authorName || "",
+    authorHeadline: p.authorHeadline || "",
+  };
+}
+
+// ── Strategist mode: search, pick one post, engage it on its permalink ──────
+
+async function engageSearchPost(task, tabId, ctx, { withComment }) {
+  const { taskId, payload } = task;
+
+  const gathered = await gatherFromSearch(task, tabId, ctx);
   if (gathered.error) return gathered.error;
   const posts = gathered.posts;
 
@@ -85,31 +345,22 @@ async function engagePost(task, tabId, ctx, { withComment }) {
       ok: true,
       result: {
         skipped: true,
-        source,
-        reason:
-          source === "feed"
-            ? "The feed did not render any posts I could read"
-            : `No posts found for "${payload.keyword || ""}"`,
+        source: "search",
+        reason: `No posts found for "${payload.keyword || ""}"`,
       },
     };
   }
 
-  ctx.emitLog("info", "autopilot", `Read ${posts.length} posts off the ${source}`);
+  ctx.emitLog("info", "autopilot", `Read ${posts.length} posts off the search results`);
 
-  // 2. Ask the server which one to act on (it also filters ones already used)
+  // Ask the server which one to act on (it also filters ones already used)
   let chosen = null;
   try {
     const pick = await ctx.apiCall("/api/autopilot/generate", {
       taskId,
       action: "pick_post",
-      source,
-      pitchOnJobPosts: payload.pitchOnJobPosts !== false,
-      posts: posts.slice(0, 30).map((p) => ({
-        postUrl: p.postUrl || "",
-        postContent: (p.postContent || "").slice(0, 2000),
-        authorName: p.authorName || "",
-        authorHeadline: p.authorHeadline || "",
-      })),
+      source: "search",
+      posts: posts.slice(0, 30).map(summarise),
     });
     chosen = pick?.post || null;
     if (!chosen) {
@@ -117,7 +368,7 @@ async function engagePost(task, tabId, ctx, { withComment }) {
         ok: true,
         result: {
           skipped: true,
-          source,
+          source: "search",
           reason: pick?.reason || "Nothing worth engaging with",
         },
       };
@@ -126,7 +377,7 @@ async function engagePost(task, tabId, ctx, { withComment }) {
     return { ok: false, error: `Post selection failed: ${e.message}` };
   }
 
-  // 3. Open the post itself and spend real time on it
+  // Open the post itself and spend real time on it
   await ctx.navigateAndWait(tabId, chosen.postUrl);
   if (!(await ctx.ensureSessionHealthy(tabId))) {
     return { ok: false, error: "session lost", signal: "session lost" };
@@ -148,14 +399,14 @@ async function engagePost(task, tabId, ctx, { withComment }) {
   }
 
   const base = {
-    source,
+    source: "search",
     postUrl: chosen.postUrl,
     authorName: chosen.authorName,
     authorHeadline: chosen.authorHeadline,
     keyword: payload.keyword,
   };
 
-  // 4a. Like only
+  // Like only
   if (!withComment) {
     const like = await likeCurrentPost(taskId, tabId, ctx);
     if (like.error) return { ok: false, error: like.error };
@@ -170,15 +421,15 @@ async function engagePost(task, tabId, ctx, { withComment }) {
     };
   }
 
-  // 4b. Ask the server what to say. It classifies the post and may come back
-  //     with "say nothing", which is a legitimate answer and not a failure.
+  // Ask the server what to say. Strategist mode is allowed to come back with
+  // "say nothing" — there, the comment is judged against a goal and a generic
+  // one is worse than silence.
   let generated;
   try {
     generated = await ctx.apiCall("/api/autopilot/generate", {
       taskId,
       action: "comment",
-      source,
-      pitchOnJobPosts: payload.pitchOnJobPosts !== false,
+      source: "search",
       post: {
         postUrl: chosen.postUrl,
         postContent: (chosen.postContent || "").slice(0, 4000),
@@ -207,7 +458,7 @@ async function engagePost(task, tabId, ctx, { withComment }) {
     };
   }
 
-  // 5. Like before commenting, the way a person does when a post lands.
+  // Like before commenting, the way a person does when a post lands.
   let liked = false;
   if (payload.alsoLike !== false) {
     const like = await likeCurrentPost(taskId, tabId, ctx);
@@ -215,7 +466,6 @@ async function engagePost(task, tabId, ctx, { withComment }) {
     await ctx.randomDelay(1500, 4000);
   }
 
-  // 6. Post the comment
   try {
     const res = await ctx.sendToContentScript(tabId, {
       type: "EXECUTE_ACTION",
@@ -243,34 +493,6 @@ async function engagePost(task, tabId, ctx, { withComment }) {
       isPitch: Boolean(generated.isPitch),
     },
   };
-}
-
-// ── Gathering posts ─────────────────────────────────────────────────────────
-
-/** Feed mode: open the home feed and read down it. */
-async function gatherFromFeed(task, tabId, ctx) {
-  const { taskId, payload } = task;
-
-  await ctx.navigateAndWait(tabId, "https://www.linkedin.com/feed/");
-
-  if (!(await ctx.ensureSessionHealthy(tabId))) {
-    return { error: { ok: false, error: "session lost", signal: "session lost" } };
-  }
-
-  // Let the feed settle, and look at it the way a person opening LinkedIn does
-  await ctx.randomDelay(4000, 9000);
-
-  try {
-    const res = await ctx.sendToContentScript(tabId, {
-      type: "EXECUTE_ACTION",
-      command: "SCRAPE_FEED_POSTS",
-      actionId: `autopilot-feed-${taskId}`,
-      maxPosts: payload.postsPerSweep || 25,
-    });
-    return { posts: res?.data?.posts || [] };
-  } catch (e) {
-    return { error: { ok: false, error: `Could not read the feed: ${e.message}` } };
-  }
 }
 
 /** Strategist mode: search recent content for the task's keyword. */

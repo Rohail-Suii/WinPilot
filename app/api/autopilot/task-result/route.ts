@@ -60,10 +60,46 @@ function foundVia(result: Record<string, unknown>): string {
   return result.keyword ? ` (found via "${result.keyword}")` : "";
 }
 
+/**
+ * One engagement inside a feed sweep.
+ *
+ * Feed mode works several posts in a single pass, so a result can carry a list
+ * of these instead of a single post's fields.
+ */
+interface Engagement {
+  postUrl?: string;
+  postKey?: string;
+  authorName?: string;
+  liked?: boolean;
+  commented?: boolean;
+  comment?: string;
+  postType?: string;
+  angle?: string;
+  isPitch?: boolean;
+  error?: string;
+}
+
+/** The per-post engagements of a feed sweep, or [] for a single-post result. */
+function engagementsIn(result: Record<string, unknown>): Engagement[] {
+  const list = result.engagements;
+  if (!Array.isArray(list)) return [];
+  return list.filter((e): e is Engagement => Boolean(e) && typeof e === "object");
+}
+
 /** Human-readable one-liner for the journal, per kind. */
 function describe(kind: TaskKind, result: Record<string, unknown>): string {
   const author = (result.authorName as string) || "someone";
   const url = (result.postUrl as string) || (result.profileUrl as string) || "";
+
+  // A sweep reports itself rather than one post: the individual comments each
+  // get their own journal entry below, so this is the header over them.
+  const sweep = engagementsIn(result);
+  if (sweep.length > 0) {
+    const acted = sweep.filter((e) => e.liked || e.commented);
+    const commented = acted.filter((e) => e.commented).length;
+    const failed = sweep.length - acted.length;
+    return `Worked down the feed: ${acted.length} post${acted.length === 1 ? "" : "s"} engaged with, ${commented} of them commented on.${failed > 0 ? ` ${failed} I could not act on.` : ""}`;
+  }
 
   switch (kind) {
     case "comment_on_feed":
@@ -227,16 +263,32 @@ export async function POST(req: Request) {
       await task.save();
 
       const usageKey = USAGE_FOR_KIND[task.kind];
-      if (usageKey) {
-        await incrementUsage(userId, usageKey as Parameters<typeof incrementUsage>[1]);
-      }
+      const sweep = engagementsIn(result).filter((e) => e.liked || e.commented);
 
-      // Feed mode likes the post it comments on, the way a person does. That is
-      // a second real LinkedIn action, so it has to be charged to the like
-      // budget too — otherwise the governor undercounts and the day's true
-      // action volume runs above what the user configured.
-      if (result.liked === true && usageKey !== "likes") {
-        await incrementUsage(userId, "likes" as Parameters<typeof incrementUsage>[1]);
+      if (sweep.length > 0) {
+        // A feed sweep is many real LinkedIn actions under one task. Charging
+        // it once would let the day's true action volume run far above what
+        // the user configured, so every post is counted separately.
+        for (const item of sweep) {
+          if (item.commented && usageKey) {
+            await incrementUsage(userId, usageKey as Parameters<typeof incrementUsage>[1]);
+          }
+          if (item.liked) {
+            await incrementUsage(userId, "likes" as Parameters<typeof incrementUsage>[1]);
+          }
+        }
+      } else {
+        if (usageKey) {
+          await incrementUsage(userId, usageKey as Parameters<typeof incrementUsage>[1]);
+        }
+
+        // Feed mode likes the post it comments on, the way a person does. That
+        // is a second real LinkedIn action, so it has to be charged to the like
+        // budget too — otherwise the governor undercounts and the day's true
+        // action volume runs above what the user configured.
+        if (result.liked === true && usageKey !== "likes") {
+          await incrementUsage(userId, "likes" as Parameters<typeof incrementUsage>[1]);
+        }
       }
 
       await advanceTarget(userId, task.kind, task.payload, result, taskId);
@@ -250,14 +302,46 @@ export async function POST(req: Request) {
         refs: { taskId, targetId: task.payload.targetId as string | undefined },
       });
 
-      await ActivityLog.create({
-        userId,
-        action: task.kind,
-        module: "autopilot",
-        details: { taskId, ...result },
-        status: "success",
-        linkedinUrl: (result.postUrl as string) || (result.profileUrl as string) || undefined,
-      });
+      // Each comment gets its own entry under the sweep's header, so the user
+      // can still read and judge what was actually said post by post.
+      for (const item of sweep) {
+        if (!item.comment) continue;
+        const pitched = item.isPitch ? " I pitched myself on it, since they are hiring." : "";
+        const angle = item.angle ? ` My angle: ${String(item.angle).slice(0, 200)}` : "";
+        await journal({
+          userId,
+          cycleId: task.cycleId,
+          entryType: "action",
+          phase: "engagement",
+          text: `Commented on ${item.authorName || "someone"}'s post off my feed.${item.postType ? ` It read as a ${item.postType} post.` : ""}${pitched}${item.liked ? " Liked it first." : ""}${angle}\n\n"${String(item.comment).slice(0, 400)}"${item.postUrl?.startsWith("http") ? `\n${item.postUrl}` : ""}`,
+          refs: { taskId },
+        });
+      }
+
+      if (sweep.length > 0) {
+        // One log row per post. This is also the dedupe index the next sweep
+        // reads back through /generate — keyed on postKey, because the
+        // redesigned feed gives most cards no permalink to key on.
+        await ActivityLog.insertMany(
+          sweep.map((item) => ({
+            userId,
+            action: task.kind,
+            module: "autopilot",
+            details: { taskId, source: "feed", ...item },
+            status: "success",
+            linkedinUrl: item.postKey || item.postUrl || undefined,
+          }))
+        );
+      } else {
+        await ActivityLog.create({
+          userId,
+          action: task.kind,
+          module: "autopilot",
+          details: { taskId, ...result },
+          status: "success",
+          linkedinUrl: (result.postUrl as string) || (result.profileUrl as string) || undefined,
+        });
+      }
 
       pushSseEvent(userId, "autopilot:task", {
         taskId,

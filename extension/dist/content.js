@@ -840,6 +840,21 @@
           };
         }
 
+        // ─── Autopilot: act on one card of the feed, without leaving it ───
+        case "ENGAGE_FEED_POST": {
+          const engaged = await engageFeedPost({
+            postKey: action.postKey,
+            selector: action.selector,
+            comment: action.comment ?? action.commentText,
+            alsoLike: action.alsoLike,
+          });
+          return {
+            status: "success",
+            actionId: action.actionId,
+            data: engaged,
+          };
+        }
+
         // ─── Lead Generation: scrape posts from LinkedIn search results ───
         case "SCRAPE_KEYWORD_POSTS": {
           const posts = await scrapeKeywordPosts(action.keyword || "");
@@ -3331,6 +3346,136 @@
   }
 
   // --- Phase 2: Engagement Helpers ---
+  //
+  // LinkedIn now ships two completely different feed DOMs depending on which
+  // rollout the account is on:
+  //
+  //   legacy   — semantic class names: .feed-shared-update-v2,
+  //              .update-components-actor__title, data-urn="urn:li:activity:…"
+  //   redesign — every class is a hashed token (._28da66c8), the feed is
+  //              <div data-testid="mainFeed" role="list"> and each post is a
+  //              role="listitem" identified only by a `componentkey` hash.
+  //
+  // Nothing in the redesign's markup is stable except its accessibility
+  // surface, so everything below matches on roles, aria-labels and visible
+  // text first and treats the legacy class names as a fallback. Selector-only
+  // matching is what made the scraper return zero posts on redesigned accounts
+  // while still reporting success.
+
+  /**
+   * Cards found by the last feed sweep, keyed by the postKey handed to the
+   * server. ENGAGE_FEED_POST comes back later naming one of those keys, and
+   * the redesign gives us no id we could re-query the DOM with — so the
+   * element reference itself is what we keep.
+   */
+  const feedCardRegistry = new Map();
+
+  /** Every container shape a post has been seen in, most specific first. */
+  const FEED_CARD_SELECTORS = [
+    "[data-testid='mainFeed'] [role='listitem']",
+    "div.feed-shared-update-v2",
+    "div[data-id^='urn:li:activity']",
+    "div[data-urn^='urn:li:activity']",
+    "main [role='list'] [role='listitem']",
+    ".scaffold-finite-scroll__content > div",
+  ];
+
+  /** Collect candidate post cards from whichever DOM the page is rendering. */
+  function findFeedCards() {
+    const cards = [];
+    const seen = new Set();
+    for (const selector of FEED_CARD_SELECTORS) {
+      let found;
+      try {
+        found = document.querySelectorAll(selector);
+      } catch {
+        continue;
+      }
+      for (const el of found) {
+        if (seen.has(el)) continue;
+        seen.add(el);
+        cards.push(el);
+      }
+      // The first selector that matches a plausible number of cards wins;
+      // falling through would mix wrappers and inner cards into one list.
+      if (cards.length >= 3) break;
+    }
+    return cards;
+  }
+
+  /**
+   * What a screen reader would call this control.
+   *
+   * aria-label wins because the redesign labels its icon-only buttons that way
+   * and their text content is empty.
+   */
+  function accessibleName(el) {
+    if (!el) return "";
+    const label =
+      el.getAttribute("aria-label") ||
+      el.getAttribute("title") ||
+      el.textContent ||
+      "";
+    return label.replace(/\s+/g, " ").trim();
+  }
+
+  /** Buttons in `root`, covering both <button> and role="button" divs. */
+  function clickableCandidates(root) {
+    return Array.from(
+      (root || document).querySelectorAll("button, [role='button']")
+    ).filter((el) => !el.disabled && el.getAttribute("aria-disabled") !== "true");
+  }
+
+  /**
+   * Find one social-action button by accessible name.
+   *
+   * `exact` is tried across every candidate before `loose`, because a post's
+   * action bar and its social-proof row both mention "comment" and only the
+   * exactly-named one is the control we want.
+   */
+  function findActionButton(root, exact, loose) {
+    const candidates = clickableCandidates(root);
+    for (const el of candidates) {
+      if (exact.test(accessibleName(el))) return el;
+    }
+    if (loose) {
+      for (const el of candidates) {
+        if (loose.test(accessibleName(el))) return el;
+      }
+    }
+    return null;
+  }
+
+  const LIKE_EXACT = /^(react\s+)?(like|unlike)$/i;
+  const LIKE_LOOSE = /^(react|like|unlike)\b/i;
+  const COMMENT_EXACT = /^(comment|add a comment|leave a comment)$/i;
+  // "Comment on <name>'s post" — but never "12 comments", which is the
+  // social-proof link into the comment list.
+  const COMMENT_LOOSE = /^comment\b(?!s)/i;
+
+  function findLikeButton(root) {
+    return (
+      (root && root.querySelector("[data-test-action='like']")) ||
+      (root && root.querySelector(".social-actions-button[aria-label*='Like']")) ||
+      findActionButton(root, LIKE_EXACT, LIKE_LOOSE)
+    );
+  }
+
+  function findCommentButton(root) {
+    return (
+      (root && root.querySelector("[data-test-action='comment']")) ||
+      findActionButton(root, COMMENT_EXACT, COMMENT_LOOSE)
+    );
+  }
+
+  /** Has this like button already been pressed? */
+  function isAlreadyLiked(btn) {
+    if (!btn) return false;
+    if (btn.getAttribute("aria-pressed") === "true") return true;
+    if (btn.classList.contains("react-button--active")) return true;
+    if (/^unlike\b/i.test(accessibleName(btn))) return true;
+    return false;
+  }
 
   /**
    * The post card the page is "about".
@@ -3346,83 +3491,169 @@
       document.querySelector("div.feed-shared-update-v2") ||
       document.querySelector("div[data-urn^='urn:li:activity']") ||
       document.querySelector("div[data-id^='urn:li:activity']") ||
+      document.querySelector("[data-testid='mainFeed'] [role='listitem']") ||
+      document.querySelector("main [role='listitem']") ||
       document
     );
   }
 
-  async function likePost(postSelector) {
-    const post = postSelector
-      ? document.querySelector(postSelector)
-      : primaryPostRoot();
-    const root = post || document;
+  /** Resolve whatever the service worker named into a card element. */
+  function resolveEngagementRoot({ postKey, selector }) {
+    if (postKey && feedCardRegistry.has(postKey)) {
+      const el = feedCardRegistry.get(postKey);
+      // A card the feed has since recycled out of the DOM is no longer usable.
+      if (el && el.isConnected) return el;
+      feedCardRegistry.delete(postKey);
+      return null;
+    }
+    if (selector) return document.querySelector(selector);
+    return primaryPostRoot();
+  }
 
-    const likeBtn =
-      root.querySelector("[data-test-action='like']") ||
-      root.querySelector(".social-actions-button[aria-label*='Like']") ||
-      root.querySelector("button[aria-label*='Like']") ||
-      document.querySelector("[data-test-action='like'], button[aria-label*='Like']");
+  /** Put a card on screen the way scrolling to it would. */
+  async function bringIntoView(el) {
+    if (!el || typeof el.scrollIntoView !== "function") return;
+    el.scrollIntoView({ behavior: "smooth", block: "center" });
+    await HumanBehavior.sleep(HumanBehavior.clampedGaussian(600, 1400));
+  }
 
+  async function likePost(postSelector, root) {
+    const scope =
+      root ||
+      (postSelector ? document.querySelector(postSelector) : primaryPostRoot()) ||
+      document;
+
+    const likeBtn = findLikeButton(scope) || findLikeButton(document);
     if (!likeBtn) return { liked: false, error: "Like button not found" };
 
-    // Check if already liked
-    const isLiked = likeBtn.getAttribute("aria-pressed") === "true" ||
-      likeBtn.classList.contains("react-button--active");
-    if (isLiked) return { liked: false, alreadyLiked: true };
+    if (isAlreadyLiked(likeBtn)) return { liked: false, alreadyLiked: true };
 
-    dispatchNativeClick(likeBtn);
-    await new Promise((r) => setTimeout(r, 500));
+    await HumanBehavior.humanClick(likeBtn);
+    await HumanBehavior.sleep(HumanBehavior.clampedGaussian(700, 1600));
     return { liked: true };
   }
 
-  async function commentOnPost(postSelector, commentText) {
-    const post = postSelector
-      ? document.querySelector(postSelector)
-      : null;
+  /**
+   * Find the comment editor that belongs to `scope`.
+   *
+   * Scoped first because on the feed several posts can have their comment box
+   * open at once, and typing into the wrong one posts the comment under the
+   * wrong post.
+   */
+  function findCommentInput(scope) {
+    const selectors = [
+      ".comments-comment-box__form .ql-editor",
+      ".comments-comment-box .ql-editor",
+      ".comments-comment-texteditor .ql-editor",
+      "[role='textbox'][aria-label*='comment' i]",
+      "[role='textbox'][contenteditable='true']",
+      "[contenteditable='true'][aria-multiline='true']",
+    ];
+    for (const sel of selectors) {
+      const scoped = scope && scope !== document ? scope.querySelector(sel) : null;
+      if (scoped) return scoped;
+    }
+    for (const sel of selectors) {
+      const loose = document.querySelector(sel);
+      if (loose) return loose;
+    }
+    return null;
+  }
 
+  /** The button that actually publishes what was typed into `input`. */
+  function findCommentSubmit(scope, input) {
+    // The editor's own form is the tightest scope there is, and the redesign
+    // still wraps the box in one.
+    const form = input?.closest("form") || null;
+    const roots = [form, scope, document].filter(Boolean);
+
+    for (const root of roots) {
+      const direct =
+        root.querySelector?.(".comments-comment-box__submit-button:not([disabled])") ||
+        root.querySelector?.("[class*='comments-comment-box'] button[type='submit']:not([disabled])");
+      if (direct) return direct;
+
+      const named = findActionButton(root, /^(post|submit|reply)$/i);
+      if (named) return named;
+    }
+    return null;
+  }
+
+  async function commentOnPost(postSelector, commentText, root) {
     if (!commentText || !String(commentText).trim()) {
       return { commented: false, error: "No comment text supplied" };
     }
 
-    // Click comment button to open comment box
-    const root = post || primaryPostRoot() || document;
-    const commentBtn =
-      root.querySelector("button[aria-label*='Comment'], button[aria-label*='comment']") ||
-      document.querySelector("button[aria-label*='Comment'], button[aria-label*='comment']");
+    const scope =
+      root ||
+      (postSelector ? document.querySelector(postSelector) : primaryPostRoot()) ||
+      document;
 
+    const commentBtn = findCommentButton(scope) || findCommentButton(document);
     if (!commentBtn) return { commented: false, error: "Comment button not found" };
 
     await HumanBehavior.humanClick(commentBtn);
     await HumanBehavior.sleep(HumanBehavior.clampedGaussian(1200, 2500));
 
-    // Find comment input — try multiple selectors LinkedIn uses
-    const commentInput =
-      document.querySelector(".comments-comment-box__form .ql-editor") ||
-      document.querySelector(".comments-comment-box .ql-editor") ||
-      document.querySelector("[role='textbox'][aria-label*='comment']") ||
-      document.querySelector("[role='textbox'][aria-label*='Comment']") ||
-      document.querySelector(".comments-comment-texteditor .ql-editor");
-
+    // The editor mounts asynchronously; one click plus a fixed sleep is not
+    // enough on a slow feed.
+    let commentInput = null;
+    for (let attempt = 0; attempt < 12 && !commentInput; attempt++) {
+      commentInput = findCommentInput(scope);
+      if (!commentInput) await HumanBehavior.sleep(400);
+    }
     if (!commentInput) return { commented: false, error: "Comment input not found" };
 
-    // Use human-like typing for the comment
     await HumanBehavior.humanType(commentInput, commentText);
-
     await HumanBehavior.sleep(HumanBehavior.clampedGaussian(800, 1800));
 
-    // Submit comment — try multiple selectors
-    const submitBtn =
-      document.querySelector(".comments-comment-box__submit-button:not([disabled])") ||
-      document.querySelector("[class*='comments-comment-box'] button[type='submit']") ||
-      getElementByText("button", "Post") ||
-      document.querySelector("form.comments-comment-box button.artdeco-button--primary");
+    // Submit only enables once the editor has registered the text, so look for
+    // it after typing rather than before.
+    let submitBtn = null;
+    for (let attempt = 0; attempt < 8 && !submitBtn; attempt++) {
+      submitBtn = findCommentSubmit(scope, commentInput);
+      if (!submitBtn) await HumanBehavior.sleep(400);
+    }
+    if (!submitBtn) return { commented: false, error: "Submit button not found" };
 
-    if (submitBtn) {
-      await HumanBehavior.humanClick(submitBtn);
-      await HumanBehavior.sleep(HumanBehavior.clampedGaussian(1500, 3000));
-      return { commented: true };
+    await HumanBehavior.humanClick(submitBtn);
+    await HumanBehavior.sleep(HumanBehavior.clampedGaussian(2000, 3500));
+    return { commented: true };
+  }
+
+  /**
+   * Like and comment on one card of the feed, in place.
+   *
+   * Feed mode used to open each post's permalink first. The redesign often
+   * renders no permalink on the card at all, so there is nothing to navigate
+   * to — and acting on the card directly is both what a person does and one
+   * fewer page load per post.
+   */
+  async function engageFeedPost({ postKey, selector, comment, alsoLike }) {
+    const root = resolveEngagementRoot({ postKey, selector });
+    if (!root) {
+      return { liked: false, commented: false, error: "That post is no longer on the page" };
     }
 
-    return { commented: false, error: "Submit button not found" };
+    await bringIntoView(root);
+
+    const out = { liked: false, alreadyLiked: false, commented: false };
+
+    if (alsoLike !== false) {
+      const like = await likePost(null, root);
+      out.liked = Boolean(like.liked);
+      out.alreadyLiked = Boolean(like.alreadyLiked);
+      if (like.error) out.likeError = like.error;
+      await HumanBehavior.sleep(HumanBehavior.clampedGaussian(1200, 3000));
+    }
+
+    if (comment && String(comment).trim()) {
+      const posted = await commentOnPost(null, comment, root);
+      out.commented = Boolean(posted.commented);
+      if (posted.error) out.error = posted.error;
+    }
+
+    return out;
   }
 
   // ─── Autopilot: read down the LinkedIn home feed ──────────────────────────
@@ -3440,22 +3671,19 @@
    * infinite and lazily rendered, so a jump loses everything in between.
    */
   async function scrapeFeedPosts(maxPosts) {
-    const FEED_ITEM_SELECTOR =
-      "div.feed-shared-update-v2, " +
-      "div[data-id^='urn:li:activity'], " +
-      "div[data-urn^='urn:li:activity'], " +
-      ".scaffold-finite-scroll__content > div";
-
     try {
-      await waitForElement(FEED_ITEM_SELECTOR, 12000);
+      await waitForElement(FEED_CARD_SELECTORS.join(", "), 12000);
     } catch {
       console.warn("[WinPilot CS] scrapeFeedPosts: feed never rendered any cards");
     }
 
     await new Promise((r) => setTimeout(r, 1500));
 
+    feedCardRegistry.clear();
+
     const posts = [];
-    const seenUrls = new Set();
+    const seenKeys = new Set();
+    const seenCards = new Set();
     let stalledPasses = 0;
 
     // Up to 12 passes down the feed. The loop exits early once we have enough,
@@ -3464,13 +3692,17 @@
     for (let pass = 0; pass < 12 && posts.length < maxPosts; pass++) {
       const before = posts.length;
 
-      for (const item of document.querySelectorAll(FEED_ITEM_SELECTOR)) {
+      for (const item of findFeedCards()) {
         if (posts.length >= maxPosts) break;
+        if (seenCards.has(item)) continue;
+        seenCards.add(item);
+
+        await expandSeeMore(item);
         const parsed = parseFeedCard(item);
         if (!parsed) continue;
-        if (seenUrls.has(parsed.normalizedUrl)) continue;
-        seenUrls.add(parsed.normalizedUrl);
-        delete parsed.normalizedUrl;
+        if (seenKeys.has(parsed.postKey)) continue;
+        seenKeys.add(parsed.postKey);
+        feedCardRegistry.set(parsed.postKey, item);
         posts.push(parsed);
       }
 
@@ -3496,19 +3728,83 @@
       await new Promise((r) => setTimeout(r, 1200 + Math.random() * 1200));
     }
 
-    console.log(`[WinPilot CS] scrapeFeedPosts: collected ${posts.length} posts`);
+    console.log(
+      `[WinPilot CS] scrapeFeedPosts: collected ${posts.length} posts from ${seenCards.size} cards`
+    );
     return posts;
   }
 
   /**
+   * Click a card's "see more" so the scrape reads the whole post.
+   *
+   * A comment written against a truncated post is a comment about the first
+   * three lines of it, which is exactly the kind of output that reads as a bot.
+   */
+  async function expandSeeMore(item) {
+    try {
+      const more = clickableCandidates(item).find((el) =>
+        /^(…|\.\.\.)?\s*see more$/i.test(accessibleName(el))
+      );
+      if (!more) return;
+      more.click();
+      await new Promise((r) => setTimeout(r, 250));
+    } catch {
+      // Reading the truncated text is better than failing the sweep
+    }
+  }
+
+  /** Stable-enough id for a card the redesign gives no urn or permalink for. */
+  function fingerprint(text) {
+    let hash = 5381;
+    for (let i = 0; i < text.length; i++) {
+      hash = ((hash << 5) + hash + text.charCodeAt(i)) >>> 0;
+    }
+    return hash.toString(36);
+  }
+
+  /**
+   * The post's own text.
+   *
+   * Tries the legacy commentary containers first. When none match — the
+   * redesign has no such class — it falls back to picking the longest run of
+   * text in the card that is not itself a control, which lands on the
+   * commentary because it is by far the biggest text block on a post.
+   */
+  function extractPostText(item) {
+    const known = [
+      ".update-components-text .break-words",
+      ".feed-shared-inline-show-more-text .break-words",
+      ".update-components-text span[dir]",
+      "[class*='commentary'] .break-words",
+      ".update-components-text",
+    ];
+    for (const sel of known) {
+      const el = item.querySelector(sel);
+      const text = el?.textContent?.trim();
+      if (text && text.length >= 40) return text;
+    }
+
+    let best = "";
+    for (const el of item.querySelectorAll("p, span[dir], div[dir]")) {
+      // Anything inside a control or the actor header is chrome, not the post.
+      if (el.closest("button, [role='button'], a, h2, figure")) continue;
+      if (el.querySelector("button, [role='button'], img, figure")) continue;
+      const text = el.textContent?.trim() || "";
+      if (text.length > best.length) best = text;
+    }
+    return best;
+  }
+
+  /**
    * Pull one feed card apart. Returns null for anything that is not a real
-   * post: ads, "people you may know" carousels, empty placeholder cards.
+   * post: ads, "people you may know" carousels, the share box, the sort
+   * control, empty placeholder cards.
    */
   function parseFeedCard(item) {
     try {
       const text = (el) => el?.textContent?.trim() || "";
 
-      const authorName = text(
+      let authorName = text(
         item.querySelector(".update-components-actor__title span[aria-hidden='true']") ||
         item.querySelector(".update-components-actor__name span[aria-hidden='true']") ||
         item.querySelector(".update-components-actor__title") ||
@@ -3517,11 +3813,19 @@
         item.querySelector("[class*='actor__name']")
       );
 
-      const authorHeadline = text(
-        item.querySelector(".update-components-actor__description span[aria-hidden='true']") ||
-        item.querySelector("[class*='actor__description'] span[aria-hidden='true']") ||
-        item.querySelector("[class*='actor__description']")
-      );
+      // Redesign: the only place the author is named in plain text is the
+      // control-menu button's label, "Open control menu for post by <name>".
+      if (!authorName) {
+        for (const el of item.querySelectorAll("[aria-label]")) {
+          const match = accessibleName(el).match(
+            /(?:control menu for post by|hide post by|view)\s+(.+?)(?:’s|'s)?\s*(?:profile)?$/i
+          );
+          if (match && match[1]) {
+            authorName = match[1].trim();
+            break;
+          }
+        }
+      }
 
       const authorProfileUrl =
         item.querySelector("a.update-components-actor__meta-link")?.href ||
@@ -3529,13 +3833,13 @@
         item.querySelector("a[href*='/in/']")?.href ||
         "";
 
-      let postContent = text(
-        item.querySelector(".update-components-text .break-words") ||
-        item.querySelector(".feed-shared-inline-show-more-text .break-words") ||
-        item.querySelector(".update-components-text span[dir]") ||
-        item.querySelector("[class*='commentary'] .break-words") ||
-        item.querySelector(".update-components-text")
+      const authorHeadline = text(
+        item.querySelector(".update-components-actor__description span[aria-hidden='true']") ||
+        item.querySelector("[class*='actor__description'] span[aria-hidden='true']") ||
+        item.querySelector("[class*='actor__description']")
       );
+
+      const postContent = extractPostText(item);
 
       // A promoted card has no commentary worth reading and a "Promoted"
       // label; skip both it and any card with nothing to react to.
@@ -3543,7 +3847,12 @@
       if (/\bPromoted\b/.test(itemText.slice(0, 400))) return null;
       if (!postContent || postContent.length < 40) return null;
 
-      // The feed rarely renders a direct post link, but every real update
+      // Only act on things that can actually be acted on. This is also what
+      // drops the share box and the "Sort by" control, both of which are
+      // role="listitem" in the redesigned feed.
+      if (!findLikeButton(item) && !findCommentButton(item)) return null;
+
+      // The feed rarely renders a direct post link, but a legacy update
       // carries its activity urn — which is enough to build the permalink.
       const urn =
         item.getAttribute("data-urn") ||
@@ -3559,9 +3868,15 @@
       if (!postUrl && urn.startsWith("urn:li:activity")) {
         postUrl = `https://www.linkedin.com/feed/update/${urn}/`;
       }
-      if (!postUrl) return null;
 
-      const normalizedUrl = postUrl.split("?")[0].replace(/\/$/, "");
+      // The redesign exposes neither, so fall back to a content fingerprint.
+      // It is only ever used as a dedupe key and a registry handle, never
+      // navigated to, so it does not need to be a real URL — but it does need
+      // to be the same string the next time this post comes round.
+      const postKey =
+        (postUrl && postUrl.split("?")[0].replace(/\/$/, "")) ||
+        urn ||
+        `winpilot:post:${fingerprint(`${authorName}|${postContent.slice(0, 200)}`)}`;
 
       const reactionsEl = item.querySelector(
         "[class*='social-details-social-counts__reactions-count'], " +
@@ -3572,8 +3887,10 @@
       );
 
       return {
-        postUrl,
-        normalizedUrl,
+        postKey,
+        // Kept for the server's dedupe and the journal. Falls back to the key
+        // so a redesigned card is still deduped, just not linkable.
+        postUrl: postUrl || postKey,
         postId: urn,
         authorName,
         authorHeadline,
@@ -3587,6 +3904,7 @@
       return null;
     }
   }
+
 
   // ─── Lead Generation: scrape posts from LinkedIn search/feed ──────────────
 

@@ -201,6 +201,25 @@ async function usedToday(
 }
 
 /**
+ * How many more actions of this kind today's ceiling still allows.
+ *
+ * Counts real LinkedIn actions from DailyUsage, not queued tasks — a feed
+ * sweep performs many actions under one task, so task counts stopped being a
+ * usable proxy for spend once feed mode started working several posts per
+ * pass.
+ */
+export async function remainingActionsToday(
+  userId: string,
+  config: IAgentConfig,
+  budget: BudgetKey,
+  now = new Date()
+): Promise<number> {
+  const ceiling = dailyCeiling(config, budget, now);
+  const used = await usedToday(userId, budget, config.workingHours.timezone);
+  return Math.max(0, ceiling - used);
+}
+
+/**
  * When the cooldown for this budget category expires.
  * Uses the minimum of the configured window — the extension adds its own
  * human-shaped jitter on top, so the governor only enforces the floor.

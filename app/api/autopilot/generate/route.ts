@@ -37,6 +37,12 @@ import { applyRandomSkipping } from "@/lib/anti-detection/patterns";
 import { polishComment, rejectReason } from "@/lib/autopilot/comment-quality";
 
 const postSchema = z.object({
+  /**
+   * How the extension will find this card again on the page it scraped it
+   * from. LinkedIn's redesigned feed renders no urn and often no permalink, so
+   * this — not the URL — is the identity that survives the round trip.
+   */
+  postKey: z.string().max(600).default(""),
   postUrl: z.string().max(600),
   postContent: z.string().max(4000).default(""),
   authorName: z.string().max(200).default(""),
@@ -45,11 +51,19 @@ const postSchema = z.object({
 
 const bodySchema = z.object({
   taskId: z.string().length(24),
-  action: z.enum(["pick_post", "comment"]),
+  action: z.enum(["pick_post", "unseen_posts", "comment"]),
   /** Where the posts came from. Selects which brain judges them. */
   source: z.enum(["feed", "search"]).default("search"),
   /** Feed mode only — mirrors config.feed.pitchOnJobPosts. */
   pitchOnJobPosts: z.boolean().default(true),
+  /**
+   * Feed mode only. Write a comment for this post whatever it is, instead of
+   * letting the model decline. Feed mode is coverage: the user asked for every
+   * post on the feed to be engaged with, not for the agent to curate.
+   */
+  force: z.boolean().default(false),
+  /** unseen_posts only — how many to hand back. */
+  limit: z.number().int().min(1).max(40).default(5),
   posts: z.array(postSchema).max(60).optional(),
   post: postSchema.optional(),
 });
@@ -78,19 +92,68 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "Task not found" }, { status: 404 });
     }
 
-    const { action, source, pitchOnJobPosts } = parsed.data;
+    const { action, source, pitchOnJobPosts, force, limit } = parsed.data;
+
+    if (action === "unseen_posts") {
+      return unseenPosts(userId, parsed.data.posts ?? [], limit);
+    }
 
     if (action === "pick_post") {
       return pickPost(userId, parsed.data.posts ?? [], source, pitchOnJobPosts);
     }
 
     return source === "feed"
-      ? feedComment(userId, parsed.data.post, pitchOnJobPosts)
+      ? feedComment(userId, parsed.data.post, pitchOnJobPosts, force)
       : generateComment(userId, parsed.data.post);
   } catch (error) {
     console.error("[Autopilot/Generate] Failed:", error);
     return NextResponse.json({ error: "Internal server error" }, { status: 500 });
   }
+}
+
+// ── Feed mode: which of these have I not been through yet? ──────────────────
+
+/**
+ * Filter a feed sweep down to the posts the agent has not already acted on,
+ * in the order the feed showed them.
+ *
+ * No AI and no sampling. Feed mode's whole job is to work down the feed, so
+ * the only reason to leave a post out is that it has already been engaged
+ * with — which only the server knows, because only the server has the history.
+ *
+ * Dedupe is by `postKey`, falling back to the URL. The redesigned feed renders
+ * neither a urn nor a permalink on most cards, so the extension sends a
+ * content fingerprint instead and it is that string which gets recorded
+ * against the activity log.
+ */
+async function unseenPosts(
+  userId: string,
+  posts: z.infer<typeof postSchema>[],
+  limit: number
+): Promise<NextResponse> {
+  if (posts.length === 0) {
+    return NextResponse.json({ posts: [], reason: "No posts scraped" });
+  }
+
+  const keyOf = (p: { postKey?: string; postUrl: string }) =>
+    normaliseUrl(p.postKey || p.postUrl);
+
+  const keys = posts.map(keyOf);
+  const seen = await ActivityLog.find({
+    userId,
+    module: "autopilot",
+    linkedinUrl: { $in: keys },
+  })
+    .select("linkedinUrl")
+    .lean();
+
+  const seenSet = new Set(seen.map((s) => normaliseUrl(s.linkedinUrl || "")));
+  const fresh = posts.filter((p) => !seenSet.has(keyOf(p)));
+
+  return NextResponse.json({
+    posts: fresh.slice(0, limit),
+    total: fresh.length,
+  });
 }
 
 // ── Pick a post worth engaging with ─────────────────────────────────────────
@@ -205,7 +268,8 @@ Reply with ONLY the index number, or -1 if none is worth commenting on.`,
 async function feedComment(
   userId: string,
   post: z.infer<typeof postSchema> | undefined,
-  pitchOnJobPosts: boolean
+  pitchOnJobPosts: boolean,
+  force = false
 ): Promise<NextResponse> {
   if (!post) {
     return NextResponse.json({ error: "No post provided" }, { status: 400 });
@@ -266,11 +330,14 @@ async function feedComment(
   }
 
   const postType = generated.postType || "opinion";
+  // A pitch is allowed to be longer, so it gets a higher floor too.
+  const isPitch = postType === "hiring" && pitchOnJobPosts;
 
-  // The model decided there was nothing worth saying. That is a valid outcome,
-  // not an error — 200 so the extension records a clean skip rather than a
-  // failure that burns a retry.
-  if (generated.engage === false) {
+  // The model decided there was nothing worth saying. Normally that is a valid
+  // outcome, not an error — 200 so the extension records a clean skip rather
+  // than a failure that burns a retry. Under `force` it is overridden: feed
+  // mode is coverage, and the user asked for every post to get a response.
+  if (generated.engage === false && !force) {
     return NextResponse.json({
       skip: true,
       postType,
@@ -278,10 +345,40 @@ async function feedComment(
     });
   }
 
-  const comment = polishComment(generated.comment || "");
-  // A pitch is allowed to be longer, so it gets a higher floor too.
-  const isPitch = postType === "hiring" && pitchOnJobPosts;
-  const problem = rejectReason(comment, isPitch ? 40 : 15);
+  let comment = polishComment(generated.comment || "");
+  let problem = rejectReason(comment, isPitch ? 40 : 15);
+
+  // Under `force`, a declined or unusable comment gets one more attempt with
+  // the model told plainly that opting out is not on the table. Two bad draws
+  // in a row is rare enough that skipping then is the honest outcome — posting
+  // an empty string, or boilerplate, would be worse than the gap.
+  if (force && problem) {
+    try {
+      const retry = await provider.generateJSON<FeedCommentResult>(
+        buildFeedCommentPrompt({
+          persona,
+          memories,
+          northStar: goal ? sanitizeForAI(goal.northStar) : undefined,
+          pitchOnJobPosts,
+          mustEngage: true,
+          post: {
+            authorName: sanitizeForAI(post.authorName),
+            authorHeadline: sanitizeForAI(post.authorHeadline),
+            postContent: sanitizeForAI(post.postContent).slice(0, 2500),
+          },
+        }),
+        { temperature: 0.9, maxTokens: 600 }
+      );
+      const second = polishComment(retry.comment || "");
+      const secondProblem = rejectReason(second, isPitch ? 40 : 15);
+      if (!secondProblem) {
+        comment = second;
+        problem = null;
+      }
+    } catch {
+      // Fall through to the skip below — a failed retry is not a task failure
+    }
+  }
 
   if (problem) {
     return NextResponse.json({

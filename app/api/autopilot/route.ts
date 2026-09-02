@@ -34,6 +34,7 @@ const configSchema = z.object({
       commentRatio: z.number().min(0).max(1),
       pitchOnJobPosts: z.boolean(),
       postsPerSweep: z.number().min(5).max(60),
+      postsPerPass: z.number().min(1).max(25),
     })
     .partial()
     .optional(),

@@ -569,16 +569,18 @@ async function buildPayload(
  *
  * Feed mode has no goal, no cycle and no channel mix to apportion — the whole
  * decision is "how many comments and how many bare likes, inside today's
- * budget". Each queued task is one trip down the feed: the extension reads it,
- * the server picks the next post it has not touched, and the extension acts on
- * that one post. Working through the feed is what happens across the day's
- * worth of tasks, not inside any single one.
+ * budget". Each queued task is one trip down the feed, and the extension works
+ * every post on that trip it has not already been through: reads it, likes it,
+ * comments on it, moves down. No post is picked over another. `maxEngagements`
+ * on the payload is what keeps that inside the budget — it is set from the
+ * actions the day has left, not from a task count, because one task now spends
+ * many actions.
  *
  * Splitting comments and likes into separate tasks (rather than one task that
  * does both) is deliberate: the governor prices, paces and rate-limits per
  * action, so a comment that also likes would spend two budgets under one
- * cooldown. The extension does like the post it comments on — that pairing is
- * reported in the result and charged to both counters there.
+ * cooldown. The extension does like the posts it comments on — that pairing is
+ * reported per post in the result and charged to both counters there.
  */
 export async function topUpFeedQueue(
   userId: string,
@@ -593,25 +595,42 @@ export async function topUpFeedQueue(
   if (queued >= QUEUE_TARGET) return 0;
 
   const room = QUEUE_TARGET - queued;
+  // Spread then re-default: a config document written before a setting existed
+  // carries the key as undefined, which would otherwise win over the default.
   const settings = { ...DEFAULT_FEED_SETTINGS, ...(config.feed ?? {}) };
+  settings.postsPerSweep ||= DEFAULT_FEED_SETTINGS.postsPerSweep;
+  settings.postsPerPass ||= DEFAULT_FEED_SETTINGS.postsPerPass;
   const ratio = Math.min(1, Math.max(0, settings.commentRatio));
 
-  // Round the comment share up: on a small queue the user would rather see one
-  // comment and one like than two likes.
-  const wantComments = Math.min(room, Math.ceil(room * ratio));
-
-  const [commentRoom, likeRoom] = await Promise.all([
-    remainingToday(userId, config, "comment_on_feed"),
-    remainingToday(userId, config, "like_post"),
+  // Actions left today, not tasks left today. A sweep spends one action per
+  // post it engages, so sizing the queue off task counts would let the agent
+  // run several times over the configured ceiling.
+  const [commentActions, likeActions] = await Promise.all([
+    governor.remainingActionsToday(userId, config, "comments"),
+    governor.remainingActionsToday(userId, config, "likes"),
   ]);
 
-  const comments = Math.min(wantComments, commentRoom);
-  // Whatever the comment budget could not absorb goes to likes rather than
-  // leaving the queue half empty — a spent comment budget should slow the agent
-  // down, not stop it.
-  const likes = Math.min(room - comments, likeRoom);
+  // How many posts today still has room to engage at all.
+  //
+  // Every engaged post is liked, so the like budget caps the total, and the
+  // ratio's comment share has to fit inside the comment budget on top of that.
+  // Once the comment budget is gone entirely the cap lifts again and the rest
+  // of the day runs as bare likes — a spent comment budget should slow the
+  // agent down, not stop it.
+  const engageable =
+    ratio > 0 && commentActions > 0
+      ? Math.min(likeActions, Math.floor(commentActions / ratio))
+      : likeActions;
+  const commentPosts = Math.min(commentActions, Math.ceil(engageable * ratio));
+  const likePosts = Math.max(0, engageable - commentPosts);
+
+  const perPass = Math.max(1, settings.postsPerPass);
+  const comments = Math.min(room, Math.ceil(commentPosts / perPass));
+  const likes = Math.min(room - comments, Math.ceil(likePosts / perPass));
 
   let created = 0;
+  let commentBudgetLeft = commentPosts;
+  let likeBudgetLeft = likePosts;
   const made: Record<string, number> = { comment_on_feed: 0, like_post: 0 };
 
   for (const [kind, count] of [
@@ -619,8 +638,17 @@ export async function topUpFeedQueue(
     ["like_post", likes],
   ] as [TaskKind, number][]) {
     for (let i = 0; i < count && created < room; i++) {
-      const task = await createFeedTask(userId, settings, kind, created);
+      // Each pass is handed its own slice of the day's budget, so the sweeps
+      // in the queue cannot collectively outrun the ceiling.
+      const pool = kind === "comment_on_feed" ? commentBudgetLeft : likeBudgetLeft;
+      const maxEngagements = Math.min(perPass, pool);
+      if (maxEngagements < 1) break;
+
+      const task = await createFeedTask(userId, settings, kind, created, maxEngagements);
       if (!task) break;
+
+      if (kind === "comment_on_feed") commentBudgetLeft -= maxEngagements;
+      else likeBudgetLeft -= maxEngagements;
       made[kind]++;
       created++;
     }
@@ -631,11 +659,11 @@ export async function topUpFeedQueue(
       userId,
       entryType: "decision",
       phase: "planning",
-      text: `Queued ${created} feed pass${created === 1 ? "" : "es"} — ${made.comment_on_feed} to read and comment on, ${made.like_post} to read and like. I work down the feed one post at a time and skip anything I have nothing real to say about.`,
+      text: `Queued ${created} feed pass${created === 1 ? "" : "es"} — ${made.comment_on_feed} to read and comment on, ${made.like_post} to read and like. Each pass works down the feed and engages every post on it I have not already been through, up to ${settings.postsPerPass} at a time.`,
     });
   } else if (queued === 0) {
     const why =
-      commentRoom <= 0 && likeRoom <= 0
+      commentActions <= 0 && likeActions <= 0
         ? "Today's comment and like budgets are both spent."
         : "Nothing could be queued this tick.";
     const text = `${why} I will pick the feed back up when the budget resets.`;
@@ -659,7 +687,8 @@ async function createFeedTask(
   userId: string,
   settings: { postsPerSweep: number; pitchOnJobPosts: boolean },
   kind: TaskKind,
-  index: number
+  index: number,
+  maxEngagements: number
 ): Promise<IAgentTask | null> {
   // Spread the batch over the next few hours. The governor's cooldowns are the
   // real pacing; this only stops everything coming due at once.
@@ -676,7 +705,11 @@ async function createFeedTask(
       source: "feed",
       postsPerSweep: settings.postsPerSweep,
       pitchOnJobPosts: settings.pitchOnJobPosts,
-      // The comment task likes the post it comments on, the way a person does.
+      // How many posts this one pass may engage. Sized from the day's
+      // remaining action budget, so the sweep cannot outrun the governor.
+      maxEngagements,
+      // The comment task likes the posts it comments on, the way a person does.
+      // A like-only pass likes them regardless — that is the whole task.
       alsoLike: kind === "comment_on_feed",
     },
     state: "queued",
@@ -684,8 +717,8 @@ async function createFeedTask(
     priority: kind === "comment_on_feed" ? 60 : 40,
     rationale:
       kind === "comment_on_feed"
-        ? "Read the feed, find a post worth a real response, like it and comment."
-        : "Read the feed and like a post worth being seen on.",
+        ? `Work down the feed and like and comment on up to ${maxEngagements} posts I have not been through yet.`
+        : `Work down the feed and like up to ${maxEngagements} posts I have not been through yet.`,
   });
 }
 

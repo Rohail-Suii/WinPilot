@@ -27,6 +27,7 @@ const m = vi.hoisted(() => ({
   check: vi.fn(),
   closeCycle: vi.fn(),
   getUserAIProvider: vi.fn(),
+  usageFindOne: vi.fn(),
 }));
 
 vi.mock("@/lib/db/connection", () => ({ default: vi.fn().mockResolvedValue(undefined) }));
@@ -76,6 +77,10 @@ vi.mock("@/lib/db/models/agent-task", () => ({
   ACTIVE_TASK_STATES: ["queued", "dispatched", "running"],
 }));
 vi.mock("@/lib/db/models/agent-journal", () => ({ default: { exists: m.journalExists } }));
+// Feed budgets are counted in real LinkedIn actions, not in tasks: one sweep
+// spends one action per post it engages, so DailyUsage — not the task
+// collection — is what decides how much a top-up may queue.
+vi.mock("@/lib/db/models/daily-usage", () => ({ default: { findOne: m.usageFindOne } }));
 vi.mock("@/lib/db/models/agent-target", () => ({
   default: { findOne: vi.fn(), aggregate: m.targetAggregate },
   ACTIVE_STAGES: [],
@@ -100,7 +105,7 @@ function makeConfig(overrides: Record<string, unknown> = {}) {
     enabled: true,
     mode: "feed",
     mission: "",
-    feed: { commentRatio: 0.5, pitchOnJobPosts: true, postsPerSweep: 25 },
+    feed: { commentRatio: 0.5, pitchOnJobPosts: true, postsPerSweep: 25, postsPerPass: 5 },
     workingHours: { start: 0, end: 24, timezone: "UTC", activeDays: [0, 1, 2, 3, 4, 5, 6] },
     weeklyBudgets: {
       connects: 75,
@@ -129,6 +134,11 @@ function countingBy({ queued = 0, doneToday = 0 } = {}) {
   });
 }
 
+/** Today's DailyUsage row, as the governor reads it. */
+function usedToday(actions: Record<string, number>) {
+  return vi.fn(() => ({ lean: vi.fn().mockResolvedValue({ actions }) }));
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   m.configFindOne.mockResolvedValue(makeConfig());
@@ -143,6 +153,7 @@ beforeEach(() => {
   m.check.mockResolvedValue({ allowed: true });
   m.sendToExtension.mockReturnValue(true);
   m.getUserAIProvider.mockResolvedValue(null);
+  m.usageFindOne.mockImplementation(usedToday({}));
 });
 
 describe("feed mode tick", () => {
@@ -213,20 +224,53 @@ describe("feed mode tick", () => {
 });
 
 describe("topUpFeedQueue", () => {
-  it("splits the queue by the configured comment ratio", async () => {
+  it("splits the day's engagement by the configured comment ratio", async () => {
+    // The ratio splits posts, not tasks: one sweep engages up to postsPerPass
+    // of them, so what has to come out at 50/50 is the budget each kind of
+    // sweep is handed, not how many sweeps there are.
     const created = await topUpFeedQueue(USER, makeConfig() as never);
 
-    const kinds = m.taskCreate.mock.calls.map(([doc]) => doc.kind);
-    expect(created).toBe(kinds.length);
-    expect(kinds.filter((k) => k === "comment_on_feed")).toHaveLength(6);
-    expect(kinds.filter((k) => k === "like_post")).toHaveLength(6);
+    const docs = m.taskCreate.mock.calls.map(([doc]) => doc);
+    expect(created).toBe(docs.length);
+
+    const postsFor = (kind: string) =>
+      docs
+        .filter((d) => d.kind === kind)
+        .reduce((sum, d) => sum + d.payload.maxEngagements, 0);
+
+    // 150 likes / 7 active days ≈ 21 posts a day, half of them commented on.
+    expect(postsFor("comment_on_feed")).toBe(11);
+    expect(postsFor("like_post")).toBe(10);
+  });
+
+  it("never hands out more posts per pass than the setting allows", async () => {
+    await topUpFeedQueue(USER, makeConfig() as never);
+
+    for (const [doc] of m.taskCreate.mock.calls) {
+      expect(doc.payload.maxEngagements).toBeGreaterThan(0);
+      expect(doc.payload.maxEngagements).toBeLessThanOrEqual(5);
+    }
+  });
+
+  it("keeps the queued sweeps inside the day's comment budget", async () => {
+    // 100 comments / 7 active days ≈ 14, of which 10 are already spent.
+    m.usageFindOne.mockImplementation(usedToday({ comments: 10, likes: 0 }));
+
+    await topUpFeedQueue(USER, makeConfig() as never);
+
+    const commentPosts = m.taskCreate.mock.calls
+      .map(([doc]) => doc)
+      .filter((d) => d.kind === "comment_on_feed")
+      .reduce((sum, d) => sum + d.payload.maxEngagements, 0);
+
+    expect(commentPosts).toBeLessThanOrEqual(4);
   });
 
   it("comments on everything at a ratio of 1", async () => {
     await topUpFeedQueue(
       USER,
       makeConfig({
-        feed: { commentRatio: 1, pitchOnJobPosts: true, postsPerSweep: 25 },
+        feed: { commentRatio: 1, pitchOnJobPosts: true, postsPerSweep: 25, postsPerPass: 5 },
       }) as never
     );
 
@@ -252,7 +296,7 @@ describe("topUpFeedQueue", () => {
     await topUpFeedQueue(
       USER,
       makeConfig({
-        feed: { commentRatio: 0.5, pitchOnJobPosts: false, postsPerSweep: 40 },
+        feed: { commentRatio: 0.5, pitchOnJobPosts: false, postsPerSweep: 40, postsPerPass: 5 },
       }) as never
     );
 
@@ -263,7 +307,7 @@ describe("topUpFeedQueue", () => {
 
   it("queues nothing once the day's comment and like budgets are spent", async () => {
     // Well past both daily ceilings (100 comments and 150 likes over 7 days).
-    m.taskCountDocuments.mockImplementation(countingBy({ queued: 0, doneToday: 999 }));
+    m.usageFindOne.mockImplementation(usedToday({ comments: 999, likes: 999 }));
 
     const created = await topUpFeedQueue(USER, makeConfig() as never);
 
@@ -281,7 +325,7 @@ describe("topUpFeedQueue", () => {
   });
 
   it("says why it is idle exactly once, not on every tick", async () => {
-    m.taskCountDocuments.mockImplementation(countingBy({ queued: 0, doneToday: 999 }));
+    m.usageFindOne.mockImplementation(usedToday({ comments: 999, likes: 999 }));
 
     await topUpFeedQueue(USER, makeConfig() as never);
     expect(m.journal).toHaveBeenCalledTimes(1);
@@ -298,18 +342,12 @@ describe("topUpFeedQueue", () => {
 describe("budget spillover", () => {
   it("fills the queue with likes when the comment budget alone is spent", async () => {
     // 100 comments / 7 active days ≈ 14 a day, all of them already posted.
-    m.taskCountDocuments.mockImplementation(
-      vi.fn(async (query: Record<string, unknown>) => {
-        if (!query.kind) return 0;
-        if (query.state !== "done") return 0;
-        return query.kind === "comment_on_feed" ? 999 : 0;
-      })
-    );
+    m.usageFindOne.mockImplementation(usedToday({ comments: 999, likes: 0 }));
 
     const created = await topUpFeedQueue(USER, makeConfig() as never);
 
     const kinds = m.taskCreate.mock.calls.map(([doc]) => doc.kind);
-    expect(created).toBeGreaterThan(6);
+    expect(created).toBeGreaterThan(0);
     expect(kinds.every((k) => k === "like_post")).toBe(true);
   });
 });

@@ -88,6 +88,7 @@ interface FeedSettings {
   commentRatio: number;
   pitchOnJobPosts: boolean;
   postsPerSweep: number;
+  postsPerPass: number;
 }
 
 interface WorkingHours {
@@ -153,6 +154,7 @@ export function AutopilotClient() {
     commentRatio: 0.7,
     pitchOnJobPosts: true,
     postsPerSweep: 25,
+    postsPerPass: 5,
   });
   const [savedFeed, setSavedFeed] = useState<FeedSettings | null>(null);
   const [liveEntries, setLiveEntries] = useState<JournalEntry[]>([]);
@@ -173,6 +175,7 @@ export function AutopilotClient() {
         commentRatio: 0.7,
         pitchOnJobPosts: true,
         postsPerSweep: 25,
+        postsPerPass: 5,
       };
       setFeed(feedSettings);
       setSavedFeed(feedSettings);
@@ -604,8 +607,33 @@ export function AutopilotClient() {
                   className="mt-1.5 max-w-[8rem]"
                 />
                 <p className="text-xs text-gray-500 mt-1.5">
-                  How far down the feed it scrolls before choosing. More gives it a
-                  better pick and takes longer.
+                  How far down the feed it scrolls in one pass. More posts read means
+                  more it can engage with, and a longer scroll.
+                </p>
+              </div>
+
+              <div>
+                <label htmlFor="posts-per-pass" className="text-sm text-gray-300">
+                  Posts engaged per pass
+                </label>
+                <Input
+                  id="posts-per-pass"
+                  type="number"
+                  min={1}
+                  max={25}
+                  value={feed.postsPerPass}
+                  onChange={(e) =>
+                    setFeed({
+                      ...feed,
+                      postsPerPass: Math.max(1, Math.min(25, Number(e.target.value) || 1)),
+                    })
+                  }
+                  className="mt-1.5 max-w-[8rem]"
+                />
+                <p className="text-xs text-gray-500 mt-1.5">
+                  It likes and comments on every post it reads that it has not been
+                  through before, up to this many per trip down the feed. Your weekly
+                  budgets are still the hard ceiling.
                 </p>
               </div>
 

@@ -278,6 +278,14 @@ export interface FeedCommentContext {
   northStar?: string;
   /** Whether hiring posts should get a pitch or just a normal comment. */
   pitchOnJobPosts: boolean;
+  /**
+   * Take "say nothing" off the table.
+   *
+   * Feed mode is coverage, not curation — the user asked for every post on the
+   * feed to be engaged with. The taste rules still hold, so the model has to
+   * find the real angle rather than fall back on praise.
+   */
+  mustEngage?: boolean;
   post: {
     authorName: string;
     authorHeadline: string;
@@ -331,7 +339,9 @@ FIRST, decide what the post actually is:
 - "promotional"   a course, webinar, newsletter, lead magnet, or engagement bait
 - "noise"         politics, motivational filler, reposted quotes, anything with nothing to react to
 
-THEN decide whether to say anything at all. Set engage=false for "promotional" and "noise", and for any post where you have nothing real to add. Saying nothing is a good outcome. A generic comment is worse than silence, because it is the thing that makes an account look automated.
+${ctx.mustEngage
+        ? `THEN write a comment. Opting out is not available on this one: engage MUST be true and the comment MUST be non-empty. Even on a promotional or low-substance post there is something real to say — the assumption it rests on, the number it leaves out, the case where it does not hold, or one specific question only someone who has built this would ask. Find that. What you must NOT do is fall back on praise or agreement to fill the space; every rule below still binds.`
+        : `THEN decide whether to say anything at all. Set engage=false for "promotional" and "noise", and for any post where you have nothing real to add. Saying nothing is a good outcome. A generic comment is worse than silence, because it is the thing that makes an account look automated.`}
 
 ${ctx.pitchOnJobPosts ? PITCH_RULES : `HIRING POSTS: pitching is turned off. Treat a hiring post like any other post and comment on its substance, not on your availability.`}
 
@@ -342,7 +352,7 @@ Respond with valid JSON only. Schema:
   "postType": "hiring"|"technical"|"opinion"|"personal_news"|"promotional"|"noise",
   "engage": boolean,
   "angle": "string (one line: the stance you are taking and why it is worth saying. Written for yourself, not for the reader.)",
-  "comment": "string (the comment exactly as it should be posted. Empty string if engage is false.)",
+  "comment": "string (the comment exactly as it should be posted.${ctx.mustEngage ? " Never empty." : " Empty string if engage is false."})",
   "skipReason": "string (only when engage is false)"
 }`,
     },

@@ -60,8 +60,9 @@ export type AutonomyMode = "auto" | "review";
 /**
  * Which brain drives the agent.
  *
- * "feed"       — the simple one. Work down the LinkedIn home feed, read each
- *                post, like it, and leave a comment worth reading. No mission,
+ * "feed"       — the simple one. Work down the LinkedIn home feed and engage
+ *                every post on it: read it, like it, leave a comment worth
+ *                reading, move to the next one. No picking, no mission,
  *                no goal decomposition, no weekly cycles. This is the default
  *                because it is the mode that produces visible activity on day
  *                one without any setup beyond a career profile.
@@ -80,16 +81,26 @@ export interface IFeedSettings {
   /** On a hiring post, comment with a real pitch backed by real projects. */
   pitchOnJobPosts: boolean;
   /**
-   * How far down the feed to read in one pass. Higher gives the picker more to
-   * choose from at the cost of a longer scroll.
+   * How far down the feed to read in one pass. Higher gives the sweep more
+   * posts to work through at the cost of a longer scroll.
    */
   postsPerSweep: number;
+  /**
+   * How many of those posts one pass may actually engage with.
+   *
+   * The pass engages every unseen post it finds, in feed order, until it hits
+   * this — there is no picking and no passing over. The real ceiling is still
+   * the day's action budget; this only decides how much of it one trip down
+   * the feed is allowed to spend in a sitting.
+   */
+  postsPerPass: number;
 }
 
 export const DEFAULT_FEED_SETTINGS: IFeedSettings = {
   commentRatio: 0.7,
   pitchOnJobPosts: true,
   postsPerSweep: 25,
+  postsPerPass: 5,
 };
 
 export interface IWeeklyBudgets {
@@ -161,6 +172,7 @@ const AgentConfigSchema = new Schema<IAgentConfig>(
       commentRatio: { type: Number, default: DEFAULT_FEED_SETTINGS.commentRatio, min: 0, max: 1 },
       pitchOnJobPosts: { type: Boolean, default: DEFAULT_FEED_SETTINGS.pitchOnJobPosts },
       postsPerSweep: { type: Number, default: DEFAULT_FEED_SETTINGS.postsPerSweep, min: 5, max: 60 },
+      postsPerPass: { type: Number, default: DEFAULT_FEED_SETTINGS.postsPerPass, min: 1, max: 25 },
     },
     workingHours: {
       start: { type: Number, default: 9, min: 0, max: 23 },
