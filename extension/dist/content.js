@@ -137,7 +137,102 @@
     }
 
     // --- Human-like typing: character by character ---
+    /**
+     * Put the caret inside a rich-text editor, at the end of what is there.
+     *
+     * execCommand edits at the selection, so without this the insertion has
+     * nowhere to land and silently does nothing.
+     */
+    function placeCaretAtEnd(element) {
+      const range = document.createRange();
+      range.selectNodeContents(element);
+      range.collapse(false);
+      const selection = window.getSelection();
+      selection.removeAllRanges();
+      selection.addRange(range);
+    }
+
+    /**
+     * Type into a contenteditable editor, one character at a time.
+     *
+     * LinkedIn's comment box is TipTap/ProseMirror: a contenteditable div with
+     * no `value` and no reaction to synthetic KeyboardEvents. Setting `.value`
+     * on it — which is all the plain-input path does — inserts nothing at all,
+     * so the box stayed empty, its submit button stayed disabled, and every
+     * comment came back as "submit button not found".
+     *
+     * execCommand("insertText") is the one approach that works, because the
+     * browser performs a real edit: it mutates the DOM and fires the native
+     * beforeinput/input pair that ProseMirror listens for. It is deprecated and
+     * still the only thing that does this.
+     */
+    async function typeIntoRichEditor(element, text) {
+      element.focus();
+      element.dispatchEvent(new FocusEvent("focus", { bubbles: true }));
+      await sleep(clampedGaussian(100, 300));
+      placeCaretAtEnd(element);
+
+      // Clear anything already in the box — a retry must not append to a draft.
+      if ((element.textContent || "").trim()) {
+        document.execCommand("selectAll", false, null);
+        document.execCommand("delete", false, null);
+        await sleep(clampedGaussian(50, 150));
+      }
+
+      for (const char of text) {
+        element.dispatchEvent(
+          new KeyboardEvent("keydown", { key: char, bubbles: true, cancelable: true })
+        );
+
+        const inserted = document.execCommand("insertText", false, char);
+        if (!inserted) {
+          // execCommand refused. Write the character in and announce it the way
+          // the browser would, so the editor still syncs.
+          const selection = window.getSelection();
+          if (selection?.rangeCount) {
+            const range = selection.getRangeAt(0);
+            range.deleteContents();
+            const node = document.createTextNode(char);
+            range.insertNode(node);
+            range.setStartAfter(node);
+            range.collapse(true);
+            selection.removeAllRanges();
+            selection.addRange(range);
+          } else {
+            element.textContent += char;
+          }
+          element.dispatchEvent(
+            new InputEvent("input", { bubbles: true, inputType: "insertText", data: char })
+          );
+        }
+
+        element.dispatchEvent(
+          new KeyboardEvent("keyup", { key: char, bubbles: true, cancelable: true })
+        );
+
+        let delay;
+        if (char === " " || char === "." || char === ",") {
+          delay = clampedGaussian(100, 250);
+        } else if (char === char.toUpperCase() && char !== char.toLowerCase()) {
+          delay = clampedGaussian(80, 200);
+        } else {
+          delay = clampedGaussian(40, 130);
+        }
+        if (Math.random() < 0.05) delay += clampedGaussian(200, 600);
+        await sleep(delay);
+      }
+
+      await sleep(clampedGaussian(100, 300));
+      element.dispatchEvent(new Event("change", { bubbles: true }));
+    }
+
     async function humanType(element, text) {
+      // A contenteditable editor has no `value` to set, so the input path below
+      // would type nothing into it at all.
+      if (element?.isContentEditable || element?.getAttribute?.("contenteditable") === "true") {
+        return typeIntoRichEditor(element, text);
+      }
+
       // Focus the element naturally
       element.focus();
       element.dispatchEvent(new FocusEvent("focus", { bubbles: true }));
@@ -3568,6 +3663,10 @@
    * wrong post.
    */
   const COMMENT_INPUT_SELECTORS = [
+    // The redesign's editor: a TipTap/ProseMirror contenteditable, labelled
+    // for screen readers and wrapped in a testid'd container.
+    "[aria-label='Text editor for creating comment']",
+    "[data-testid='ui-core-tiptap-text-editor-wrapper'] [contenteditable='true']",
     ".comments-comment-box__form .ql-editor",
     ".comments-comment-box .ql-editor",
     ".comments-comment-texteditor .ql-editor",
@@ -3609,6 +3708,21 @@
     // post has its box open — which would publish this comment under that post.
     const ceiling = scope && scope !== document ? scope : null;
 
+    // The redesign wraps the submit button in a div whose id ends in
+    // "commentButtonSection" plus the post's own key, which makes it both
+    // unambiguous and unique to this post. Every class around it is a hashed
+    // token and the button itself is a type="button" captioned "Comment" —
+    // identical, by name, to the button on the card that opens the box. This
+    // id is the only thing that tells the two apart.
+    const section = (root) =>
+      root.querySelector?.(SUBMIT_SECTION_SELECTOR) &&
+      firstEnabled(root.querySelectorAll(`${SUBMIT_SECTION_SELECTOR} button, ${SUBMIT_SECTION_SELECTOR} [role='button']`));
+
+    if (ceiling) {
+      const byId = section(ceiling);
+      if (byId) return byId;
+    }
+
     const roots = [];
     if (input) {
       const form = input.closest("form");
@@ -3617,7 +3731,7 @@
       if (box && (!ceiling || ceiling.contains(box))) roots.push(box);
 
       let hop = input.parentElement;
-      for (let up = 0; up < 5 && hop; up++) {
+      for (let up = 0; up < 8 && hop; up++) {
         roots.push(hop);
         if (ceiling && hop === ceiling) break;
         hop = hop.parentElement;
@@ -3628,6 +3742,7 @@
 
     for (const root of roots) {
       const direct =
+        section(root) ||
         root.querySelector?.(".comments-comment-box__submit-button:not([disabled])") ||
         root.querySelector?.("[class*='comments-comment-box'] button[type='submit']:not([disabled])") ||
         root.querySelector?.("button[type='submit']:not([disabled])");
@@ -3635,6 +3750,26 @@
 
       const named = findActionButton(root, /^(post|submit|reply)$/i, null, SUBMIT_REJECT);
       if (named) return named;
+
+      // A button captioned "Comment" is the submit button when it is inside the
+      // box, and the button that opens the box when it is out on the card's
+      // action bar. Only accept it below the card.
+      if (root !== ceiling) {
+        const inBox = findActionButton(root, /^comment$/i);
+        if (inBox) return inBox;
+      }
+    }
+    return null;
+  }
+
+  const SUBMIT_SECTION_SELECTOR = "[id*='commentButtonSection']";
+
+  /** The first of these that is actually clickable. */
+  function firstEnabled(nodes) {
+    for (const el of nodes || []) {
+      if (el.disabled === true) continue;
+      if (el.getAttribute("aria-disabled") === "true") continue;
+      return el;
     }
     return null;
   }
@@ -3642,7 +3777,8 @@
   // The card's own Comment button reopens the box rather than submitting it,
   // and a video attachment brings its own "Play"/"Pause"/"Done" controls. None
   // of them are the submit button, however they are named.
-  const SUBMIT_REJECT = /^(comment|start a post|play|pause|done|reset|close)/i;
+  const SUBMIT_REJECT =
+    /^(start a post|play|pause|done|reset|close|show emoji|open gif|share photo|add a photo)/i;
 
   /** Buttons near the editor that are currently disabled. */
   function disabledNear(input, ceiling) {

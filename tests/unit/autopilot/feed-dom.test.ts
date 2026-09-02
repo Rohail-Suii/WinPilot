@@ -491,3 +491,95 @@ describe("commenting on the right post", () => {
     expect(h.newlyEnabled(before)).toBeNull();
   });
 });
+
+/**
+ * LinkedIn's comment box, verbatim from a live post.
+ *
+ * Two details in here are the whole reason comments were never being posted:
+ * the editor is a TipTap/ProseMirror contenteditable with no `value`, and the
+ * button that publishes is a `type="button"` captioned "Comment" — the same
+ * caption as the button on the card that opens the box. The only thing that
+ * distinguishes them is the id on the wrapper around the submit button.
+ */
+function cardWithOpenCommentBox(postKey = "CgsIgIDNkKTt1IzQAQ") {
+  document.body.innerHTML = `
+    <main>
+      <div role="list" data-testid="mainFeed">
+        <div role="listitem" id="the-card">
+          <p><span data-testid="expandable-text-box">${"a post worth responding to ".repeat(3)}</span></p>
+          <div>
+            <button type="button" aria-label="Reaction button state: no reaction">
+              <span><span>Like</span></span>
+            </button>
+            <button type="button" id="open-box"><span><div><span><span>Comment</span></span></div></span></button>
+          </div>
+          <div>
+            <div data-testid="ui-core-tiptap-text-editor-wrapper">
+              <div>
+                <div contenteditable="true" role="textbox" dir="auto" tabindex="0"
+                     aria-label="Text editor for creating comment" translate="no"
+                     class="tiptap ProseMirror" id="editor"></div>
+              </div>
+            </div>
+            <div>
+              <button type="button" aria-label="Show Emoji Picker" aria-expanded="false"></button>
+              <button type="button" aria-label="Open GIF picker" aria-haspopup="dialog"></button>
+              <button type="button" aria-label="Share photo"></button>
+            </div>
+            <div id="${postKey}-commentButtonSectionqXXn1eVFnW">
+              <button type="button" id="real-submit"><span><span>Comment</span></span></button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </main>`;
+  return document.getElementById("the-card")!;
+}
+
+describe("the comment box", () => {
+  it("finds the TipTap editor", () => {
+    const h = loadFeedHelpers();
+    const card = cardWithOpenCommentBox();
+
+    expect(h.findCommentInput(card)!.id).toBe("editor");
+  });
+
+  it("submits with the box's Comment button, not the card's", () => {
+    const h = loadFeedHelpers();
+    const card = cardWithOpenCommentBox();
+    const input = h.findCommentInput(card)!;
+
+    // Both buttons are captioned "Comment". Picking the wrong one reopens the
+    // box forever and never posts anything.
+    expect(h.findCommentSubmit(card, input)!.id).toBe("real-submit");
+  });
+
+  it("never picks an emoji, GIF or photo button as submit", () => {
+    const h = loadFeedHelpers();
+    const card = cardWithOpenCommentBox();
+    card.querySelector("[id*='commentButtonSection']")!.remove();
+    const input = h.findCommentInput(card)!;
+
+    const found = h.findCommentSubmit(card, input);
+    // With the real submit gone, it must not fall on a toolbar button.
+    if (found) {
+      expect(h.accessibleName(found)).not.toMatch(/emoji|gif|photo/i);
+    }
+  });
+
+  it("keys the submit section to this post, so two open boxes stay apart", () => {
+    const h = loadFeedHelpers();
+    const first = cardWithOpenCommentBox("post-one");
+    const feed = first.parentElement!;
+
+    const second = first.cloneNode(true) as HTMLElement;
+    second.id = "second-card";
+    second.querySelector("#real-submit")!.id = "second-submit";
+    second.querySelector("[id*='commentButtonSection']")!.id = "post-two-commentButtonSection";
+    second.querySelector("#editor")!.id = "second-editor";
+    feed.appendChild(second);
+
+    expect(h.findCommentSubmit(second, h.findCommentInput(second)!)!.id).toBe("second-submit");
+    expect(h.findCommentSubmit(first, h.findCommentInput(first)!)!.id).toBe("real-submit");
+  });
+});
