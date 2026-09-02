@@ -72,6 +72,12 @@ async function main() {
   const { startAutopilotScheduler } = await import("./lib/autopilot/scheduler");
   startAutopilotScheduler();
 
+  // The job-application sender. Same reasoning as above — it outlives requests,
+  // and it must be imported after prepare() so .env is loaded before the DB
+  // connection module is evaluated.
+  const { startOutreachWorker } = await import("./lib/outreach/worker");
+  startOutreachWorker();
+
   server.listen(port, hostname, () => {
     console.log(`> Next.js ready on http://${hostname}:${port}`);
     console.log(`> Socket.IO ready on the same port at path /api/ws`);

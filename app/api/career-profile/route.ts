@@ -8,6 +8,7 @@ import {
   upsertCareerProfile,
 } from "@/lib/services/career-profile";
 import { parseResumeWithAI } from "@/lib/services/resume-service";
+import { forgetRelevanceProfile } from "@/lib/outreach/relevance-profile";
 
 const experienceSchema = z.object({
   company: z.string().default(""),
@@ -219,6 +220,12 @@ export async function PUT(req: Request) {
     };
 
     const profile = await upsertCareerProfile(userId, data);
+
+    // The job-application relevance gate scores against this profile and caches
+    // it. Editing your skills or job titles should change which jobs the agent
+    // applies for immediately, not five minutes from now.
+    forgetRelevanceProfile(userId);
+
     return NextResponse.json({ profile, success: true });
   } catch (error) {
     console.error("[CareerProfile] PUT error:", error);

@@ -97,3 +97,11 @@ export type { IAgentTarget, TargetStage, TouchpointKind, ITouchpoint } from "./a
 
 export { default as AgentThread } from "./agent-thread";
 export type { IAgentThread, ThreadIntent, ThreadUrgency } from "./agent-thread";
+
+// ─── Job-application outreach ───────────────────────────────────────────────
+
+export { default as JobOutreach, PENDING_OUTREACH_STATUSES } from "./job-outreach";
+export type { IJobOutreach, OutreachStatus, OutreachChannel } from "./job-outreach";
+
+export { default as MasterResume } from "./master-resume";
+export type { IMasterResume } from "./master-resume";

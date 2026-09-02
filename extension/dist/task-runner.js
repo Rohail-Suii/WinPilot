@@ -362,10 +362,12 @@ async function engageOnePost(post, task, tabId, ctx, { withComment }) {
         force: true,
         pitchOnJobPosts: payload.pitchOnJobPosts !== false,
         post: {
+          postKey: post.postKey || "",
           postUrl: post.postUrl,
           postContent: (post.postContent || "").slice(0, 4000),
           authorName: post.authorName || "",
           authorHeadline: post.authorHeadline || "",
+          postLinks: (post.postLinks || []).slice(0, 12),
         },
       });
       comment = generated?.comment || "";
@@ -422,9 +424,15 @@ function summarise(p) {
   return {
     postKey: p.postKey || p.postUrl || "",
     postUrl: p.postUrl || "",
-    postContent: (p.postContent || "").slice(0, 2000),
+    // The whole post the card gave us. It used to be trimmed harder, but the
+    // "apply here" line of a hiring post is at the BOTTOM, under the
+    // requirements — trimming the tail is trimming off the address.
+    postContent: (p.postContent || "").slice(0, 3000),
     authorName: p.authorName || "",
     authorHeadline: p.authorHeadline || "",
+    // Carried so the server can spot a hiring post's application route — a
+    // mailto or a form link — without a second trip to the page.
+    postLinks: (p.postLinks || []).slice(0, 12),
   };
 }
 

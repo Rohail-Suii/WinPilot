@@ -42,6 +42,7 @@ import {
   polishComment,
   rejectReason,
 } from "@/lib/autopilot/comment-quality";
+import { captureHiringPost } from "@/lib/outreach/capture";
 
 const postSchema = z.object({
   /**
@@ -54,6 +55,21 @@ const postSchema = z.object({
   postContent: z.string().max(4000).default(""),
   authorName: z.string().max(200).default(""),
   authorHeadline: z.string().max(400).default(""),
+  /**
+   * Anchors scraped out of the post body — mailto: addresses and outbound
+   * links. This is how a hiring post's application route reaches the server:
+   * the visible text of a LinkedIn link is often truncated while the href is
+   * whole.
+   */
+  postLinks: z
+    .array(
+      z.object({
+        href: z.string().max(600),
+        text: z.string().max(200).optional(),
+      })
+    )
+    .max(12)
+    .default([]),
 });
 
 const bodySchema = z.object({
@@ -102,7 +118,7 @@ export async function POST(req: Request) {
     const { action, source, pitchOnJobPosts, force, limit } = parsed.data;
 
     if (action === "unseen_posts") {
-      return unseenPosts(userId, parsed.data.posts ?? [], limit);
+      return unseenPosts(userId, parsed.data.posts ?? [], limit, parsed.data.taskId);
     }
 
     if (action === "pick_post") {
@@ -110,7 +126,7 @@ export async function POST(req: Request) {
     }
 
     return source === "feed"
-      ? feedComment(userId, parsed.data.post, pitchOnJobPosts, force)
+      ? feedComment(userId, parsed.data.post, pitchOnJobPosts, force, parsed.data.taskId)
       : generateComment(userId, parsed.data.post);
   } catch (error) {
     console.error("[Autopilot/Generate] Failed:", error);
@@ -136,7 +152,8 @@ export async function POST(req: Request) {
 async function unseenPosts(
   userId: string,
   posts: z.infer<typeof postSchema>[],
-  limit: number
+  limit: number,
+  taskId?: string
 ): Promise<NextResponse> {
   if (posts.length === 0) {
     return NextResponse.json({ posts: [], reason: "No posts scraped" });
@@ -157,11 +174,56 @@ async function unseenPosts(
   const seenSet = new Set(seen.map((s) => normaliseUrl(s.linkedinUrl || "")));
   const fresh = posts.filter((p) => !seenSet.has(keyOf(p)));
 
+  // Every post the agent reads is checked for being a job opening, here rather
+  // than in the comment step, because a like-only pass and a spent AI budget
+  // both skip that step — and an opening with an address on it is worth more
+  // than the comment would have been. Detection is pure text matching, so a
+  // post that is not an opening costs nothing.
+  await captureOpenings(userId, fresh, taskId);
+
   return NextResponse.json({
     // limit 0 is an uncapped pass asking for everything the feed has left.
     posts: limit > 0 ? fresh.slice(0, limit) : fresh,
     total: fresh.length,
   });
+}
+
+/**
+ * Record any openings among these posts, without ever failing the caller.
+ *
+ * The sweep's job is engagement; capture is a bonus on top of it. A capture
+ * that throws (a duplicate key, a Mongo hiccup) must not cost the extension the
+ * freshness answer it actually asked for.
+ */
+async function captureOpenings(
+  userId: string,
+  posts: z.infer<typeof postSchema>[],
+  taskId?: string,
+  aiPostType?: string
+): Promise<void> {
+  const results = await Promise.allSettled(
+    posts.slice(0, 20).map((post) =>
+      captureHiringPost({
+        userId,
+        taskId,
+        aiPostType,
+        post: {
+          postKey: post.postKey || post.postUrl,
+          postUrl: post.postUrl,
+          postContent: post.postContent,
+          authorName: post.authorName,
+          authorHeadline: post.authorHeadline,
+          postLinks: post.postLinks,
+        },
+      })
+    )
+  );
+
+  for (const result of results) {
+    if (result.status === "rejected") {
+      console.error("[Autopilot/Generate] Hiring capture failed:", result.reason);
+    }
+  }
 }
 
 // ── Pick a post worth engaging with ─────────────────────────────────────────
@@ -277,7 +339,8 @@ async function feedComment(
   userId: string,
   post: z.infer<typeof postSchema> | undefined,
   pitchOnJobPosts: boolean,
-  force = false
+  force = false,
+  taskId?: string
 ): Promise<NextResponse> {
   if (!post) {
     return NextResponse.json({ error: "No post provided" }, { status: 400 });
@@ -379,6 +442,12 @@ async function feedComment(
   }
 
   const postType = generated.postType || "opinion";
+
+  // The model has now read the whole post with context, so its verdict is
+  // better than the text match made when the post was first seen. Re-running
+  // capture upgrades a post that only looked borderline; the unique index
+  // makes a second call on an already-recorded post a no-op.
+  await captureOpenings(userId, [post], taskId, postType);
   // A pitch is allowed to be longer, so it gets a higher floor too.
   const isPitch = postType === "hiring" && pitchOnJobPosts;
   const quality = {

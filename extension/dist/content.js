@@ -4166,6 +4166,48 @@
   }
 
   /**
+   * The links written into the post itself.
+   *
+   * Hiring posts put the way to apply in a link as often as in plain text — a
+   * mailto, a Google Form, an ATS page — and the visible text of those is
+   * frequently truncated ("lnkd.in/dXf…") while the href is whole. The href is
+   * therefore the reliable copy, and the server reads both.
+   *
+   * Chrome links are excluded by staying inside the commentary block where the
+   * author's own text lives; falling back to the whole card would pull in the
+   * actor link, the reaction buttons and LinkedIn's own navigation.
+   */
+  function extractPostLinks(item) {
+    const scopes = [
+      item.querySelector("[data-testid='expandable-text-box']"),
+      item.querySelector(".update-components-text"),
+      item.querySelector("[class*='commentary']"),
+      // The link-preview card LinkedIn renders under a post that shared a URL.
+      item.querySelector("[class*='update-components-article']"),
+      item.querySelector("[class*='update-components-linkedin-video']"),
+    ].filter(Boolean);
+
+    const links = [];
+    const seen = new Set();
+
+    for (const scope of scopes) {
+      for (const a of scope.querySelectorAll("a[href]")) {
+        const href = (a.getAttribute("href") || "").trim();
+        if (!href) continue;
+        if (!/^(?:https?:|mailto:)/i.test(href)) continue;
+        // Hashtag and mention links are navigation, not a way to apply.
+        if (/\/(?:search\/results|in\/|company\/)/.test(href) && !/^mailto:/i.test(href)) continue;
+        if (seen.has(href)) continue;
+        seen.add(href);
+        links.push({ href: href.slice(0, 600), text: (a.textContent || "").trim().slice(0, 120) });
+        if (links.length >= 12) return links;
+      }
+    }
+
+    return links;
+  }
+
+  /**
    * Pull one feed card apart. Returns null for anything that is not a real
    * post: ads, "people you may know" carousels, the share box, the sort
    * control, empty placeholder cards.
@@ -4219,6 +4261,7 @@
       );
 
       const postContent = extractPostText(item);
+      const postLinks = extractPostLinks(item);
 
       // A promoted card has no commentary worth reading and a "Promoted"
       // label; skip both it and any card with nothing to react to.
@@ -4275,6 +4318,8 @@
         authorHeadline,
         authorProfileUrl,
         postContent: postContent.slice(0, 3000),
+        // How to apply, when the post says so in a link rather than in prose.
+        postLinks,
         likeCount: parseInt(text(reactionsEl).replace(/[^\d]/g, "") || "0", 10) || 0,
         commentCount: parseInt(text(commentsEl).replace(/[^\d]/g, "") || "0", 10) || 0,
       };

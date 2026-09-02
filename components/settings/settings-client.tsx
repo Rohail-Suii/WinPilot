@@ -34,6 +34,7 @@ import {
   RefreshCw,
   Zap,
   TrendingDown,
+  Mail,
 } from "lucide-react";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import {
@@ -61,6 +62,7 @@ import {
 } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
 import { useExtensionStore } from "@/lib/hooks/use-stores";
+import { EmailOutreachSettings } from "./email-outreach-settings";
 import type {
   ProviderCreditsResult,
   ApiKeyInfo,
@@ -78,7 +80,7 @@ interface ActivityLogItem {
 
 // ─── Main Component ─────────────────────────────
 
-const VALID_TABS = ["profile", "extension", "security"];
+const VALID_TABS = ["profile", "applications", "extension", "security"];
 
 export function SettingsClient() {
   const { data: session, update: updateSession } = useSession();
@@ -101,6 +103,10 @@ export function SettingsClient() {
             <User className="h-4 w-4 mr-2" />
             <span className="hidden sm:inline">Profile</span>
           </TabsTrigger>
+          <TabsTrigger value="applications">
+            <Mail className="h-4 w-4 mr-2" />
+            <span className="hidden sm:inline">Applications</span>
+          </TabsTrigger>
           <TabsTrigger value="extension">
             <Puzzle className="h-4 w-4 mr-2" />
             <span className="hidden sm:inline">Extension</span>
@@ -113,6 +119,9 @@ export function SettingsClient() {
 
         <TabsContent value="profile">
           <ProfileTab session={session} updateSession={updateSession} />
+        </TabsContent>
+        <TabsContent value="applications">
+          <EmailOutreachSettings />
         </TabsContent>
         <TabsContent value="extension">
           <ExtensionTab />

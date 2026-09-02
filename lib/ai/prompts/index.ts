@@ -6,6 +6,11 @@ export type { FormAnswerFieldMeta } from "./form-answer";
 export { buildLinkedInPostPrompt, buildLinkedInCommentPrompt } from "./linkedin-post";
 export { buildOutreachMessagePrompt } from "./outreach-message";
 export { buildResumeParsingPrompt } from "./resume-parsing";
+export { buildApplicationEmailPrompt, finalizeBody } from "./job-application-email";
+export type {
+  ApplicationEmailResult,
+  ApplicationEmailContext,
+} from "./job-application-email";
 export {
   buildProfileAnalysisPrompt,
   buildHeadlineOptimizerPrompt,

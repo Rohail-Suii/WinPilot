@@ -21,6 +21,7 @@ import {
   GraduationCap,
   TrendingUp,
   Target,
+  MailCheck,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useGuest } from "@/components/dashboard/dashboard-shell";
@@ -47,6 +48,11 @@ const navItems = [
     label: "Lead Generation",
     href: "/dashboard/lead-gen",
     icon: Target,
+  },
+  {
+    label: "Job Applications",
+    href: "/dashboard/outreach",
+    icon: MailCheck,
   },
   {
     label: "Become a Hero",
