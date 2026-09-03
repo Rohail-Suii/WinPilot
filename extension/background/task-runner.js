@@ -407,6 +407,10 @@ async function engageOnePost(post, task, tabId, ctx, { withComment }) {
       commented: Boolean(data.commented),
       comment: data.commented ? comment : undefined,
       postType: generated?.postType,
+      // The key the comment was written in. Recorded so the journal shows it:
+      // if the model starts calling everything "playful" to unlock warmth and
+      // brevity, this is where it becomes visible.
+      register: generated?.register,
       angle: generated?.angle,
       isPitch: Boolean(generated?.isPitch),
       // The day's AI allowance is spent. Reported so the pass can stop asking

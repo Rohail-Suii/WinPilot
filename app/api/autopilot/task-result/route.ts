@@ -74,6 +74,7 @@ interface Engagement {
   commented?: boolean;
   comment?: string;
   postType?: string;
+  register?: string;
   angle?: string;
   isPitch?: boolean;
   error?: string;
@@ -307,13 +308,14 @@ export async function POST(req: Request) {
       for (const item of sweep) {
         if (!item.comment) continue;
         const pitched = item.isPitch ? " I pitched myself on it, since they are hiring." : "";
+        const key = item.register && item.register !== "analytical" ? ` Wrote it ${item.register}.` : "";
         const angle = item.angle ? ` My angle: ${String(item.angle).slice(0, 200)}` : "";
         await journal({
           userId,
           cycleId: task.cycleId,
           entryType: "action",
           phase: "engagement",
-          text: `Commented on ${item.authorName || "someone"}'s post off my feed.${item.postType ? ` It read as a ${item.postType} post.` : ""}${pitched}${item.liked ? " Liked it first." : ""}${angle}\n\n"${String(item.comment).slice(0, 400)}"${item.postUrl?.startsWith("http") ? `\n${item.postUrl}` : ""}`,
+          text: `Commented on ${item.authorName || "someone"}'s post off my feed.${item.postType ? ` It read as a ${item.postType} post.` : ""}${key}${pitched}${item.liked ? " Liked it first." : ""}${angle}\n\n"${String(item.comment).slice(0, 400)}"${item.postUrl?.startsWith("http") ? `\n${item.postUrl}` : ""}`,
           refs: { taskId },
         });
       }

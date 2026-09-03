@@ -20,6 +20,7 @@ import {
   MessageSquare,
   Zap,
   Wallet,
+  Smile,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -95,6 +96,8 @@ interface FeedSettings {
   economyMode: boolean;
   dailyAiCalls: number;
   dailyAiSpendUsd: number;
+  commentVariety: boolean;
+  allowEmoji: boolean;
 }
 
 interface WorkingHours {
@@ -165,6 +168,8 @@ export function AutopilotClient() {
     economyMode: true,
     dailyAiCalls: 150,
     dailyAiSpendUsd: 0,
+    commentVariety: true,
+    allowEmoji: true,
   });
   const [savedFeed, setSavedFeed] = useState<FeedSettings | null>(null);
   const [liveEntries, setLiveEntries] = useState<JournalEntry[]>([]);
@@ -190,6 +195,8 @@ export function AutopilotClient() {
         economyMode: true,
         dailyAiCalls: 150,
         dailyAiSpendUsd: 0,
+        commentVariety: true,
+        allowEmoji: true,
       };
       setFeed(feedSettings);
       setSavedFeed(feedSettings);
@@ -685,6 +692,69 @@ export function AutopilotClient() {
                   through before, up to this many per trip down the feed. Your weekly
                   budgets are still the hard ceiling. Ignored while No limits is on.
                 </p>
+              </div>
+
+              <div className="flex items-start justify-between gap-4">
+                <div className="min-w-0">
+                  <p className="text-sm text-gray-300 flex items-center gap-2">
+                    <Smile className="h-4 w-4 text-gray-500" />
+                    Match the post&apos;s mood
+                  </p>
+                  <p className="text-xs text-gray-500 mt-1">
+                    Answer a joke lightly, a promotion with a real congratulation, and a
+                    setback with a short human line. Varies the length from a few words
+                    to a short paragraph, and steers away from the openings it used
+                    recently. Off, every comment is written the same analytical way.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={feed.commentVariety}
+                  onClick={() => setFeed({ ...feed, commentVariety: !feed.commentVariety })}
+                  className={cn(
+                    "relative h-6 w-11 shrink-0 rounded-full transition-colors",
+                    feed.commentVariety ? "bg-indigo-500" : "bg-gray-700"
+                  )}
+                >
+                  <span
+                    className={cn(
+                      "absolute top-0.5 h-5 w-5 rounded-full bg-white transition-transform",
+                      feed.commentVariety ? "translate-x-5" : "translate-x-0.5"
+                    )}
+                  />
+                </button>
+              </div>
+
+              <div className={cn("flex items-start justify-between gap-4", !feed.commentVariety && "opacity-40")}>
+                <div className="min-w-0">
+                  <p className="text-sm text-gray-300 flex items-center gap-2">
+                    <Smile className="h-4 w-4 text-gray-500" />
+                    Emoji
+                  </p>
+                  <p className="text-xs text-gray-500 mt-1">
+                    At most one, and only where the mood calls for it. Never on a
+                    technical post and never on a hiring pitch, whatever this is set to.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={feed.allowEmoji}
+                  disabled={!feed.commentVariety}
+                  onClick={() => setFeed({ ...feed, allowEmoji: !feed.allowEmoji })}
+                  className={cn(
+                    "relative h-6 w-11 shrink-0 rounded-full transition-colors",
+                    feed.allowEmoji ? "bg-indigo-500" : "bg-gray-700"
+                  )}
+                >
+                  <span
+                    className={cn(
+                      "absolute top-0.5 h-5 w-5 rounded-full bg-white transition-transform",
+                      feed.allowEmoji ? "translate-x-5" : "translate-x-0.5"
+                    )}
+                  />
+                </button>
               </div>
 
               <div className="flex items-start justify-between gap-4">

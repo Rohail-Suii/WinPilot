@@ -39,6 +39,8 @@ const configSchema = z.object({
       economyMode: z.boolean(),
       dailyAiCalls: z.number().min(0).max(5000),
       dailyAiSpendUsd: z.number().min(0).max(1000),
+      commentVariety: z.boolean(),
+      allowEmoji: z.boolean(),
     })
     .partial()
     .optional(),

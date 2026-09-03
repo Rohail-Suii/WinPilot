@@ -39,9 +39,17 @@ import { checkBudget, economyModel } from "@/lib/autopilot/ai-budget";
 import { buildAIMetadata, saveAIUsageLog } from "@/lib/ai/usage-history";
 import {
   appendPortfolio,
+  policyFor,
   polishComment,
   rejectReason,
+  COMMENT_REGISTERS,
+  type CommentRegister,
 } from "@/lib/autopilot/comment-quality";
+import {
+  pickLengthBand,
+  recentComments,
+  renderRecentOpenings,
+} from "@/lib/autopilot/comment-history";
 import { captureHiringPost } from "@/lib/outreach/capture";
 
 const postSchema = z.object({
@@ -377,14 +385,25 @@ async function feedComment(
   // used strategist mode) its persona and north star are better context than
   // rebuilding from the career profile, so prefer it.
   const goal = await AgentGoal.findOne({ userId }).lean();
-  const [persona, memories] = await Promise.all([
+  const variety = feed.commentVariety !== false;
+  const [persona, memories, recent] = await Promise.all([
     goal?.personaSnapshot
       ? Promise.resolve(goal.personaSnapshot)
       : buildPersonaSnapshot(userId),
     // Four is enough to steer the voice. Every extra memory is tokens on every
     // post for the rest of the day.
     recallBlock(userId, { kinds: ["pattern", "insight"], limit: 4 }),
+    // What this account said recently, so this comment does not say it again.
+    // In the same Promise.all so it adds no wall-clock time.
+    variety ? recentComments(userId) : Promise.resolve([]),
   ]);
+
+  // Drawn once, before generation, and reused by the retry: re-drawing would
+  // aim the two attempts at different lengths without fixing why the first
+  // failed. Steered by the same rows the anti-repetition block uses, so the
+  // length variety costs no extra query.
+  const band = variety ? pickLengthBand(recent) : "standard";
+  const recentOpenings = variety ? renderRecentOpenings(recent) : "";
 
   // Without real projects the agent can only produce the generic slop the whole
   // design exists to avoid, and a pitch would be outright fabrication.
@@ -406,6 +425,9 @@ async function feedComment(
         northStar: goal ? sanitizeForAI(goal.northStar) : undefined,
         pitchOnJobPosts,
         mustEngage,
+        variety,
+        recentOpenings,
+        lengthBand: band,
         post: {
           authorName: sanitizeForAI(post.authorName),
           authorHeadline: sanitizeForAI(post.authorHeadline),
@@ -414,9 +436,11 @@ async function feedComment(
           postContent: sanitizeForAI(post.postContent).slice(0, 1200),
         },
       }),
-      // A three-sentence comment plus a one-line angle needs nowhere near the
-      // old ceiling; this only caps a runaway generation.
-      { temperature, maxTokens: 300, model }
+      // The JSON now carries a register as well. A truncated response is not a
+      // shorter comment, it is invalid JSON, a thrown parse and a wasted call —
+      // and since output bills on tokens actually generated, the headroom is
+      // free. Still low enough to cap a runaway.
+      { temperature, maxTokens: 360, model }
     );
 
     // Logged per call, not per post, so retries are counted against the day's
@@ -450,12 +474,27 @@ async function feedComment(
   await captureOpenings(userId, [post], taskId, postType);
   // A pitch is allowed to be longer, so it gets a higher floor too.
   const isPitch = postType === "hiring" && pitchOnJobPosts;
+  const register = normaliseRegister(generated.register, postType, isPitch, variety);
+
+  // Mirror the override the prompt states, so the gate and the instruction can
+  // never disagree about what this comment was aiming to be.
+  const effectiveBand =
+    (register === "analytical" || isPitch) && band === "reaction" ? "short" : band;
+
+  const policy = policyFor(register, { isPitch, postType, band: effectiveBand });
+  const polish = {
+    allowEmoji: policy.allowEmoji && feed.allowEmoji !== false,
+    maxEmoji: policy.maxEmoji,
+  };
   const quality = {
-    minLength: isPitch ? 40 : 15,
-    // On a promotion, a new role or a launch, congratulating them is the right
-    // move and the model will do it unprompted. Rejecting that outright is what
-    // left personal news liked but never commented on.
-    allowCongratulation: postType === "personal_news",
+    minLength: policy.minLength,
+    minSubstance: policy.minSubstance,
+    allowPraise: policy.allowPraise,
+    // Warmth follows the register, not the topic. Deriving it from postType
+    // alone meant a layoff post — which classifies as personal news — was
+    // allowed to open with "congrats".
+    allowCongratulation: policy.allowCongratulation || postType === "personal_news",
+    recentComments: recent.map((r) => r.comment),
   };
 
   // The model decided there was nothing worth saying. Normally that is a valid
@@ -470,7 +509,7 @@ async function feedComment(
     });
   }
 
-  let comment = polishComment(generated.comment || "");
+  let comment = polishComment(generated.comment || "", polish);
   let problem = rejectReason(comment, quality);
 
   // Under `force`, a draft that fails the quality gate gets ONE more attempt,
@@ -488,7 +527,7 @@ async function feedComment(
         break;
       }
 
-      const candidate = polishComment(retry.comment || "");
+      const candidate = polishComment(retry.comment || "", polish);
       const candidateProblem = rejectReason(candidate, quality);
       if (!candidateProblem) {
         comment = candidate;
@@ -501,7 +540,10 @@ async function feedComment(
       if (candidate.length > best.length) best = candidate;
     }
 
-    if (problem && best.length >= quality.minLength) {
+    // Rescue a draft ONLY if length was the sole thing wrong with it. This used
+    // to accept whichever draft was longer, which meant two flattery drafts in
+    // a row posted the flattery — the gate bypassed by a length comparison.
+    if (problem && best && rejectReason(best, { ...quality, minLength: 0 }) === null) {
       comment = best;
       problem = null;
     }
@@ -530,9 +572,42 @@ async function feedComment(
   return NextResponse.json({
     comment: finalComment,
     postType,
+    // Surfaced so the journal shows the key each comment was written in. If the
+    // model starts calling everything "playful" to unlock warmth and brevity,
+    // that is where it becomes visible.
+    register,
     angle: (generated.angle || "").slice(0, 300),
     isPitch,
   });
+}
+
+/**
+ * The register, after the server has had its say.
+ *
+ * The model can misclassify to unlock permissions — calling a serious post
+ * "playful" buys it warmth and a one-line answer — so its choice is never
+ * trusted raw.
+ */
+function normaliseRegister(
+  raw: unknown,
+  postType: string,
+  isPitch: boolean,
+  variety: boolean
+): CommentRegister {
+  if (!variety) return "analytical";
+
+  const value = typeof raw === "string" ? (raw.trim().toLowerCase() as CommentRegister) : null;
+  const register = value && COMMENT_REGISTERS.includes(value) ? value : "analytical";
+
+  // A pitch is being read as an application. It is never warm, never short and
+  // never decorated, whatever the model decided.
+  if (isPitch) return "analytical";
+
+  // Nobody celebrates an architecture writeup. This pairing is the model
+  // reaching for permission rather than a reading of the post.
+  if (postType === "technical" && register === "celebratory") return "analytical";
+
+  return register;
 }
 
 // ── Strategist mode: write the comment against the goal ─────────────────────

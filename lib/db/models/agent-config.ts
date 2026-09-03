@@ -129,6 +129,27 @@ export interface IFeedSettings {
   dailyAiCalls: number;
   /** Hard dollar ceiling per day, for providers that report cost. 0 is off. */
   dailyAiSpendUsd: number;
+  /**
+   * Match the post's mood instead of writing every comment the same way.
+   *
+   * On, the agent picks a register — analytical, playful, celebratory or
+   * supportive — answers a joke lightly and a setback plainly, varies the
+   * length from a few words to a short paragraph, and steers away from the
+   * openings it used recently.
+   *
+   * Off restores the single-register behaviour exactly: one analytical voice,
+   * one length, no emoji, and one fewer database read per post. It is the
+   * rollback path for a change that touches how the account sounds in public.
+   */
+  commentVariety: boolean;
+  /**
+   * Allow at most one emoji, and only where the register calls for one.
+   *
+   * Never on a technical post and never on a hiring pitch, whatever this is
+   * set to. Separate from `commentVariety` because emoji are a taste call some
+   * accounts will want off while still wanting varied length and register.
+   */
+  allowEmoji: boolean;
 }
 
 export const DEFAULT_FEED_SETTINGS: IFeedSettings = {
@@ -143,6 +164,8 @@ export const DEFAULT_FEED_SETTINGS: IFeedSettings = {
   economyMode: true,
   dailyAiCalls: 150,
   dailyAiSpendUsd: 0,
+  commentVariety: true,
+  allowEmoji: true,
 };
 
 export interface IWeeklyBudgets {
@@ -219,6 +242,8 @@ const AgentConfigSchema = new Schema<IAgentConfig>(
       economyMode: { type: Boolean, default: DEFAULT_FEED_SETTINGS.economyMode },
       dailyAiCalls: { type: Number, default: DEFAULT_FEED_SETTINGS.dailyAiCalls, min: 0, max: 5000 },
       dailyAiSpendUsd: { type: Number, default: DEFAULT_FEED_SETTINGS.dailyAiSpendUsd, min: 0, max: 1000 },
+      commentVariety: { type: Boolean, default: DEFAULT_FEED_SETTINGS.commentVariety },
+      allowEmoji: { type: Boolean, default: DEFAULT_FEED_SETTINGS.allowEmoji },
     },
     workingHours: {
       start: { type: Number, default: 9, min: 0, max: 23 },

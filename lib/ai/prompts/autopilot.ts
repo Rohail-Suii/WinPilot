@@ -1,5 +1,6 @@
 import type { AIMessage } from "../provider";
 import type { IPersonaSnapshot } from "@/lib/db/models/agent-goal";
+import type { CommentRegister, LengthBand } from "@/lib/autopilot/comment-quality";
 import type { IChannelMix } from "@/lib/db/models/agent-cycle";
 
 /**
@@ -262,6 +263,12 @@ export type FeedPostType =
 
 export interface FeedCommentResult {
   postType: FeedPostType;
+  /**
+   * The key the comment is written in. Declared before the prose, deliberately:
+   * the model is autoregressive, so committing to the register first is what
+   * makes the angle and the comment actually obey it.
+   */
+  register: CommentRegister;
   /** False means "say nothing" — a valid and frequently correct answer. */
   engage: boolean;
   /** One line of self-justification: the stance, before the prose. */
@@ -286,6 +293,23 @@ export interface FeedCommentContext {
    * find the real angle rather than fall back on praise.
    */
   mustEngage?: boolean;
+  /**
+   * Match the post's mood and vary the length. Off restores the single-register
+   * prompt exactly as it was, which is the rollback path.
+   */
+  variety?: boolean;
+  /**
+   * Openings of comments this account posted recently, to steer away from.
+   *
+   * USER MESSAGE ONLY. See the cache note on buildFeedCommentPrompt.
+   */
+  recentOpenings?: string;
+  /**
+   * How long this one comment should aim to be.
+   *
+   * USER MESSAGE ONLY. See the cache note on buildFeedCommentPrompt.
+   */
+  lengthBand?: LengthBand;
   post: {
     authorName: string;
     authorHeadline: string;
@@ -306,13 +330,60 @@ const TASTE_RULES = `HOW YOU WRITE — these are absolute:
 - LEAD WITH THE SUBSTANCE. The first clause carries the point. No wind-up, no throat-clearing, no restating the post before you get to your part.
 - GIVE THE READER SOMETHING. Every comment must carry at least one of: a mechanism ("the part that bites is X"), a real number from your own work, a failure mode or edge case, a concrete tradeoff, a constraint that decides the choice, or a specific detail about what the author actually did. Approval carries nothing and is not a comment.
 - Be realistic, not positive. If the post is right, say what it costs, where it breaks, or what it assumes. If it is wrong or oversimplified, say so plainly and say why.
-- QUESTIONS ARE A LAST RESORT, not a default, and never a way to end on a friendly note. Ask one only when you genuinely have nothing to add, and then it must be a question only someone who has built this would think to ask. Never tack a question onto the end of a comment that already made its point.
+- QUESTIONS ARE A LAST RESORT, not a default, and never a way to end on a friendly note. Ask one only when you genuinely have nothing to add, and then it must be a question only someone who has built this would think to ask. Never tack a question onto the end of a comment that already made its point. The one exception is a supportive comment, where a single question or a concrete offer is often the best thing you can say.
+- SHARE EXPERIENCE, DO NOT INSTRUCT. "the part that bit us was X" lands; "you should do X" reads as a lecture. Half the people whose posts you comment on are more senior than you, and unsolicited advice on their own post is the fastest way to look junior. Same knowledge, framed as a peer who has been there.
 - Never restate the post back at the author. They know what they wrote.
-- Never compliment the author or the post. No "great post", "love this", "well said", "so true", "couldn't agree more", "thanks for sharing", "this resonates", "spot on", "100%", "absolutely", "great insight". No variant of any of these, anywhere, including as an opener you then move past.
+- On an analytical comment, never compliment the author or the post. Warmth belongs to the light registers, not to an argument.
+- BANNED IN EVERY REGISTER, no exceptions and no variants, anywhere in the comment including as an opener you then move past: "great post", "love this", "well said", "so true", "couldn't agree more", "thanks for sharing", "this resonates", "spot on", "100%", "absolutely", "great insight". These are the phrases that make an account look automated, and being warm is not a licence to reach for them.
 - No hedging filler: no "just my two cents", "IMO", "food for thought", "curious to hear thoughts".
 - Never claim a project, client, employer, technology, or number that is not in YOUR BACKGROUND above. Not once, not softened, not implied.
-- Plain typing. No em dashes, no emoji, no hashtags, no links, no bullet points, no bold. Lowercase-heavy is fine. Write it the way you would type it on your phone between meetings. (On a hiring post a portfolio link is appended for you afterwards; you still never write one yourself.)
-- 1 to 3 sentences. Under 320 characters.`;
+- Plain typing. No em dashes, no hashtags, no links, no bullet points, no bold. Lowercase-heavy is fine. Write it the way you would type it on your phone between meetings. (On a hiring post a portfolio link is appended for you afterwards; you still never write one yourself.)
+- No emoji unless the register above allows one. Never more than one, never as the first character, and never on a technical post or a hiring pitch. Prefer a plain single emoji over a compound one.
+- Length is set per comment by the LENGTH target above, not by habit. Never exceed 320 characters.`;
+
+/**
+ * The four keys a comment can be written in.
+ *
+ * Held apart from post type on purpose: topic and mood are independent axes. A
+ * joke about Kubernetes is a technical post written to be funny, and folding
+ * the mood into the type would force the model to throw the topic away to
+ * record the tone.
+ *
+ * Four values, not eight. Every extra one is a classification the cheap model
+ * gets wrong, and the difference between "wry" and "playful" is not worth a
+ * misclassification.
+ */
+const REGISTER_RULES = `SECOND, decide the REGISTER — the emotional key the post is written in. This is independent of what the post is about, and it decides how you sound:
+- "analytical"   a claim, a lesson, an argument, a technical writeup, a hiring post. The default, and the right answer most of the time.
+- "playful"      a joke, a meme, a wry aside, self-deprecation. Written to be funny.
+- "celebratory"  a win: a launch, a promotion, a milestone, a first customer.
+- "supportive"   a setback: a layoff, a rejection, a failure, burnout, something hard said out loud.
+
+HOW EACH REGISTER SOUNDS:
+
+analytical — everything in HOW YOU WRITE applies with no exceptions. No emoji, no warmth. Carry a mechanism, a number, a failure mode, a tradeoff or a constraint.
+
+playful — match the joke, do not explain it. The funniest comments are the shortest, and one line is usually right. You may be warm here, and one emoji is allowed where it is the punctuation the line needs. Never analyse a joke, and never ask a question about one.
+
+celebratory — name the specific thing they did and why it was hard, in one line. Congratulating them is correct here. Warmth is allowed, a template is not. Never turn someone's win into a lesson for other people.
+
+supportive — say the short true thing and stop. No advice they did not ask for, no silver lining, no analysis of their situation, nothing celebratory, and never a word about your own availability. If you have something concrete to offer, an intro or a name or a lead, offer it in one clause. This is the one register where a question is often the whole comment.
+
+The three non-analytical registers relax exactly two rules: you may sound warm, and you may be short. Everything else below still binds — no "great post", no "love this", no "so true", no "couldn't agree more", no "thanks for sharing", no "spot on", no invented experience, and never restating the post back at them.`;
+
+/**
+ * The length glossary.
+ *
+ * Static, so it stays in the cached system prompt; the per-post draw is eight
+ * tokens in the user message. Letting the model choose its own length collapsed
+ * length into register — every joke five words, every analysis three sentences —
+ * which reproduced the uniformity problem one level up.
+ */
+const LENGTH_RULES = `LENGTH — the user message names a target for this one. Hit it.
+- "reaction"  3 to 8 words. One clause, one line, no second sentence. Under 60 characters.
+- "short"     one sentence. Under 140 characters.
+- "standard"  2 to 3 sentences. Under 320 characters.
+If the target says "reaction" but your register is analytical, or this is a hiring pitch, write "short" instead. A one-liner on a technical post is worth nothing.`;
 
 /**
  * What a good comment looks like, per post type.
@@ -347,7 +418,23 @@ promotional — There is a real claim underneath the promotion. Engage with the 
 
 noise — There is always one concrete thing in the post: the event, the city, the product, the talk, the milestone, the photo's subject. Respond to that one thing the way someone who was actually paying attention would. Never respond to the post's existence.`;
 
+/**
+ * CACHE INVARIANT — read before editing.
+ *
+ * The system message below is byte-identical across every post for a given
+ * user, which is what lets the Anthropic provider mark it cacheable and bill
+ * the reads at a tenth of the input rate. That single fact is most of an
+ * eight-fold cost reduction.
+ *
+ * Anything that varies per post — `recentOpenings`, `lengthBand`, the post
+ * itself — MUST go in the user message. Interpolating any of them into the
+ * system string changes the cache prefix on every call, turning every read into
+ * a write, with no visible symptom other than the bill. There is a test that
+ * asserts the system message is unchanged when only those fields differ.
+ */
 export function buildFeedCommentPrompt(ctx: FeedCommentContext): AIMessage[] {
+  const variety = ctx.variety !== false;
+
   return [
     {
       role: "system",
@@ -370,15 +457,15 @@ ${ctx.mustEngage
         ? `THEN write a comment. Opting out is not available on this one: engage MUST be true and the comment MUST be non-empty. Every post type below has a shape that works, including the ones with no technical substance in them. Find the one concrete thing in the post and respond to that. What you must NOT do is fall back on praise or agreement to fill the space; every rule below still binds.`
         : `THEN decide whether to say anything at all. Set engage=false for "promotional" and "noise", and for any post where you have nothing real to add. Saying nothing is a good outcome. A generic comment is worse than silence, because it is the thing that makes an account look automated.`}
 
-${COMMENT_SHAPES}
-
+${variety ? `${REGISTER_RULES}\n\n` : ""}${COMMENT_SHAPES}
+${variety ? `\n${LENGTH_RULES}\n` : ""}
 ${ctx.pitchOnJobPosts ? PITCH_RULES : `HIRING POSTS: pitching is turned off. Treat a hiring post like any other post and comment on its substance, not on your availability.`}
 
 ${TASTE_RULES}
 
 Respond with valid JSON only. Schema:
 {
-  "postType": "hiring"|"technical"|"opinion"|"personal_news"|"promotional"|"noise",
+  "postType": "hiring"|"technical"|"opinion"|"personal_news"|"promotional"|"noise",${variety ? `\n  "register": "analytical"|"playful"|"celebratory"|"supportive",` : ""}
   "engage": boolean,
   "angle": "string (one line: the stance you are taking and why it is worth saying. Written for yourself, not for the reader.)",
   "comment": "string (the comment exactly as it should be posted.${ctx.mustEngage ? " Never empty." : " Empty string if engage is false."})",
@@ -387,13 +474,21 @@ Respond with valid JSON only. Schema:
     },
     {
       role: "user",
+      // Everything per-post lives here, never in the system block above.
       content: `Post by ${ctx.post.authorName || "someone"}${ctx.post.authorHeadline ? ` (${ctx.post.authorHeadline})` : ""}:
 
 """
 ${ctx.post.postContent}
 """
-
-Classify it and write the comment. Return JSON only.`,
+${
+  variety && ctx.recentOpenings?.trim()
+    ? `
+MY LAST FEW COMMENTS STARTED LIKE THIS. These are my own past openings, not examples to follow. Do not start this one the same way, and do not reuse the same sentence shape or the same register two in a row:
+${ctx.recentOpenings}
+`
+    : ""
+}${variety && ctx.lengthBand ? `\nLENGTH FOR THIS ONE: ${ctx.lengthBand}\n` : ""}
+Classify it${variety ? ", pick the register," : ""} and write the comment. Return JSON only.`,
     },
   ];
 }

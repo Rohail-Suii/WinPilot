@@ -1,5 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { appendPortfolio, polishComment, rejectReason } from "@/lib/autopilot/comment-quality";
+import {
+  appendPortfolio,
+  policyFor,
+  polishComment,
+  rejectReason,
+} from "@/lib/autopilot/comment-quality";
 
 /**
  * The last line of defence before something gets typed into a real LinkedIn
@@ -48,11 +53,17 @@ describe("rejectReason", () => {
     expect(rejectReason("Love this breakdown of the caching layer.")).toBe(
       "opened with flattery"
     );
+  });
+
+  it("rejects empty agreement separately from warmth", () => {
+    // The two are held apart so a light post can allow warmth without also
+    // admitting the canonical LinkedIn-bot phrases. These stay banned in every
+    // register, which is why they get their own reason.
     expect(rejectReason("Couldn't agree more, the tooling is the hard part.")).toBe(
-      "opened with flattery"
+      "opened with empty agreement"
     );
     expect(rejectReason("100% this, the observability gap is the real cost.")).toBe(
-      "opened with flattery"
+      "opened with empty agreement"
     );
   });
 
@@ -164,5 +175,142 @@ describe('appendPortfolio', () => {
 
   it('adds nothing to an empty comment', () => {
     expect(appendPortfolio('', URL)).toBe('');
+  });
+});
+
+
+describe('emoji', () => {
+  it('strips them by default, exactly as before', () => {
+    // Every existing caller passes no options and must be unaffected.
+    expect(polishComment("worth doing 🚀 #buildinpublic #nextjs")).toBe("worth doing");
+  });
+
+  it('keeps one when the register allows it', () => {
+    expect(polishComment("nailed it 😄👏🚀", { allowEmoji: true })).toBe("nailed it 😄");
+  });
+
+  it('keeps a two-person emoji together rather than counting it three times', () => {
+    // A ZWJ sequence is one emoji to a reader. The old character-class strip
+    // saw three code points, which did not matter when all of them were
+    // deleted and matters now they are counted.
+    expect(polishComment("shipping 👨‍💻", { allowEmoji: true })).toBe("shipping 👨‍💻");
+  });
+
+  it('strips all of them on a pitch, whatever the model wrote', () => {
+    expect(polishComment("built the thing 🚀", { allowEmoji: true, maxEmoji: 0 })).toBe(
+      "built the thing"
+    );
+  });
+});
+
+describe('warmth on a light post', () => {
+  const light = { allowPraise: true };
+
+  it('allows a warm adjective opener', () => {
+    expect(
+      rejectReason("amazing, the second one is the actual answer", light)
+    ).toBeNull();
+  });
+
+  it('still rejects the same opener when praise is not allowed', () => {
+    expect(rejectReason("amazing, the second one is the actual answer")).toBe(
+      "opened with flattery"
+    );
+  });
+
+  it('never allows the canonical bot phrases, however warm the register', () => {
+    // This is the whole reason the praise ban was split rather than dropped:
+    // "relax flattery" means allow warmth, not admit these.
+    expect(rejectReason("so true, the tooling is the hard part", light)).toBe(
+      "opened with empty agreement"
+    );
+    expect(rejectReason("couldn't agree more about the chunking", light)).toBe(
+      "opened with empty agreement"
+    );
+    expect(rejectReason("great post, the second one got me", light)).toBe(
+      "was generic praise"
+    );
+    // "Love" is an allowed adjective, but "love this" is caught mid-comment.
+    expect(rejectReason("love this, the second one got me", light)).toBe(
+      "was generic praise"
+    );
+  });
+});
+
+describe('short reactions', () => {
+  it('accepts a few words when the floor is lowered for them', () => {
+    expect(rejectReason("called it, twice", { minLength: 12 })).toBeNull();
+  });
+
+  it('still rejects something with no subject in it', () => {
+    expect(rejectReason("lol", { minLength: 12 })).toBe("came back empty or too short");
+  });
+
+  it('lets a short congratulation through on a celebration', () => {
+    expect(
+      rejectReason("congrats, four years earned", {
+        allowCongratulation: true,
+        minSubstance: 12,
+      })
+    ).toBeNull();
+  });
+});
+
+describe('never posting the same thing twice', () => {
+  const prior = ["the part that bites is the retry loop"];
+
+  it('rejects a word-for-word repeat', () => {
+    expect(
+      rejectReason("The part that bites is the retry loop.", { recentComments: prior })
+    ).toBe("was word-for-word something I already posted");
+  });
+
+  it('allows a comment that is merely similar', () => {
+    // Near-repetition is steered away from in the prompt. Rejecting on it here
+    // would force a second model call on every post that landed close.
+    expect(
+      rejectReason("the part that bites is the backoff, not the retry", {
+        recentComments: prior,
+      })
+    ).toBeNull();
+  });
+});
+
+describe('policyFor', () => {
+  const opts = { isPitch: false, postType: "opinion", band: "short" as const };
+
+  it('keeps analytical comments plain', () => {
+    const p = policyFor("analytical", opts);
+    expect(p.allowEmoji).toBe(false);
+    expect(p.allowPraise).toBe(false);
+    expect(p.allowCongratulation).toBe(false);
+  });
+
+  it('lets the light registers be warm', () => {
+    expect(policyFor("playful", opts).allowPraise).toBe(true);
+    expect(policyFor("celebratory", opts).allowCongratulation).toBe(true);
+    // A setback is warm, but congratulating someone on it is the worst
+    // possible reply.
+    expect(policyFor("supportive", opts).allowCongratulation).toBe(false);
+  });
+
+  it('never allows an emoji on a technical post', () => {
+    expect(
+      policyFor("playful", { ...opts, postType: "technical" }).allowEmoji
+    ).toBe(false);
+  });
+
+  it('overrides everything for a pitch', () => {
+    // A pitch is read as an application: never warm, never short, never
+    // decorated, whatever register the model claimed.
+    const p = policyFor("playful", { ...opts, isPitch: true, band: "reaction" });
+    expect(p.allowEmoji).toBe(false);
+    expect(p.allowPraise).toBe(false);
+    expect(p.minLength).toBe(40);
+  });
+
+  it('lowers the floor for a reaction', () => {
+    expect(policyFor("playful", { ...opts, band: "reaction" }).minLength).toBe(12);
+    expect(policyFor("playful", { ...opts, band: "standard" }).minLength).toBe(15);
   });
 });

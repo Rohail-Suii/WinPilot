@@ -138,3 +138,140 @@ describe("hiring posts", () => {
     expect(prompt).not.toMatch(/WHEN THE POST IS HIRING/);
   });
 });
+
+/**
+ * The cache invariant.
+ *
+ * The system message is byte-identical across every post, which is what lets
+ * the Anthropic provider mark it cacheable and bill reads at a tenth of the
+ * input rate — most of an eight-fold cost reduction. Anything per-post that
+ * leaks into it changes the cache prefix on every call and silently multiplies
+ * the bill, with no symptom other than the invoice.
+ *
+ * This is the test that stops that happening.
+ */
+describe("prompt caching", () => {
+  const OPENING = "ZZUNIQUEOPENINGZZ";
+
+  it("keeps the system message byte-identical when only per-post fields differ", () => {
+    const a = buildFeedCommentPrompt({
+      persona,
+      memories: "",
+      pitchOnJobPosts: true,
+      variety: true,
+      recentOpenings: `- ${OPENING}`,
+      lengthBand: "reaction",
+      post: { authorName: "A", authorHeadline: "B", postContent: "one post" },
+    });
+    const b = buildFeedCommentPrompt({
+      persona,
+      memories: "",
+      pitchOnJobPosts: true,
+      variety: true,
+      recentOpenings: "- something else entirely",
+      lengthBand: "standard",
+      post: { authorName: "Z", authorHeadline: "Y", postContent: "a different post" },
+    });
+
+    expect(a[0].content).toBe(b[0].content);
+  });
+
+  it("keeps recent openings out of the system message", () => {
+    const [system, user] = buildFeedCommentPrompt({
+      persona,
+      memories: "",
+      pitchOnJobPosts: true,
+      variety: true,
+      recentOpenings: `- ${OPENING}`,
+      lengthBand: "short",
+      post: { authorName: "A", authorHeadline: "B", postContent: "x" },
+    });
+
+    expect(system.content).not.toContain(OPENING);
+    expect(user.content).toContain(OPENING);
+  });
+
+  it("keeps the length draw out of the system message", () => {
+    const [system, user] = buildFeedCommentPrompt({
+      persona,
+      memories: "",
+      pitchOnJobPosts: true,
+      variety: true,
+      lengthBand: "reaction",
+      post: { authorName: "A", authorHeadline: "B", postContent: "x" },
+    });
+
+    // The glossary of what the bands mean is static and belongs in the cached
+    // system block; the draw for this one post does not.
+    expect(system.content).toContain('"reaction"');
+    expect(system.content).not.toContain("LENGTH FOR THIS ONE");
+    expect(user.content).toContain("LENGTH FOR THIS ONE: reaction");
+  });
+});
+
+describe("registers", () => {
+  const withVariety = () => build({ variety: true, lengthBand: "short" });
+
+  it("names all four registers and how each sounds", () => {
+    const prompt = withVariety();
+
+    for (const register of ["analytical", "playful", "celebratory", "supportive"]) {
+      expect(prompt).toContain(register);
+    }
+    expect(prompt).toMatch(/independent of what the post is about/);
+  });
+
+  it("tells it not to explain a joke", () => {
+    expect(withVariety()).toMatch(/playful[\s\S]*[Nn]ever analyse a joke/);
+  });
+
+  it("forbids advice and silver linings on a setback", () => {
+    // The riskiest comment the agent writes. A tone-deaf automated reply under
+    // a layoff post is the one that gets screenshotted.
+    const prompt = withVariety();
+
+    expect(prompt).toMatch(/supportive[\s\S]*No advice they did not ask for/);
+    expect(prompt).toMatch(/supportive[\s\S]*no silver lining/);
+    expect(prompt).toMatch(/supportive[\s\S]*never a word about your own availability/);
+  });
+
+  it("keeps the banned phrases absolute in every register", () => {
+    const prompt = withVariety();
+
+    expect(prompt).toMatch(/BANNED IN EVERY REGISTER/);
+    expect(prompt).toMatch(/being warm is not a licence to reach for them/);
+  });
+
+  it("asks for the register in the JSON schema", () => {
+    expect(withVariety()).toMatch(/"register": "analytical"\|"playful"/);
+  });
+});
+
+describe("advice tone", () => {
+  it("asks it to share experience rather than instruct", () => {
+    const prompt = build();
+
+    expect(prompt).toMatch(/SHARE EXPERIENCE, DO NOT INSTRUCT/);
+    expect(prompt).toMatch(/more senior than you/);
+  });
+});
+
+describe("variety turned off", () => {
+  it("drops the register and length sections entirely", () => {
+    const [system, user] = buildFeedCommentPrompt({
+      persona,
+      memories: "",
+      pitchOnJobPosts: true,
+      variety: false,
+      recentOpenings: "- an opening",
+      lengthBand: "reaction",
+      post: { authorName: "A", authorHeadline: "B", postContent: "x" },
+    });
+
+    // The rollback path: one analytical voice, one length, no history block.
+    expect(system.content).not.toContain('"register"');
+    expect(system.content).not.toContain("LENGTH —");
+    expect(user.content).not.toContain("LENGTH FOR THIS ONE");
+    expect(user.content).not.toContain("an opening");
+  });
+});
