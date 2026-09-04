@@ -150,6 +150,20 @@ export interface IFeedSettings {
    * accounts will want off while still wanting varied length and register.
    */
   allowEmoji: boolean;
+  /**
+   * Stay quiet on posts whose meaning is in something we cannot read.
+   *
+   * The agent is handed the post's text and nothing else. A photo, a
+   * screenshot, a slide carousel or a video with a few words of caption over it
+   * therefore arrives with the actual subject missing, and a comment written
+   * from the caption is a confident guess published under a stranger's post.
+   * With this on, those get a like and no comment; the same applies when the
+   * model itself reports it could not tell what the post was about.
+   *
+   * On by default. Turning it off restores pure coverage — every post gets a
+   * comment attempt, including the ones nobody understood.
+   */
+  skipUnreadablePosts: boolean;
 }
 
 export const DEFAULT_FEED_SETTINGS: IFeedSettings = {
@@ -166,6 +180,7 @@ export const DEFAULT_FEED_SETTINGS: IFeedSettings = {
   dailyAiSpendUsd: 0,
   commentVariety: true,
   allowEmoji: true,
+  skipUnreadablePosts: true,
 };
 
 export interface IWeeklyBudgets {
@@ -244,6 +259,10 @@ const AgentConfigSchema = new Schema<IAgentConfig>(
       dailyAiSpendUsd: { type: Number, default: DEFAULT_FEED_SETTINGS.dailyAiSpendUsd, min: 0, max: 1000 },
       commentVariety: { type: Boolean, default: DEFAULT_FEED_SETTINGS.commentVariety },
       allowEmoji: { type: Boolean, default: DEFAULT_FEED_SETTINGS.allowEmoji },
+      skipUnreadablePosts: {
+        type: Boolean,
+        default: DEFAULT_FEED_SETTINGS.skipUnreadablePosts,
+      },
     },
     workingHours: {
       start: { type: Number, default: 9, min: 0, max: 23 },

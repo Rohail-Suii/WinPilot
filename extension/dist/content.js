@@ -4166,6 +4166,109 @@
   }
 
   /**
+   * What the post is carrying that we cannot read.
+   *
+   * The agent reads text and nothing else. On a post that is a photo, a slide
+   * deck or a video with four words of caption over it, every bit of what the
+   * post is ABOUT is inside the part we are blind to — and a comment written
+   * from the caption alone is confidently wrong in public, under a stranger's
+   * post. The server refuses to comment on those, but it can only do that if
+   * it is told the picture is there, which is what this reports.
+   *
+   * Deliberately shallow: it answers "is there media", not "what is in it".
+   * The author's avatar, the reactor faces on the social-proof row and the
+   * comment box's own icons are all images too, so anything outside the post's
+   * own content region is ignored.
+   */
+  function extractPostMedia(item) {
+    const media = {};
+    if (!item) return media;
+
+    const has = (selector) => {
+      try {
+        return Boolean(item.querySelector(selector));
+      } catch {
+        return false;
+      }
+    };
+
+    // A carousel is checked before the image, because LinkedIn renders the
+    // deck's current page AS an image and we would otherwise call a slide deck
+    // a photo. Same for video, whose poster frame is an <img>.
+    if (
+      has("[class*='update-components-document']") ||
+      has("[class*='document-s-container']") ||
+      has("iframe[title*='document' i]") ||
+      has("[data-testid*='document']")
+    ) {
+      media.document = true;
+    }
+
+    if (
+      has("video") ||
+      has("[class*='update-components-linkedin-video']") ||
+      has("[class*='video-player']") ||
+      has("[data-testid*='video']")
+    ) {
+      media.video = true;
+    }
+
+    if (has("[class*='update-components-poll']") || has("[data-testid*='poll']")) {
+      media.poll = true;
+    }
+
+    // Scoped to the post's own image containers. A bare `img` lookup matches
+    // the author's profile photo, which is on every single card — and calling
+    // every post an image post would silence the agent completely.
+    if (
+      has("[class*='update-components-image'] img") ||
+      has("[class*='update-components-linkedin-image'] img") ||
+      has("[data-testid='feed-images-content'] img") ||
+      has("[class*='carousel'] img")
+    ) {
+      media.image = true;
+    }
+
+    // The redesign names none of those containers, so the fallback is size:
+    // an avatar is 48px and a reactor face is smaller, while a post's photo
+    // fills the card. Chrome is excluded by where it sits — inside a profile
+    // or company link, the actor header, or the comments underneath.
+    if (!media.image) {
+      for (const img of item.querySelectorAll("img")) {
+        if (
+          img.closest(
+            "a[href*='/in/'], a[href*='/company/'], [class*='actor'], " +
+            "[class*='comments-'], [class*='social-details'], [class*='reactions']"
+          )
+        ) {
+          continue;
+        }
+        const rect =
+          typeof img.getBoundingClientRect === "function"
+            ? img.getBoundingClientRect()
+            : { width: 0, height: 0 };
+        const width = rect.width || img.naturalWidth || img.width || 0;
+        const height = rect.height || img.naturalHeight || img.height || 0;
+        if (width >= 200 && height >= 150) {
+          media.image = true;
+          break;
+        }
+      }
+    }
+
+    // A shared link renders its headline as text, so it is not a blind spot —
+    // reported so the server can tell "link post" from "no media at all".
+    if (
+      has("[class*='update-components-article']") ||
+      has("[data-testid*='article-component']")
+    ) {
+      media.article = true;
+    }
+
+    return media;
+  }
+
+  /**
    * The links written into the post itself.
    *
    * Hiring posts put the way to apply in a link as often as in plain text — a
@@ -4262,6 +4365,10 @@
 
       const postContent = extractPostText(item);
       const postLinks = extractPostLinks(item);
+      // What the card is carrying besides text. The server refuses to comment
+      // on a post whose meaning is inside a picture we cannot read, and this
+      // is the only place that fact is observable.
+      const postMedia = extractPostMedia(item);
 
       // A promoted card has no commentary worth reading and a "Promoted"
       // label; skip both it and any card with nothing to react to.
@@ -4320,6 +4427,7 @@
         postContent: postContent.slice(0, 3000),
         // How to apply, when the post says so in a link rather than in prose.
         postLinks,
+        postMedia,
         likeCount: parseInt(text(reactionsEl).replace(/[^\d]/g, "") || "0", 10) || 0,
         commentCount: parseInt(text(commentsEl).replace(/[^\d]/g, "") || "0", 10) || 0,
       };
@@ -4509,6 +4617,9 @@
           authorHeadline,
           authorProfileUrl: profileUrl,
           postContent: postContent.substring(0, 1000),
+          // Same blind spot as the feed: the server will not write a comment
+          // about a post whose subject is inside a picture it cannot read.
+          postMedia: extractPostMedia(item),
           likeCount: parseInt(likeCountEl?.textContent?.trim() || "0", 10) || 0,
           commentCount: parseInt(commentCountEl?.textContent?.trim() || "0", 10) || 0,
         });

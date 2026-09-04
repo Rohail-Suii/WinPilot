@@ -92,10 +92,12 @@ describe("comment style", () => {
 });
 
 describe("mustEngage", () => {
-  it("removes the option of saying nothing", () => {
+  it("removes the option of saying nothing on taste grounds", () => {
     const prompt = build({ mustEngage: true });
 
-    expect(prompt).toMatch(/Opting out is not available/);
+    // "On taste grounds" is load-bearing: coverage overrides "nothing worth
+    // adding", and never overrides "I cannot tell what this post is".
+    expect(prompt).toMatch(/Opting out on taste grounds is not available/);
     expect(prompt).toMatch(/comment MUST be non-empty/);
     expect(prompt).not.toMatch(/Saying nothing is a good outcome/);
   });
@@ -273,5 +275,55 @@ describe("variety turned off", () => {
     expect(system.content).not.toContain("LENGTH —");
     expect(user.content).not.toContain("LENGTH FOR THIS ONE");
     expect(user.content).not.toContain("an opening");
+  });
+});
+
+/**
+ * The one refusal coverage does not override.
+ *
+ * Feed mode tells the model to engage with everything, which is right — until
+ * the post is a photo with four words over it, at which point "engage anyway"
+ * means "write something confident about a post you have not seen". That is
+ * worse than silence, so the understanding veto has to sit above mustEngage
+ * rather than inside it.
+ */
+describe("posts the model cannot read", () => {
+  it("tells the model it is working from text alone", () => {
+    expect(build()).toMatch(/TEXT ONLY[\s\S]*cannot see images/i);
+  });
+
+  it("asks for understood before it asks for a comment", () => {
+    const prompt = build();
+    expect(prompt.indexOf("can you actually tell what this post is about")).toBeLessThan(
+      prompt.indexOf("decide what the post actually is")
+    );
+  });
+
+  it("keeps the veto available when engaging is mandatory", () => {
+    const forced = build({ mustEngage: true });
+
+    expect(forced).toContain('"understood"');
+    expect(forced).toMatch(/coverage does not override/i);
+  });
+
+  it("names the caption cases that trigger it", () => {
+    const prompt = build();
+    for (const cue of ["swipe", "watch till the end", "screenshot"]) {
+      expect(prompt.toLowerCase()).toContain(cue);
+    }
+  });
+
+  it("does not let length alone be the test", () => {
+    expect(build()).toMatch(/Vagueness is the test, not length/);
+  });
+
+  it("tells the model what it cannot see on this particular post", () => {
+    const prompt = build({ mediaNote: "an image and a video" });
+
+    expect(prompt).toContain("WHAT ELSE IS ON THIS POST, WHICH YOU CANNOT SEE: an image and a video");
+  });
+
+  it("leaves the line out entirely when the post carries nothing", () => {
+    expect(build()).not.toContain("WHAT ELSE IS ON THIS POST");
   });
 });

@@ -298,7 +298,7 @@ describe("feed mode with no limits", () => {
   const unlimitedConfig = (over: Record<string, unknown> = {}) =>
     makeConfig({
       mode: "feed",
-      feed: { commentRatio: 0.7, pitchOnJobPosts: true, postsPerSweep: 25, postsPerPass: 5, unlimited: true, economyMode: true, dailyAiCalls: 150, dailyAiSpendUsd: 0, commentVariety: true, allowEmoji: true },
+      feed: { commentRatio: 0.7, pitchOnJobPosts: true, postsPerSweep: 25, postsPerPass: 5, unlimited: true, economyMode: true, dailyAiCalls: 150, dailyAiSpendUsd: 0, commentVariety: true, allowEmoji: true, skipUnreadablePosts: true },
       ...over,
     });
 
@@ -363,7 +363,7 @@ describe("feed mode with no limits", () => {
       kind: "comment_on_feed",
       config: makeConfig({
         mode: "feed",
-        feed: { commentRatio: 0.7, pitchOnJobPosts: true, postsPerSweep: 25, postsPerPass: 5, unlimited: false, economyMode: true, dailyAiCalls: 150, dailyAiSpendUsd: 0, commentVariety: true, allowEmoji: true },
+        feed: { commentRatio: 0.7, pitchOnJobPosts: true, postsPerSweep: 25, postsPerPass: 5, unlimited: false, economyMode: true, dailyAiCalls: 150, dailyAiSpendUsd: 0, commentVariety: true, allowEmoji: true, skipUnreadablePosts: true },
       }) as never,
     });
 

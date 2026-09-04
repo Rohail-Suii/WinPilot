@@ -350,6 +350,11 @@ async function engageOnePost(post, task, tabId, ctx, { withComment }) {
   let comment = "";
   let generated = null;
   let commentError = null;
+  // Deliberate silence, as opposed to a failure. The server refuses to comment
+  // on a post whose meaning is inside an image, a deck or a video — the agent
+  // reads text only, and a comment written from the caption is a guess made in
+  // public. Kept apart from `commentError` so the journal can say which it was.
+  let quietReason = null;
 
   if (withComment) {
     try {
@@ -368,6 +373,7 @@ async function engageOnePost(post, task, tabId, ctx, { withComment }) {
           authorName: post.authorName || "",
           authorHeadline: post.authorHeadline || "",
           postLinks: (post.postLinks || []).slice(0, 12),
+          postMedia: post.postMedia || undefined,
         },
       });
       comment = generated?.comment || "";
@@ -375,7 +381,11 @@ async function engageOnePost(post, task, tabId, ctx, { withComment }) {
       // does not, say so — a post that only gets a like is the visible symptom
       // and the reason belongs in the journal next to it, not swallowed.
       if (!comment) {
-        commentError = generated?.reason || "The server returned no comment";
+        if (generated?.unreadable) {
+          quietReason = generated.reason || "I could not tell what this post is about";
+        } else {
+          commentError = generated?.reason || "The server returned no comment";
+        }
       }
     } catch (e) {
       // A post we cannot write for still gets a like — dropping it entirely
@@ -383,6 +393,9 @@ async function engageOnePost(post, task, tabId, ctx, { withComment }) {
       commentError = e.message;
     }
 
+    if (quietReason) {
+      ctx.emitLog("info", "autopilot", `Liking without commenting: ${quietReason}`);
+    }
     if (commentError) {
       ctx.emitLog("warn", "autopilot", `No comment for this one: ${commentError}`);
     }
@@ -413,6 +426,9 @@ async function engageOnePost(post, task, tabId, ctx, { withComment }) {
       register: generated?.register,
       angle: generated?.angle,
       isPitch: Boolean(generated?.isPitch),
+      // Why this one was liked and not commented on. Not an error: it is the
+      // agent declining to guess at a post it cannot see.
+      skippedComment: quietReason || undefined,
       // The day's AI allowance is spent. Reported so the pass can stop asking
       // for comments it is not going to get, and keep liking.
       budgetSpent: Boolean(generated?.budgetSpent),
@@ -437,6 +453,10 @@ function summarise(p) {
     // Carried so the server can spot a hiring post's application route — a
     // mailto or a form link — without a second trip to the page.
     postLinks: (p.postLinks || []).slice(0, 12),
+    // Whether the post's meaning is sitting in a picture, a deck or a video.
+    // The agent reads text only, so the server refuses to comment when the
+    // caption alone does not say what the post is about.
+    postMedia: p.postMedia || undefined,
   };
 }
 
@@ -544,6 +564,7 @@ async function engageSearchPost(task, tabId, ctx, { withComment }) {
         postContent: (chosen.postContent || "").slice(0, 4000),
         authorName: chosen.authorName || "",
         authorHeadline: chosen.authorHeadline || "",
+        postMedia: chosen.postMedia || undefined,
       },
     });
   } catch (e) {

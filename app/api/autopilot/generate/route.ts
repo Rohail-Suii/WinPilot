@@ -51,6 +51,7 @@ import {
   renderRecentOpenings,
 } from "@/lib/autopilot/comment-history";
 import { captureHiringPost } from "@/lib/outreach/capture";
+import { assessPostContext, describePostMedia } from "@/lib/autopilot/post-context";
 
 const postSchema = z.object({
   /**
@@ -78,6 +79,25 @@ const postSchema = z.object({
     )
     .max(12)
     .default([]),
+  /**
+   * What the card was carrying besides text: a photo, a slide deck, a video, a
+   * poll. The agent reads text and nothing else, so this is how the server
+   * learns that the part of the post which actually says what it is about is
+   * one we cannot see.
+   *
+   * Optional on purpose. An extension built before this field existed sends
+   * nothing, and `assessPostContext` treats "absent" as "unknown" rather than
+   * as "no media" — see CONTEXT_FLOORS.
+   */
+  postMedia: z
+    .object({
+      image: z.boolean().optional(),
+      video: z.boolean().optional(),
+      document: z.boolean().optional(),
+      poll: z.boolean().optional(),
+      article: z.boolean().optional(),
+    })
+    .optional(),
 });
 
 const bodySchema = z.object({
@@ -269,6 +289,20 @@ async function pickPost(
     });
   }
 
+  // A post whose meaning is in a picture cannot be judged from its text, let
+  // alone commented on, so it never reaches the model's shortlist. Filtered
+  // rather than ranked down: handing it to the picker only invites it back.
+  const readable = fresh.filter(
+    (p) => assessPostContext({ postContent: p.postContent, media: p.postMedia }).readable
+  );
+  if (readable.length === 0) {
+    return NextResponse.json({
+      post: null,
+      reason: "Everything left here is an image or a caption with nothing readable in it",
+    });
+  }
+  fresh = readable;
+
   // Humans do not act on everything they scroll past. Skipping at random is a
   // cheap, meaningful difference between this and an obvious bot. Feed mode
   // skips far less: the intent there is to work the whole feed, and anything
@@ -354,6 +388,29 @@ async function feedComment(
     return NextResponse.json({ error: "No post provided" }, { status: 400 });
   }
 
+  const config = await AgentConfig.findOne({ userId }).lean();
+  const feed = { ...DEFAULT_FEED_SETTINGS, ...(config?.feed ?? {}) };
+
+  // Asked before the provider, the budget and the model, because a post we
+  // cannot read should cost nothing at all. The agent reads text; when the
+  // post's meaning is in a photo, a deck or a video, a comment written from
+  // the caption is a confident guess published under a stranger's post. The
+  // post still gets its like — the skip is only about speaking.
+  if (feed.skipUnreadablePosts !== false) {
+    const context = assessPostContext({
+      postContent: post.postContent,
+      media: post.postMedia,
+    });
+    if (!context.readable) {
+      return NextResponse.json({
+        skip: true,
+        unreadable: true,
+        words: context.words,
+        reason: `I did not comment because ${context.reason}`,
+      });
+    }
+  }
+
   const provider = await getUserAIProvider(userId);
   if (!provider) {
     return NextResponse.json(
@@ -361,9 +418,6 @@ async function feedComment(
       { status: 400 }
     );
   }
-
-  const config = await AgentConfig.findOne({ userId }).lean();
-  const feed = { ...DEFAULT_FEED_SETTINGS, ...(config?.feed ?? {}) };
 
   // Checked before anything is generated. An uncapped feed pass makes one call
   // per post from the moment it starts, so the only useful place to stop is
@@ -428,6 +482,9 @@ async function feedComment(
         variety,
         recentOpenings,
         lengthBand: band,
+        // The model cannot see the picture. Saying so is what stops it
+        // treating a caption as if it were the whole post.
+        mediaNote: describePostMedia(post.postMedia),
         post: {
           authorName: sanitizeForAI(post.authorName),
           authorHeadline: sanitizeForAI(post.authorHeadline),
@@ -472,6 +529,29 @@ async function feedComment(
   // capture upgrades a post that only looked borderline; the unique index
   // makes a second call on an already-recorded post a no-op.
   await captureOpenings(userId, [post], taskId, postType);
+
+  // The model's own veto — and the one refusal `force` does not override.
+  //
+  // The text gate above catches the post that is plainly a caption. This
+  // catches the rest: a screenshot referred to but not described, an inside
+  // joke, a reply to a conversation we cannot see, a language it cannot read.
+  // Coverage is worth a lot, but not a comment that says something confident
+  // about a post nobody understood — that is the one mistake that is visible
+  // to exactly the people this account is trying to impress.
+  //
+  // Capture runs first on purpose: a hiring post with an address on it is
+  // worth recording whether or not there is anything sensible to say about it.
+  if (generated.understood === false) {
+    return NextResponse.json({
+      skip: true,
+      unreadable: true,
+      postType,
+      reason:
+        generated.skipReason?.trim() ||
+        "I could not tell what this post is actually about, so I said nothing",
+    });
+  }
+
   // A pitch is allowed to be longer, so it gets a higher floor too.
   const isPitch = postType === "hiring" && pitchOnJobPosts;
   const register = normaliseRegister(generated.register, postType, isPitch, variety);
@@ -618,6 +698,21 @@ async function generateComment(
 ): Promise<NextResponse> {
   if (!post) {
     return NextResponse.json({ error: "No post provided" }, { status: 400 });
+  }
+
+  // Same rule as feed mode, and for the same reason: the agent reads text, so
+  // a post whose subject is inside an image is one it can only guess about.
+  // Checked before the provider call so an unreadable post costs nothing.
+  const context = assessPostContext({
+    postContent: post.postContent,
+    media: post.postMedia,
+  });
+  if (!context.readable) {
+    return NextResponse.json({
+      skip: true,
+      unreadable: true,
+      reason: `I did not comment because ${context.reason}`,
+    });
   }
 
   const [goal, cycle, provider] = await Promise.all([

@@ -77,6 +77,15 @@ interface Engagement {
   register?: string;
   angle?: string;
   isPitch?: boolean;
+  /**
+   * Why this post was liked but not commented on.
+   *
+   * Deliberately not `error`: staying quiet on a post whose meaning is inside
+   * an image is the system working, and reporting it as a failure would bury
+   * the one thing the user actually wants to see — that the agent knows what
+   * it cannot read.
+   */
+  skippedComment?: string;
   error?: string;
 }
 
@@ -99,7 +108,11 @@ function describe(kind: TaskKind, result: Record<string, unknown>): string {
     const acted = sweep.filter((e) => e.liked || e.commented);
     const commented = acted.filter((e) => e.commented).length;
     const failed = sweep.length - acted.length;
-    return `Worked down the feed: ${acted.length} post${acted.length === 1 ? "" : "s"} engaged with, ${commented} of them commented on.${failed > 0 ? ` ${failed} I could not act on.` : ""}`;
+    // Posts that were liked but deliberately not commented on: the text was a
+    // caption for something the agent cannot see. Reported because a run of
+    // likes with no comments otherwise looks like the agent malfunctioning.
+    const quiet = sweep.filter((e) => e.skippedComment).length;
+    return `Worked down the feed: ${acted.length} post${acted.length === 1 ? "" : "s"} engaged with, ${commented} of them commented on.${quiet > 0 ? ` ${quiet} I liked without commenting, because what they were about was in an image or a video I cannot read.` : ""}${failed > 0 ? ` ${failed} I could not act on.` : ""}`;
   }
 
   switch (kind) {

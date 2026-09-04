@@ -269,6 +269,21 @@ export interface FeedCommentResult {
    * makes the angle and the comment actually obey it.
    */
   register: CommentRegister;
+  /**
+   * Whether the post's own text says what the post is about.
+   *
+   * Separate from `engage` because they are refusals of different weight.
+   * `engage: false` is taste — "there is nothing worth adding here" — and feed
+   * mode overrides it, since coverage is the whole point. `understood: false`
+   * is ignorance — the meaning is in a screenshot, a video, a thread we cannot
+   * see, or a language the model cannot read — and nothing overrides that. A
+   * comment written about a post nobody understood is wrong in public, under
+   * someone else's name, in front of the people worth impressing.
+   *
+   * Absent is treated as true: only an explicit false is a refusal, so a model
+   * that omits the field behaves exactly as it did before.
+   */
+  understood?: boolean;
   /** False means "say nothing" — a valid and frequently correct answer. */
   engage: boolean;
   /** One line of self-justification: the stance, before the prose. */
@@ -310,6 +325,16 @@ export interface FeedCommentContext {
    * USER MESSAGE ONLY. See the cache note on buildFeedCommentPrompt.
    */
   lengthBand?: LengthBand;
+  /**
+   * What the card carries that the model cannot see: an image, a deck, a video.
+   *
+   * USER MESSAGE ONLY. See the cache note on buildFeedCommentPrompt.
+   *
+   * Stated explicitly because a model handed a bare caption tends to assume the
+   * caption IS the post. Naming the picture is what turns a confident guess
+   * into an honest "understood: false".
+   */
+  mediaNote?: string;
   post: {
     authorName: string;
     authorHeadline: string;
@@ -386,6 +411,38 @@ const LENGTH_RULES = `LENGTH — the user message names a target for this one. H
 If the target says "reaction" but your register is analytical, or this is a hiring pitch, write "short" instead. A one-liner on a technical post is worth nothing.`;
 
 /**
+ * The one refusal that outranks coverage.
+ *
+ * Feed mode tells the model it must engage with everything, which is right:
+ * "nothing to add" was being reached for on posts that simply needed more
+ * thought. But a LinkedIn post is very often a photo, a screenshot, a carousel
+ * or a video with a handful of words over it, and the agent is handed the words
+ * only. Told to engage regardless, it writes something fluent and confident
+ * about a post it has not seen — under a stranger's name, in front of the exact
+ * people the account is trying to impress. That is worse than silence by a
+ * distance, and no amount of coverage buys it back.
+ *
+ * So this veto sits above `mustEngage` rather than inside it, and the server
+ * honours it even when force is on.
+ */
+const UNDERSTANDING_RULES = `FIRST, the question that outranks every other instruction here: can you actually tell what this post is about, from the text you were given?
+
+You are given the post's TEXT ONLY. You cannot see images, screenshots, slide carousels, videos, polls, or anything behind a link. Nobody will show them to you and there is no way to ask.
+
+Set "understood": false, "engage": false and leave the comment empty when:
+- The text is a caption for something you cannot see: "this says it all", "swipe for the results", "watch till the end", "look at this chart", a couple of words and an emoji over a picture.
+- The text refers to specifics that are only in the image, the video or the deck — the numbers, the screenshot, the diagram, the joke's punchline.
+- It is a fragment of a conversation you were not shown: a reply, a repost with no commentary of its own, a quote with no source.
+- It is in a language you cannot read confidently, or it is too garbled to parse.
+- You genuinely cannot say what the post is claiming, announcing, or asking for. Not "there is little to add" — that is a different question, answered by "engage". This one is "I do not know what this is".
+
+Be honest about this, and do not reason your way into a topic. If you find yourself inferring the subject from the author's job title, from a hashtag, or from what a post like this USUALLY is, that is exactly the case this field exists for: say understood: false.
+
+Set "understood": true and carry on whenever the text does say what the post is about, even if it is short. A clear one-line announcement is understood. A clear question is understood. Vagueness is the test, not length.
+
+When "understood" is false, put the reason in "skipReason" in one plain line, and write nothing else.`
+
+/**
  * What a good comment looks like, per post type.
  *
  * The voice rules alone only ever worked on technical and opinion posts. On a
@@ -445,7 +502,9 @@ ${personaBlock(ctx.persona)}
 ${ctx.northStar ? `\nWHAT YOU ARE ULTIMATELY AFTER\n${ctx.northStar}` : ""}
 ${ctx.memories && ctx.memories.trim() ? `\nWHAT YOU HAVE LEARNED ABOUT WHAT LANDS\n${ctx.memories}` : ""}
 
-FIRST, decide what the post actually is:
+${UNDERSTANDING_RULES}
+
+THEN, decide what the post actually is:
 - "hiring"        someone is hiring, looking for a contractor, or asking for referrals for real work
 - "technical"     a technical claim, lesson, architecture, tool, or war story
 - "opinion"       a take on the industry, hiring, careers, ways of working
@@ -454,7 +513,7 @@ FIRST, decide what the post actually is:
 - "noise"         politics, motivational filler, reposted quotes, anything with nothing to react to
 
 ${ctx.mustEngage
-        ? `THEN write a comment. Opting out is not available on this one: engage MUST be true and the comment MUST be non-empty. Every post type below has a shape that works, including the ones with no technical substance in them. Find the one concrete thing in the post and respond to that. What you must NOT do is fall back on praise or agreement to fill the space; every rule below still binds.`
+        ? `THEN write a comment. Opting out on taste grounds is not available on this one: unless "understood" is false, engage MUST be true and the comment MUST be non-empty. Every post type below has a shape that works, including the ones with no technical substance in them. Find the one concrete thing in the post and respond to that. What you must NOT do is fall back on praise or agreement to fill the space; every rule below still binds. The ONE exception is the understanding test above: if you cannot tell what the post is about, "understood": false is the required answer and coverage does not override it.`
         : `THEN decide whether to say anything at all. Set engage=false for "promotional" and "noise", and for any post where you have nothing real to add. Saying nothing is a good outcome. A generic comment is worse than silence, because it is the thing that makes an account look automated.`}
 
 ${variety ? `${REGISTER_RULES}\n\n` : ""}${COMMENT_SHAPES}
@@ -465,11 +524,12 @@ ${TASTE_RULES}
 
 Respond with valid JSON only. Schema:
 {
+  "understood": boolean (false ONLY when you cannot tell what the post is about from its text),
   "postType": "hiring"|"technical"|"opinion"|"personal_news"|"promotional"|"noise",${variety ? `\n  "register": "analytical"|"playful"|"celebratory"|"supportive",` : ""}
   "engage": boolean,
   "angle": "string (one line: the stance you are taking and why it is worth saying. Written for yourself, not for the reader.)",
   "comment": "string (the comment exactly as it should be posted.${ctx.mustEngage ? " Never empty." : " Empty string if engage is false."})",
-  "skipReason": "string (only when engage is false)"
+  "skipReason": "string (only when engage or understood is false)"
 }`,
     },
     {
@@ -480,7 +540,7 @@ Respond with valid JSON only. Schema:
 """
 ${ctx.post.postContent}
 """
-${
+${ctx.mediaNote ? `\nWHAT ELSE IS ON THIS POST, WHICH YOU CANNOT SEE: ${ctx.mediaNote}. Everything above is all the text there is.\n` : ""}${
   variety && ctx.recentOpenings?.trim()
     ? `
 MY LAST FEW COMMENTS STARTED LIKE THIS. These are my own past openings, not examples to follow. Do not start this one the same way, and do not reuse the same sentence shape or the same register two in a row:
@@ -488,7 +548,7 @@ ${ctx.recentOpenings}
 `
     : ""
 }${variety && ctx.lengthBand ? `\nLENGTH FOR THIS ONE: ${ctx.lengthBand}\n` : ""}
-Classify it${variety ? ", pick the register," : ""} and write the comment. Return JSON only.`,
+Say whether you understand it, classify it${variety ? ", pick the register," : ""} and write the comment. Return JSON only.`,
     },
   ];
 }

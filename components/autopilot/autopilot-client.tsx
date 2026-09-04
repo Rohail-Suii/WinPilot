@@ -21,6 +21,7 @@ import {
   Zap,
   Wallet,
   Smile,
+  ImageOff,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -98,6 +99,7 @@ interface FeedSettings {
   dailyAiSpendUsd: number;
   commentVariety: boolean;
   allowEmoji: boolean;
+  skipUnreadablePosts: boolean;
 }
 
 interface WorkingHours {
@@ -112,7 +114,12 @@ interface AutopilotState {
     enabled: boolean;
     mode: AutopilotMode;
     mission: string;
-    feed: FeedSettings;
+    /**
+     * Partial on purpose: a config document written before a given setting
+     * existed carries the `feed` path without that key, so every read has to
+     * fill the gaps from the defaults rather than trust the shape.
+     */
+    feed: Partial<FeedSettings>;
     workingHours: WorkingHours;
     weeklyBudgets: Record<string, number>;
     pausedUntil?: string;
@@ -170,6 +177,7 @@ export function AutopilotClient() {
     dailyAiSpendUsd: 0,
     commentVariety: true,
     allowEmoji: true,
+    skipUnreadablePosts: true,
   });
   const [savedFeed, setSavedFeed] = useState<FeedSettings | null>(null);
   const [liveEntries, setLiveEntries] = useState<JournalEntry[]>([]);
@@ -185,8 +193,12 @@ export function AutopilotClient() {
       setMission((current) => (current ? current : data.config.mission));
       setHours(data.config.workingHours);
       setSavedHours(data.config.workingHours);
-      // A config document written before feed mode existed has no `feed` path.
-      const feedSettings = data.config.feed ?? {
+      // A config document written before feed mode existed has no `feed` path,
+      // and one written before a given setting existed has the path but not the
+      // key — which is why these are spread under it rather than used only as a
+      // fallback. A switch rendering "off" for a setting the server treats as
+      // on is worse than either state on its own.
+      const feedSettings = {
         commentRatio: 0.7,
         pitchOnJobPosts: true,
         postsPerSweep: 25,
@@ -197,6 +209,8 @@ export function AutopilotClient() {
         dailyAiSpendUsd: 0,
         commentVariety: true,
         allowEmoji: true,
+        skipUnreadablePosts: true,
+        ...(data.config.feed ?? {}),
       };
       setFeed(feedSettings);
       setSavedFeed(feedSettings);
@@ -752,6 +766,41 @@ export function AutopilotClient() {
                     className={cn(
                       "absolute top-0.5 h-5 w-5 rounded-full bg-white transition-transform",
                       feed.allowEmoji ? "translate-x-5" : "translate-x-0.5"
+                    )}
+                  />
+                </button>
+              </div>
+
+              <div className="flex items-start justify-between gap-4">
+                <div className="min-w-0">
+                  <p className="text-sm text-gray-300 flex items-center gap-2">
+                    <ImageOff className="h-4 w-4 text-gray-500" />
+                    Stay quiet on posts it cannot read
+                  </p>
+                  <p className="text-xs text-gray-500 mt-1">
+                    It reads text, not pictures. When a post is an image, a slide deck
+                    or a video with a few words of caption over it, what the post is
+                    actually about is in the part it cannot see, so it likes the post
+                    and says nothing. Same when it simply cannot tell what a post
+                    means. Off, it comments on those too, and guesses.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={feed.skipUnreadablePosts}
+                  onClick={() =>
+                    setFeed({ ...feed, skipUnreadablePosts: !feed.skipUnreadablePosts })
+                  }
+                  className={cn(
+                    "relative h-6 w-11 shrink-0 rounded-full transition-colors",
+                    feed.skipUnreadablePosts ? "bg-indigo-500" : "bg-gray-700"
+                  )}
+                >
+                  <span
+                    className={cn(
+                      "absolute top-0.5 h-5 w-5 rounded-full bg-white transition-transform",
+                      feed.skipUnreadablePosts ? "translate-x-5" : "translate-x-0.5"
                     )}
                   />
                 </button>

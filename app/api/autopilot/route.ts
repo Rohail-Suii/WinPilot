@@ -41,6 +41,7 @@ const configSchema = z.object({
       dailyAiSpendUsd: z.number().min(0).max(1000),
       commentVariety: z.boolean(),
       allowEmoji: z.boolean(),
+      skipUnreadablePosts: z.boolean(),
     })
     .partial()
     .optional(),

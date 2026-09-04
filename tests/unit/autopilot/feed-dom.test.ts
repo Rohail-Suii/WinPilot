@@ -710,3 +710,81 @@ describe("walking the feed one post at a time", () => {
     expect(next.post!.postKey).toBeTruthy();
   });
 });
+
+/**
+ * What the card is carrying that the agent cannot read.
+ *
+ * The agent reads text. A photo, a carousel or a video with four words of
+ * caption over it therefore arrives with its whole subject missing, and the
+ * server refuses to comment on those — but only if this reports the picture.
+ * The failure mode that matters most is the opposite one: calling every post an
+ * image post, because the author's avatar is an <img> on every single card,
+ * would silence the agent on the entire feed.
+ */
+describe("media detection", () => {
+  it("reports nothing on a plain text post", () => {
+    const h = loadFeedHelpers();
+    const post = h.parseFeedCard(redesignedCard({ author: "Ankit Waghamore", body: BODY }));
+
+    expect(post!.postMedia).toEqual({});
+  });
+
+  it("does not mistake the author's avatar for the post's photo", () => {
+    const h = loadFeedHelpers();
+    const card = redesignedCard({ author: "Ankit Waghamore", body: BODY });
+    const avatar = card.querySelector("a[href*='/in/'] figure")!;
+    avatar.innerHTML = `<img src="https://media.licdn.com/avatar.jpg" width="48" height="48" />`;
+
+    expect(h.parseFeedCard(card)!.postMedia).toEqual({});
+  });
+
+  it("reports the photo on an image post", () => {
+    const h = loadFeedHelpers();
+    const card = redesignedCard({ author: "Ankit Waghamore", body: BODY });
+    card.querySelector("[data-testid='expandable-text-box']")!.insertAdjacentHTML(
+      "afterend",
+      `<div class="update-components-image"><img src="https://media.licdn.com/post.jpg" /></div>`
+    );
+
+    expect(h.parseFeedCard(card)!.postMedia).toEqual({ image: true });
+  });
+
+  it("falls back to size when the container has no name to match on", () => {
+    // The redesign hashes every class name, so the only thing separating a
+    // post's photo from an avatar is how big it renders.
+    const h = loadFeedHelpers();
+    const card = redesignedCard({ author: "Ankit Waghamore", body: BODY });
+    card.querySelector("[data-testid='expandable-text-box']")!.insertAdjacentHTML(
+      "afterend",
+      `<div class="_bd10f2c1"><img src="https://media.licdn.com/post.jpg" /></div>`
+    );
+    const img = card.querySelector("._bd10f2c1 img") as HTMLImageElement;
+    img.getBoundingClientRect = () => ({ width: 552, height: 414 }) as DOMRect;
+
+    expect(h.parseFeedCard(card)!.postMedia).toEqual({ image: true });
+  });
+
+  it("calls a slide carousel a document rather than a photo", () => {
+    // LinkedIn renders the deck's current page as an image. Reported as a
+    // photo it would look like something we might read; it is not.
+    const h = loadFeedHelpers();
+    const card = redesignedCard({ author: "Ankit Waghamore", body: BODY });
+    card.querySelector("[data-testid='expandable-text-box']")!.insertAdjacentHTML(
+      "afterend",
+      `<div class="update-components-document"><div class="document-s-container"></div></div>`
+    );
+
+    expect(h.parseFeedCard(card)!.postMedia).toMatchObject({ document: true });
+  });
+
+  it("reports a video", () => {
+    const h = loadFeedHelpers();
+    const card = redesignedCard({ author: "Ankit Waghamore", body: BODY });
+    card.querySelector("[data-testid='expandable-text-box']")!.insertAdjacentHTML(
+      "afterend",
+      `<div class="update-components-linkedin-video"><video></video></div>`
+    );
+
+    expect(h.parseFeedCard(card)!.postMedia).toMatchObject({ video: true });
+  });
+});
